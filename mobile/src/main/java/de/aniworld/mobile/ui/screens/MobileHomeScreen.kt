@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -122,12 +124,13 @@ fun MobileHomeScreen(
     Scaffold(
         containerColor = BgPrimary,
         topBar = {
-            // Obere Leiste mit Logo, Cast-Button und Einstellungen
+            // Obere Leiste mit Logo, Cast-Button und Einstellungen (respektiert Statusleiste / Uhrzeit)
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(BgPrimary)
-                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
