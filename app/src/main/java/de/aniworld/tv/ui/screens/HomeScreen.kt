@@ -63,6 +63,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
+import de.aniworld.tv.cast.CastPairing
 import de.aniworld.tv.cast.TvCastManager
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
@@ -73,6 +74,7 @@ import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.update.AppRelease
+import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -1307,19 +1309,26 @@ private fun SettingsTabContent(
                                 isCheckingUpdate = true
                                 updateStatusMessage = null
                                 scope.launch {
-                                    val release = UpdateManager.checkForUpdate(
+                                    val result = UpdateManager.checkForUpdate(
                                         context = context,
                                         isTvApp = true,
                                         forceCheck = true
                                     )
                                     isCheckingUpdate = false
-                                    if (release != null) {
-                                        updateStatusIsSuccess = true
-                                        updateStatusMessage = "Neue Version ${release.versionName} gefunden!"
-                                        onUpdateFound(release)
-                                    } else {
-                                        updateStatusIsSuccess = true
-                                        updateStatusMessage = "Du hast bereits die neueste Version (v$currentVersion)! 🎉"
+                                    when (result) {
+                                        is UpdateCheckResult.Available -> {
+                                            updateStatusIsSuccess = true
+                                            updateStatusMessage = "Neue Version ${result.release.versionName} gefunden!"
+                                            onUpdateFound(result.release)
+                                        }
+                                        UpdateCheckResult.UpToDate -> {
+                                            updateStatusIsSuccess = true
+                                            updateStatusMessage = "Du hast bereits die neueste Version (v$currentVersion)! 🎉"
+                                        }
+                                        is UpdateCheckResult.Failed -> {
+                                            updateStatusIsSuccess = false
+                                            updateStatusMessage = result.message
+                                        }
                                     }
                                 }
                             }
@@ -1385,6 +1394,60 @@ private fun SettingsTabContent(
                     text = "Ändern (${preferredLanguage.shortLabel})",
                     onClick = onCycleLanguage
                 )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
+
+        // Karte: Handy-Fernbedienung (Kopplung)
+        val pairedCount by CastPairing.pairedCount.collectAsState()
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(BgElevated)
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = "📱 Handy-Fernbedienung",
+                        color = TextPrimary,
+                        fontSize = 17.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = when (pairedCount) {
+                            0 -> "Noch kein Handy gekoppelt"
+                            1 -> "1 Handy gekoppelt"
+                            else -> "$pairedCount Handys gekoppelt"
+                        },
+                        color = AccentCyan,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = "Zum Koppeln in der Handy-App aufs Cast-Symbol tippen, diesen Fernseher wählen " +
+                            "und den Code eingeben, der dann hier erscheint.",
+                        color = TextMuted,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+
+                if (pairedCount > 0) {
+                    Spacer(modifier = Modifier.width(16.dp))
+                    TvFocusableButton(
+                        text = "Kopplungen entfernen",
+                        onClick = { CastPairing.clearPairedDevices() }
+                    )
+                }
             }
         }
 

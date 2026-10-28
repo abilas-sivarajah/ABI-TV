@@ -66,6 +66,7 @@ object TvCastManager {
     fun start(context: Context) {
         scope.launch {
             try {
+                CastPairing.init()
                 TvCastServer.start(HTTP_PORT, UDP_PORT)
                 NsdHelper.register(context, deviceName, HTTP_PORT)
                 Log.i(TAG, "TvCastManager gestartet auf Port $HTTP_PORT für '$deviceName'")

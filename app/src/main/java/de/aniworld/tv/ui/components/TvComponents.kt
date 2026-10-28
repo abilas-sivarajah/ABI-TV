@@ -345,7 +345,8 @@ fun TvFocusableButton(
             .scale(scale)
             .onFocusChanged { isFocused = it.isFocused }
             .clip(RoundedCornerShape(10.dp))
-            .focusable()
+            // clickable ist selbst fokussierbar; ein zusätzliches focusable() davor würde einen zweiten
+            // Fokus-Knoten erzeugen, auf dem OK/Enter nichts auslöst (z. B. nach focusRequester)
             .clickable { onClick() },
         shape = RoundedCornerShape(10.dp),
         color = bgColor,

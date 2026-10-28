@@ -503,6 +503,13 @@ class MobilePlayerActivity : ComponentActivity() {
         )
     }
 
+    override fun onStop() {
+        super.onStop()
+        // Ohne Hintergrund-Wiedergabe (keine Mediensession) beim Verlassen pausieren statt unsichtbar weiterzuspielen
+        persistCurrentProgress()
+        exoPlayer?.pause()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         resolveJob?.cancel()
@@ -524,9 +531,10 @@ class MobilePlayerActivity : ComponentActivity() {
 
     private fun formatDuration(ms: Long): String {
         val totalSec = (ms / 1000L).coerceAtLeast(0L)
-        val m = totalSec / 60
+        val h = totalSec / 3600
+        val m = (totalSec % 3600) / 60
         val s = totalSec % 60
-        return "%02d:%02d".format(m, s)
+        return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%02d:%02d".format(m, s)
     }
 
     companion object {

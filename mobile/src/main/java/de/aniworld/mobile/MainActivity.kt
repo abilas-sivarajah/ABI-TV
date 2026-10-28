@@ -26,6 +26,7 @@ import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.update.AppRelease
+import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
 import de.aniworld.mobile.ui.components.MobileUpdateDialog
 import kotlinx.coroutines.launch
@@ -48,7 +49,8 @@ class MainActivity : ComponentActivity() {
 
         // Prüfe im Hintergrund automatisch auf GitHub-Updates
         lifecycleScope.launch {
-            availableRelease = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = false)
+            val result = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = false)
+            if (result is UpdateCheckResult.Available) availableRelease = result.release
         }
 
         setContent {
@@ -105,6 +107,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Nach "Unbekannte Apps installieren" erlaubt: Update-Installation fortsetzen
+        UpdateManager.resumePendingInstall(this)
     }
 
     private fun loadHomeCatalog() {

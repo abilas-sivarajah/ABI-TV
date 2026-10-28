@@ -39,6 +39,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -51,10 +52,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.mobile.cast.CastDevice
 import de.aniworld.mobile.cast.MobileCastManager
+import de.aniworld.mobile.cast.PairingUiState
 import de.aniworld.mobile.ui.theme.AccentCyan
 import de.aniworld.mobile.ui.theme.AccentEmerald
 import de.aniworld.mobile.ui.theme.BgElevated
@@ -74,12 +77,27 @@ fun CastBottomSheet(
     val discovered by MobileCastManager.discoveredDevices.collectAsState()
     val connected by MobileCastManager.connectedDevice.collectAsState()
     val isSearching by MobileCastManager.isSearching.collectAsState()
+    val pairing by MobileCastManager.pairing.collectAsState()
 
     var manualIp by remember { mutableStateOf("") }
     var showManualInput by remember { mutableStateOf(false) }
 
+    // Sheet erst schließen, wenn die Verbindung steht (ggf. nach der Kopplung)
+    var pendingConnectId by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(connected?.id) {
+        if (pendingConnectId != null && connected?.id == pendingConnectId) onDismiss()
+    }
+    val connectTo = { dev: CastDevice ->
+        pendingConnectId = dev.id
+        MobileCastManager.connect(dev)
+    }
+    val dismiss = {
+        MobileCastManager.cancelPairing()
+        onDismiss()
+    }
+
     ModalBottomSheet(
-        onDismissRequest = onDismiss,
+        onDismissRequest = dismiss,
         sheetState = sheetState,
         containerColor = BgSurface,
         dragHandle = null
@@ -110,12 +128,17 @@ fun CastBottomSheet(
                         fontWeight = FontWeight.Bold
                     )
                 }
-                IconButton(onClick = onDismiss) {
+                IconButton(onClick = dismiss) {
                     Icon(Icons.Default.Close, contentDescription = "Schließen", tint = TextSecondary)
                 }
             }
 
             Spacer(modifier = Modifier.height(14.dp))
+
+            pairing?.let { state ->
+                PairingCard(state)
+                Spacer(modifier = Modifier.height(18.dp))
+            }
 
             // Aktuell verbundenes Gerät
             connected?.let { dev ->
@@ -203,13 +226,13 @@ fun CastBottomSheet(
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(
-                            text = if (isSearching) "Suche nach AniWorld TV im WLAN..." else "Kein Fernseher gefunden",
+                            text = if (isSearching) "Suche nach ABI TV im WLAN..." else "Kein Fernseher gefunden",
                             color = TextSecondary,
                             fontSize = 14.sp
                         )
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Stelle sicher, dass AniWorld TV auf dem Fire TV Stick geöffnet ist und beide Geräte im selben WLAN sind.",
+                            text = "Stelle sicher, dass ABI TV auf dem Fire TV Stick geöffnet ist und beide Geräte im selben WLAN sind.",
                             color = TextMuted,
                             fontSize = 12.sp,
                             lineHeight = 16.sp
@@ -225,10 +248,7 @@ fun CastBottomSheet(
                                 .fillMaxWidth()
                                 .clip(RoundedCornerShape(10.dp))
                                 .background(if (isCurrent) AccentCyan.copy(alpha = 0.15f) else BgElevated)
-                                .clickable {
-                                    MobileCastManager.connect(dev)
-                                    onDismiss()
-                                }
+                                .clickable { connectTo(dev) }
                                 .padding(12.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.SpaceBetween
@@ -277,10 +297,7 @@ fun CastBottomSheet(
                             singleLine = true,
                             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                             keyboardActions = KeyboardActions(onDone = {
-                                if (manualIp.isNotBlank()) {
-                                    MobileCastManager.connect(CastDevice("Fire TV", manualIp.trim(), 8765))
-                                    onDismiss()
-                                }
+                                if (manualIp.isNotBlank()) connectTo(CastDevice("Fire TV", manualIp.trim(), 8765))
                             }),
                             colors = OutlinedTextFieldDefaults.colors(
                                 focusedBorderColor = AccentCyan,
@@ -293,10 +310,7 @@ fun CastBottomSheet(
                         Spacer(modifier = Modifier.width(10.dp))
                         Button(
                             onClick = {
-                                if (manualIp.isNotBlank()) {
-                                    MobileCastManager.connect(CastDevice("Fire TV", manualIp.trim(), 8765))
-                                    onDismiss()
-                                }
+                                if (manualIp.isNotBlank()) connectTo(CastDevice("Fire TV", manualIp.trim(), 8765))
                             },
                             colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = BgPrimary)
                         ) {
@@ -307,6 +321,86 @@ fun CastBottomSheet(
             }
 
             Spacer(modifier = Modifier.height(12.dp))
+        }
+    }
+}
+
+@Composable
+private fun PairingCard(state: PairingUiState) {
+    var code by remember(state.device.id) { mutableStateOf("") }
+    val canSubmit = code.length == 6 && !state.isBusy
+    val submit = { if (canSubmit) MobileCastManager.submitPairingCode(code) }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(BgElevated)
+            .border(1.5.dp, AccentCyan, RoundedCornerShape(12.dp))
+            .padding(14.dp)
+    ) {
+        Text(
+            text = "Mit ${state.device.name} koppeln",
+            color = TextPrimary,
+            fontWeight = FontWeight.Bold,
+            fontSize = 15.sp
+        )
+        Spacer(modifier = Modifier.height(4.dp))
+        Text(
+            text = "Am Fernseher erscheint oben rechts ein 6-stelliger Code. Kein Code zu sehen? " +
+                "Öffne ABI TV auf dem Fernseher und fordere einen neuen an.",
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp
+        )
+        Spacer(modifier = Modifier.height(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            OutlinedTextField(
+                value = code,
+                onValueChange = { input -> code = input.filter { it.isDigit() }.take(6) },
+                placeholder = { Text("123456", color = TextMuted) },
+                singleLine = true,
+                enabled = !state.isBusy,
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword, imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = AccentCyan,
+                    unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
+                    focusedTextColor = TextPrimary,
+                    unfocusedTextColor = TextPrimary
+                ),
+                modifier = Modifier.weight(1f)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Button(
+                onClick = { submit() },
+                enabled = canSubmit,
+                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = BgPrimary)
+            ) {
+                if (state.isBusy) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), color = BgPrimary, strokeWidth = 2.dp)
+                } else {
+                    Text("Koppeln", fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        state.error?.let { error ->
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = error, color = Color(0xFFFF5252), fontSize = 12.sp, lineHeight = 16.sp)
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End
+        ) {
+            TextButton(onClick = { MobileCastManager.cancelPairing() }) {
+                Text("Abbrechen", color = TextSecondary, fontSize = 13.sp)
+            }
+            TextButton(
+                onClick = { MobileCastManager.requestPairing(state.device) },
+                enabled = !state.isBusy
+            ) {
+                Text("Neuen Code anfordern", color = AccentCyan, fontSize = 13.sp)
+            }
         }
     }
 }

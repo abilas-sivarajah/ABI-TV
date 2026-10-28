@@ -10,3 +10,8 @@ captures
 .cxx
 *.apk
 *.aab
+
+# Signierschlüssel niemals einchecken
+*.jks
+*.keystore
+keystore.properties

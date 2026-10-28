@@ -86,6 +86,7 @@ import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.update.AppRelease
+import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.async
@@ -120,6 +121,7 @@ fun MobileHomeScreen(
     var showSettingsSheet by remember { mutableStateOf(false) }
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateCheckStatus by remember { mutableStateOf<String?>(null) }
+    var updateCheckFailed by remember { mutableStateOf(false) }
 
     Scaffold(
         containerColor = BgPrimary,
@@ -372,17 +374,25 @@ fun MobileHomeScreen(
                                     isCheckingUpdate = true
                                     updateCheckStatus = null
                                     scope.launch {
-                                        val release = UpdateManager.checkForUpdate(
+                                        val result = UpdateManager.checkForUpdate(
                                             context = context,
                                             isTvApp = false,
                                             forceCheck = true
                                         )
                                         isCheckingUpdate = false
-                                        if (release != null) {
-                                            showSettingsSheet = false
-                                            onUpdateFound(release)
-                                        } else {
-                                            updateCheckStatus = "Du hast bereits die neueste Version (v$currentVersion)! 🎉"
+                                        when (result) {
+                                            is UpdateCheckResult.Available -> {
+                                                showSettingsSheet = false
+                                                onUpdateFound(result.release)
+                                            }
+                                            UpdateCheckResult.UpToDate -> {
+                                                updateCheckFailed = false
+                                                updateCheckStatus = "Du hast bereits die neueste Version (v$currentVersion)! 🎉"
+                                            }
+                                            is UpdateCheckResult.Failed -> {
+                                                updateCheckFailed = true
+                                                updateCheckStatus = result.message
+                                            }
                                         }
                                     }
                                 },
@@ -401,7 +411,7 @@ fun MobileHomeScreen(
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = updateCheckStatus ?: "",
-                                color = AccentCyan,
+                                color = if (updateCheckFailed) Color(0xFFFF5252) else AccentCyan,
                                 fontSize = 12.sp,
                                 fontWeight = FontWeight.Medium
                             )

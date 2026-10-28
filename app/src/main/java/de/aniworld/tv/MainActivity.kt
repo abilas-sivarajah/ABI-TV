@@ -20,7 +20,9 @@ import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.update.AppRelease
+import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
+import de.aniworld.tv.ui.components.TvPairingOverlay
 import de.aniworld.tv.ui.components.TvUpdateOverlay
 import de.aniworld.tv.ui.player.PlayerActivity
 import de.aniworld.tv.ui.screens.DetailScreen
@@ -44,7 +46,8 @@ class MainActivity : ComponentActivity() {
 
         // Prüfe im Hintergrund automatisch auf GitHub-Updates
         lifecycleScope.launch {
-            availableRelease = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = true)
+            val result = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = true)
+            if (result is UpdateCheckResult.Available) availableRelease = result.release
         }
 
         setContent {
@@ -94,8 +97,17 @@ class MainActivity : ComponentActivity() {
                         onDismiss = { availableRelease = null }
                     )
                 }
+
+                // Kopplungscode für die Handy-Fernbedienung
+                TvPairingOverlay()
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Nach "Unbekannte Apps installieren" erlaubt: Update-Installation fortsetzen
+        UpdateManager.resumePendingInstall(this)
     }
 
     private fun loadHomeCatalog() {

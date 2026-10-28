@@ -7,7 +7,7 @@ object AppContext {
     lateinit var context: Context
 }
 
-class AniWorldApp : Application() {
+open class AniWorldApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this

@@ -21,6 +21,7 @@ object LocalStorage {
     private const val KEY_PREFERRED_LANG = "preferred_lang_key"
     private const val KEY_GITHUB_REPO = "github_repo_slug"
     private const val KEY_IGNORED_UPDATE_TAG = "ignored_update_tag"
+    private const val KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
 
     private val gson = Gson()
     private val prefs: SharedPreferences by lazy {
@@ -56,6 +57,10 @@ object LocalStorage {
     var ignoredUpdateTag: String
         get() = prefs.getString(KEY_IGNORED_UPDATE_TAG, "") ?: ""
         set(value) = prefs.edit().putString(KEY_IGNORED_UPDATE_TAG, value).apply()
+
+    var updateSnoozedUntil: Long
+        get() = prefs.getLong(KEY_UPDATE_SNOOZED_UNTIL, 0L)
+        set(value) = prefs.edit().putLong(KEY_UPDATE_SNOOZED_UNTIL, value).apply()
 
     // ------------------- Merkliste (Watchlist) -------------------
 

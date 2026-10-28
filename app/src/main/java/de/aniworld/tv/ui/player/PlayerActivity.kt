@@ -80,6 +80,7 @@ import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.ui.components.LanguageBadge
 import de.aniworld.tv.ui.components.TvFocusableButton
+import de.aniworld.tv.ui.components.TvPairingOverlay
 import de.aniworld.tv.ui.theme.AccentCyan
 import de.aniworld.tv.ui.theme.AniWorldTvTheme
 import de.aniworld.tv.ui.theme.BgElevated
@@ -118,6 +119,7 @@ class PlayerActivity : ComponentActivity() {
     private var controlsVisible by mutableStateOf(true)
     private var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
     private var resolveJob: Job? = null
+    private var releasedInBackground = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -159,6 +161,7 @@ class PlayerActivity : ComponentActivity() {
         setContent {
             AniWorldTvTheme {
                 PlayerScreenContent()
+                TvPairingOverlay()
             }
         }
     }
@@ -814,9 +817,22 @@ class PlayerActivity : ComponentActivity() {
         exoPlayer?.pause()
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Nach Home-Taste/Bildschirmschoner wurde der Player in onStop freigegeben: an gleicher Stelle neu starten
+        if (releasedInBackground) {
+            releasedInBackground = false
+            activeHoster?.let { resolveAndPlaySingleHoster(it) }
+                ?: currentEpisode?.let { loadEpisodeAndPlay(it) }
+        }
+    }
+
     override fun onStop() {
         super.onStop()
         persistCurrentProgress()
+        if (exoPlayer != null && !isFinishing) {
+            releasedInBackground = true
+        }
         releasePlayer()
     }
 
@@ -845,9 +861,10 @@ class PlayerActivity : ComponentActivity() {
 
     private fun formatDuration(ms: Long): String {
         val totalSeconds = (ms / 1000L).coerceAtLeast(0L)
-        val minutes = totalSeconds / 60
+        val hours = totalSeconds / 3600
+        val minutes = (totalSeconds % 3600) / 60
         val seconds = totalSeconds % 60
-        return "%02d:%02d".format(minutes, seconds)
+        return if (hours > 0) "%d:%02d:%02d".format(hours, minutes, seconds) else "%02d:%02d".format(minutes, seconds)
     }
 
     companion object {

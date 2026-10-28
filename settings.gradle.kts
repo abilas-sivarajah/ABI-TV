@@ -15,4 +15,4 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "AniWorldTV"
-include(":app", ":mobile")
+include(":core", ":app", ":mobile")

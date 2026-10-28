@@ -6,7 +6,6 @@
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <!-- Sowohl auf Fire TV / Android TV als auch auf normalen Android-Geräten installierbar -->
     <uses-feature
@@ -17,7 +16,7 @@
         android:required="false" />
 
     <application
-        android:name=".AniWorldApp"
+        android:name=".TvApp"
         android:allowBackup="true"
         android:banner="@drawable/app_banner"
         android:hardwareAccelerated="true"
@@ -46,16 +45,6 @@
             android:configChanges="keyboard|keyboardHidden|navigation|orientation|screenLayout|screenSize|smallestScreenSize|uiMode"
             android:exported="false"
             android:screenOrientation="sensorLandscape" />
-
-        <provider
-            android:name="androidx.core.content.FileProvider"
-            android:authorities="${applicationId}.fileprovider"
-            android:exported="false"
-            android:grantUriPermissions="true">
-            <meta-data
-                android:name="android.support.FILE_PROVIDER_PATHS"
-                android:resource="@xml/file_paths" />
-        </provider>
 
     </application>
 </manifest>

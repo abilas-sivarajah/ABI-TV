@@ -1,7 +1,21 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.plugin.compose")
 }
+
+// Version kommt aus gradle.properties; der Release-Workflow überschreibt sie mit dem Git-Tag
+val appVersionName = providers.gradleProperty("appVersionName").get()
+val appVersionCode = providers.gradleProperty("appVersionCode").get().toInt()
+
+// Fester Release-Schlüssel: in CI über Umgebungsvariablen, lokal optional über keystore.properties
+val keystoreProps = Properties().apply {
+    rootProject.file("keystore.properties").takeIf { it.exists() }?.inputStream()?.use { load(it) }
+}
+fun signingValue(env: String, prop: String): String? =
+    System.getenv(env)?.takeIf { it.isNotBlank() } ?: keystoreProps.getProperty(prop)
+val releaseKeystorePath = signingValue("ABI_KEYSTORE_PATH", "storeFile")
 
 android {
     namespace = "de.aniworld.mobile"
@@ -11,14 +25,27 @@ android {
         applicationId = "de.aniworld.mobile"
         minSdk = 21
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.0.1"
+        versionCode = appVersionCode
+        versionName = appVersionName
+    }
+
+    signingConfigs {
+        if (releaseKeystorePath != null) {
+            create("release") {
+                storeFile = rootProject.file(releaseKeystorePath)
+                storePassword = signingValue("ABI_KEYSTORE_PASSWORD", "storePassword")
+                keyAlias = signingValue("ABI_KEY_ALIAS", "keyAlias")
+                keyPassword = signingValue("ABI_KEY_PASSWORD", "keyPassword")
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Ohne Release-Schlüssel (lokale Test-Builds) wird mit dem Debug-Key signiert.
+            // Achtung: Updates funktionieren nur, wenn alle Versionen mit demselben Schlüssel signiert sind.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
 
@@ -43,6 +70,8 @@ android {
 }
 
 dependencies {
+    implementation(project(":core"))
+
     coreLibraryDesugaring("com.android.tools:desugar_jdk_libs:2.0.4")
 
     val composeBom = platform("androidx.compose:compose-bom:2025.02.00")
