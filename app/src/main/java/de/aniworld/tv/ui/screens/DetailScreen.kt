@@ -53,6 +53,7 @@ import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.ui.components.LanguageBadge
 import de.aniworld.tv.ui.components.TvFocusableButton
 import de.aniworld.tv.ui.theme.AccentCyan
@@ -98,10 +99,16 @@ fun DetailScreen(
         isLoading = true
         errorMsg = null
         runCatching {
-            if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
-                HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
-            } else {
-                AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)
+            when {
+                HdFilmeScraper.isHdFilmeSlug(animeSlug) -> {
+                    HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
+                }
+                SerienStreamScraper.isStoSlug(animeSlug) -> {
+                    SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
+                }
+                else -> {
+                    AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)
+                }
             }
         }.onSuccess { fetched ->
             detail = fetched

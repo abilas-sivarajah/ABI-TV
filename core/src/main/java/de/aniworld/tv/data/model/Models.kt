@@ -43,20 +43,40 @@ data class AnimeCard(
     val isHdFilme: Boolean
         get() = slug.startsWith("hdfilme:") || slug.contains("hd-filme.one")
 
+    val isSto: Boolean
+        get() = slug.startsWith("sto:") || slug.startsWith("/serie/") || slug.contains("serienstream.to") || slug.contains("s.to")
+
     val cleanSlug: String
-        get() = if (isHdFilme) {
-            val rel = slug.removePrefix("hdfilme:").removePrefix("https://hd-filme.one").trim()
-            "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
-        } else {
-            slug
-                .removePrefix("https://aniworld.to")
-                .removePrefix("/anime/stream/")
-                .substringBefore("/")
-                .trim()
+        get() = when {
+            isHdFilme -> {
+                val rel = slug.removePrefix("hdfilme:").removePrefix("https://hd-filme.one").trim()
+                "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
+            }
+            isSto -> {
+                val rel = slug
+                    .removePrefix("sto:")
+                    .removePrefix("https://serienstream.to")
+                    .removePrefix("https://s.to")
+                    .removePrefix("/serie/")
+                    .substringBefore("/")
+                    .trim()
+                "sto:$rel"
+            }
+            else -> {
+                slug
+                    .removePrefix("https://aniworld.to")
+                    .removePrefix("/anime/stream/")
+                    .substringBefore("/")
+                    .trim()
+            }
         }
 
     val streamPath: String
-        get() = if (isHdFilme) cleanSlug else "/anime/stream/$cleanSlug"
+        get() = when {
+            isHdFilme -> cleanSlug
+            isSto -> "/serie/${cleanSlug.removePrefix("sto:")}"
+            else -> "/anime/stream/$cleanSlug"
+        }
 }
 
 data class CatalogSection(
@@ -138,6 +158,7 @@ enum class SearchScope(
     val icon: String
 ) {
     ANIMES("Animes", "🍙"),
-    MOVIES("Filme & Serien", "🎬"),
+    SERIES("Serien", "📺"),
+    MOVIES("Filme", "🎬"),
     ALL("Alle", "✨")
 }

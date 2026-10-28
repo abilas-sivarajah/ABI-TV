@@ -130,7 +130,12 @@ object StreamResolver {
             }
         }
 
-        var (currentUrl, html) = HttpClient.getHtml(hoster.redirectPath, "${HttpClient.BASE_URL}/")
+        val initialReferer = if (hoster.redirectPath.contains("serienstream.to") || hoster.redirectPath.contains("s.to")) {
+            "https://serienstream.to/"
+        } else {
+            "${HttpClient.BASE_URL}/"
+        }
+        var (currentUrl, html) = HttpClient.getHtml(hoster.redirectPath, initialReferer)
 
         // Bis zu 3 JS-Weiterleitungen (window.location.href = '...') folgen
         repeat(3) {

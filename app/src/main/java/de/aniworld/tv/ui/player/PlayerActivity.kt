@@ -77,6 +77,7 @@ import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.data.remote.StreamResolver
@@ -719,10 +720,16 @@ class PlayerActivity : ComponentActivity() {
 
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
-                if (episode.path.startsWith("hdfilme_")) {
-                    HdFilmeScraper.fetchHostersForEpisode(episode.path)
-                } else {
-                    AniWorldScraper.fetchEpisodeHosters(episode.path)
+                when {
+                    episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
+                        SerienStreamScraper.fetchEpisodeHosters(episode.path)
+                    }
+                    episode.path.startsWith("hdfilme_") -> {
+                        HdFilmeScraper.fetchHostersForEpisode(episode.path)
+                    }
+                    else -> {
+                        AniWorldScraper.fetchEpisodeHosters(episode.path)
+                    }
                 }
             }.getOrDefault(emptyList())
 

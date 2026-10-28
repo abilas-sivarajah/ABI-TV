@@ -1,4 +1,4 @@
-package de.aniworld.mobile.ui.screens
+﻿package de.aniworld.mobile.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -69,6 +69,7 @@ import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.SerienStreamScraper
 import kotlinx.coroutines.launch
 
 @Composable
@@ -95,7 +96,9 @@ fun MobileDetailScreen(
         isLoading = true
         errorMsg = null
         runCatching {
-            if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
+            if (SerienStreamScraper.isStoSlug(animeSlug)) {
+                SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
+            } else if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
                 HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
             } else {
                 AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)

@@ -107,8 +107,14 @@ object HdFilmeScraper {
         sections
     }
 
-    suspend fun fetchCategory(categoryPath: String): List<AnimeCard> = withContext(Dispatchers.IO) {
-        val fullUrl = if (categoryPath.startsWith("http")) categoryPath else "$BASE_URL$categoryPath"
+    suspend fun fetchCategory(categoryPath: String, page: Int = 1): List<AnimeCard> = withContext(Dispatchers.IO) {
+        val path = if (page > 1) {
+            val base = categoryPath.trimEnd('/')
+            "$base/page/$page/"
+        } else {
+            categoryPath
+        }
+        val fullUrl = if (path.startsWith("http")) path else "$BASE_URL$path"
         val (_, html) = HttpClient.getHtml(fullUrl, "$BASE_URL/")
         val doc = Jsoup.parse(html, BASE_URL)
         parseMovieCards(doc)

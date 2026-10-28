@@ -1,4 +1,4 @@
-package de.aniworld.mobile
+﻿package de.aniworld.mobile
 
 import android.content.Context
 import android.content.Intent
@@ -94,6 +94,7 @@ import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.data.remote.StreamResolver
