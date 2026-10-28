@@ -1,6 +1,7 @@
 package de.aniworld.tv.data.model
 
 import java.io.Serializable
+import java.net.URI
 
 /**
  * Sprach-Option bei AniWorld:
@@ -44,7 +45,7 @@ data class AnimeCard(
         get() = slug.startsWith("hdfilme:") || slug.contains("hd-filme.one")
 
     val isSto: Boolean
-        get() = slug.startsWith("sto:") || slug.startsWith("/serie/") || slug.contains("serienstream.to") || slug.contains("s.to")
+        get() = SerienStreamRef.matches(slug)
 
     val cleanSlug: String
         get() = when {
@@ -52,16 +53,7 @@ data class AnimeCard(
                 val rel = slug.removePrefix("hdfilme:").removePrefix("https://hd-filme.one").trim()
                 "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
             }
-            isSto -> {
-                val rel = slug
-                    .removePrefix("sto:")
-                    .removePrefix("https://serienstream.to")
-                    .removePrefix("https://s.to")
-                    .removePrefix("/serie/")
-                    .substringBefore("/")
-                    .trim()
-                "sto:$rel"
-            }
+            isSto -> "${SerienStreamRef.PREFIX}${SerienStreamRef.bareSlug(slug)}"
             else -> {
                 slug
                     .removePrefix("https://aniworld.to")
@@ -74,9 +66,36 @@ data class AnimeCard(
     val streamPath: String
         get() = when {
             isHdFilme -> cleanSlug
-            isSto -> "/serie/${cleanSlug.removePrefix("sto:")}"
+            isSto -> "/serie/${SerienStreamRef.bareSlug(slug)}"
             else -> "/anime/stream/$cleanSlug"
         }
+}
+
+/**
+ * Erkennt S.to-Slugs und -Adressen an einer Stelle, damit Modell, Scraper und Stream-Resolver gleich entscheiden.
+ * Zählt nur der eigene Präfix, ein /serie/-Pfad oder eine echte S.to-Domain – nicht jedes "s.to" irgendwo im Text.
+ */
+object SerienStreamRef {
+    const val PREFIX = "sto:"
+    private val HOSTS = setOf("serienstream.to", "s.to")
+
+    fun matches(value: String): Boolean {
+        val v = value.trim()
+        return v.startsWith(PREFIX) || v.startsWith("/serie/") || isStoUrl(v)
+    }
+
+    fun isStoUrl(url: String): Boolean {
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return false
+        val host = runCatching { URI(url).host }.getOrNull()?.lowercase()?.removePrefix("www.") ?: return false
+        return host in HOSTS
+    }
+
+    /** "sto:breaking-bad", "/serie/breaking-bad/staffel-1" oder volle Adresse -> "breaking-bad" */
+    fun bareSlug(value: String): String {
+        val v = value.trim().removePrefix(PREFIX)
+        val path = if (isStoUrl(v)) runCatching { URI(v).path }.getOrNull().orEmpty() else v
+        return path.removePrefix("/serie/").substringBefore("/").trim()
+    }
 }
 
 data class CatalogSection(

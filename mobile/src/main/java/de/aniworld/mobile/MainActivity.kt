@@ -17,6 +17,7 @@ import de.aniworld.mobile.cast.MobileCastManager
 import de.aniworld.mobile.ui.components.CastBottomSheet
 import de.aniworld.mobile.ui.screens.MobileDetailScreen
 import de.aniworld.mobile.ui.screens.MobileHomeScreen
+import de.aniworld.mobile.ui.screens.MobileHomeState
 import de.aniworld.mobile.ui.theme.AniWorldMobileTheme
 import de.aniworld.tv.data.model.AnimeCard
 import de.aniworld.tv.data.model.AnimeDetail
@@ -36,6 +37,9 @@ class MainActivity : ComponentActivity() {
     private var homeSections by mutableStateOf<List<CatalogSection>>(emptyList())
     private var isLoadingHome by mutableStateOf(true)
     private var homeError by mutableStateOf<String?>(null)
+
+    // Überlebt das Öffnen einer Detailseite (Tab, Kategorie, Suche bleiben erhalten)
+    private val homeState = MobileHomeState()
 
     private var detailStack by mutableStateOf<List<AnimeCard>>(emptyList())
     private var showCastSheet by mutableStateOf(false)
@@ -81,7 +85,8 @@ class MainActivity : ComponentActivity() {
                                     )
                                 )
                             },
-                            onUpdateFound = { release -> availableRelease = release }
+                            onUpdateFound = { release -> availableRelease = release },
+                            state = homeState
                         )
                     } else {
                         BackHandler(enabled = true) {

@@ -7,7 +7,11 @@ import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.SeasonLink
+import de.aniworld.tv.data.model.SerienStreamRef
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Document
@@ -21,10 +25,17 @@ import java.util.concurrent.ConcurrentHashMap
 object SerienStreamScraper {
 
     const val BASE_URL = "https://serienstream.to"
-    const val PREFIX = "sto:"
+    const val PREFIX = SerienStreamRef.PREFIX
 
     private val detailCache = ConcurrentHashMap<String, AnimeDetail>()
+
+    // A–Z-Liste für die Suche: nur eine Abfrage gleichzeitig, leere/fehlgeschlagene Ergebnisse nicht dauerhaft merken
+    private val atoZMutex = Mutex()
+    @Volatile
     private var cachedAtoZSeries: List<AnimeCard>? = null
+    @Volatile
+    private var atoZFailedAt = 0L
+    private const val ATOZ_RETRY_DELAY_MS = 30_000L
 
     val CATEGORIES: List<Pair<String, String>> = listOf(
         "/beliebte-serien" to "🔥 Beliebte Serien",
@@ -43,30 +54,25 @@ object SerienStreamScraper {
         "/genre/dokumentation" to "📚 Doku"
     )
 
-    fun isStoSlug(slugOrPath: String): Boolean =
-        slugOrPath.startsWith(PREFIX) ||
-            slugOrPath.startsWith("/serie/") ||
-            slugOrPath.contains("serienstream.to") ||
-            slugOrPath.contains("s.to")
+    fun isStoSlug(slugOrPath: String): Boolean = SerienStreamRef.matches(slugOrPath)
 
-    fun toCleanSlug(slugOrPath: String): String {
-        return slugOrPath
-            .removePrefix(PREFIX)
-            .removePrefix(BASE_URL)
-            .removePrefix("https://s.to")
-            .removePrefix("/serie/")
-            .substringBefore("/")
-            .trim()
-    }
+    fun toCleanSlug(slugOrPath: String): String = SerienStreamRef.bareSlug(slugOrPath)
 
     suspend fun fetchHomeSections(): List<CatalogSection> = withContext(Dispatchers.IO) {
         val sections = mutableListOf<CatalogSection>()
 
-        val popular = runCatching { fetchCategory("/beliebte-serien") }.getOrDefault(emptyList())
-        val action = runCatching { fetchCategory("/genre/action") }.getOrDefault(emptyList())
-        val scifi = runCatching { fetchCategory("/genre/science-fiction") }.getOrDefault(emptyList())
-        val drama = runCatching { fetchCategory("/genre/drama") }.getOrDefault(emptyList())
-        val krimi = runCatching { fetchCategory("/genre/krimi") }.getOrDefault(emptyList())
+        // Reihen parallel laden, sonst wartet die Übersicht auf fünf Seitenaufrufe hintereinander
+        fun load(path: String) = async { runCatching { fetchCategory(path) }.getOrDefault(emptyList()) }
+        val popularJob = load("/beliebte-serien")
+        val actionJob = load("/genre/action")
+        val scifiJob = load("/genre/science-fiction")
+        val dramaJob = load("/genre/drama")
+        val krimiJob = load("/genre/krimi")
+        val popular = popularJob.await()
+        val action = actionJob.await()
+        val scifi = scifiJob.await()
+        val drama = dramaJob.await()
+        val krimi = krimiJob.await()
 
         if (popular.isNotEmpty()) {
             sections.add(CatalogSection("sto_popular", "🔥 Beliebte Serien (S.to)", popular.take(24)))
@@ -204,6 +210,10 @@ object SerienStreamScraper {
             val episodes = mutableListOf<EpisodeItem>()
             val episodeRows = doc.select(".episode-row")
 
+            // Staffel aus der geladenen Adresse, damit auch der Ersatzpfad in der richtigen Staffel landet
+            val seasonNumber = Regex("""staffel-([0-9]+)""").find(currentUrl)?.groupValues?.getOrNull(1) ?: "1"
+            val seasonLabel = if (seasonNumber == "0") "Filme" else seasonNumber
+
             for (row in episodeRows) {
                 val numText = row.selectFirst(".episode-number-cell")?.text()?.trim().orEmpty()
                 val number = numText.toIntOrNull() ?: (episodes.size + 1)
@@ -215,11 +225,7 @@ object SerienStreamScraper {
                 val pathMatch = Regex("""['"](/serie/[^'"]+/episode-[0-9]+)['"]""").find(onclick)
                 val epPath = pathMatch?.groupValues?.getOrNull(1)
                     ?: row.selectFirst("a[href*=\"/episode-\"]")?.attr("href")
-                    ?: "/serie/$cleanSlug/staffel-1/episode-$number"
-
-                val seasonLabel = if (currentUrl.contains("staffel-0")) "Filme" else {
-                    Regex("""staffel-([0-9]+)""").find(currentUrl)?.groupValues?.getOrNull(1) ?: "1"
-                }
+                    ?: "/serie/$cleanSlug/staffel-$seasonNumber/episode-$number"
 
                 // Generiere eindeutigen Episodenpfad für Hosterauflösung
                 val finalPath = "sto_${cleanSlug}_s${seasonLabel}_e${number}_$epPath"
@@ -231,7 +237,8 @@ object SerienStreamScraper {
                         path = finalPath,
                         titleDe = titleDe,
                         titleEn = titleEn,
-                        languages = listOf(LanguageOption.GER_DUB, LanguageOption.ENG_SUB, LanguageOption.GER_SUB)
+                        // Welche Sprachen es gibt, steht erst auf der Folgenseite (Hoster-Liste) fest
+                        languages = emptyList()
                     )
                 )
             }
@@ -303,35 +310,40 @@ object SerienStreamScraper {
         val trimmed = query.trim().lowercase()
         if (trimmed.length < 2) return@withContext emptyList()
 
-        if (cachedAtoZSeries == null) {
-            runCatching {
-                val (_, html) = HttpClient.getHtml("$BASE_URL/serien", "$BASE_URL/")
-                val doc = Jsoup.parse(html, BASE_URL)
-                val items = mutableListOf<AnimeCard>()
-                val liElements = doc.select("li.series-item")
-                for (li in liElements) {
-                    val a = li.selectFirst("a") ?: continue
-                    val href = a.attr("href").trim()
-                    val slug = href.removePrefix("/serie/").trim()
-                    val title = a.text().trim()
-                    if (slug.isNotBlank() && title.isNotBlank()) {
-                        items.add(
-                            AnimeCard(
-                                slug = "$PREFIX$slug",
-                                title = title,
-                                coverUrl = "",
-                                genreOrSubtitle = "Serie • S.to"
-                            )
-                        )
-                    }
-                }
-                cachedAtoZSeries = items
-            }
-        }
-
-        val catalog = cachedAtoZSeries.orEmpty()
+        val catalog = loadAtoZSeries()
         catalog.filter {
             it.title.lowercase().contains(trimmed) || it.cleanSlug.lowercase().contains(trimmed)
         }.take(30)
+    }
+
+    private suspend fun loadAtoZSeries(): List<AnimeCard> = atoZMutex.withLock {
+        cachedAtoZSeries?.let { return@withLock it }
+        // Nach einem Fehlschlag nicht bei jedem Tastendruck die komplette Liste neu anfragen
+        if (System.currentTimeMillis() - atoZFailedAt < ATOZ_RETRY_DELAY_MS) return@withLock emptyList()
+
+        val items = runCatching {
+            val (_, html) = HttpClient.getHtml("$BASE_URL/serien", "$BASE_URL/")
+            val doc = Jsoup.parse(html, BASE_URL)
+            val seen = HashSet<String>()
+            doc.select("li.series-item").mapNotNull { li ->
+                val a = li.selectFirst("a") ?: return@mapNotNull null
+                val slug = toCleanSlug(a.attr("href"))
+                val title = a.text().trim()
+                if (slug.isBlank() || title.isBlank() || !seen.add(slug)) return@mapNotNull null
+                AnimeCard(
+                    slug = "$PREFIX$slug",
+                    title = title,
+                    coverUrl = "",
+                    genreOrSubtitle = "Serie • S.to"
+                )
+            }
+        }.getOrDefault(emptyList())
+
+        if (items.isEmpty()) {
+            atoZFailedAt = System.currentTimeMillis()
+        } else {
+            cachedAtoZSeries = items
+        }
+        items
     }
 }

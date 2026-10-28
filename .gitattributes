@@ -1,0 +1,6 @@
+# Einheitliche Zeilenenden im Repo (LF), unabhängig vom Editor
+* text=auto eol=lf
+*.bat text eol=crlf
+*.jar binary
+*.png binary
+*.jks binary

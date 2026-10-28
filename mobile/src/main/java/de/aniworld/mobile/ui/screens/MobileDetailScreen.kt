@@ -1,4 +1,4 @@
-﻿package de.aniworld.mobile.ui.screens
+package de.aniworld.mobile.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -96,10 +96,11 @@ fun MobileDetailScreen(
         isLoading = true
         errorMsg = null
         runCatching {
-            if (SerienStreamScraper.isStoSlug(animeSlug)) {
-                SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
-            } else if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
+            // Gleiche Reihenfolge wie auf dem TV: HD-Filme, dann S.to, sonst AniWorld
+            if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
                 HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
+            } else if (SerienStreamScraper.isStoSlug(animeSlug)) {
+                SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
             } else {
                 AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)
             }

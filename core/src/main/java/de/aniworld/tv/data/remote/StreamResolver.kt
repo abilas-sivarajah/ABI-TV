@@ -18,6 +18,7 @@ import com.google.gson.JsonParser
 import de.aniworld.tv.AniWorldApp
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.ResolvedStream
+import de.aniworld.tv.data.model.SerienStreamRef
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -130,8 +131,8 @@ object StreamResolver {
             }
         }
 
-        val initialReferer = if (hoster.redirectPath.contains("serienstream.to") || hoster.redirectPath.contains("s.to")) {
-            "https://serienstream.to/"
+        val initialReferer = if (SerienStreamRef.isStoUrl(hoster.redirectPath)) {
+            "${SerienStreamScraper.BASE_URL}/"
         } else {
             "${HttpClient.BASE_URL}/"
         }

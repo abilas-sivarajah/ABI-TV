@@ -1,4 +1,4 @@
-﻿package de.aniworld.mobile
+package de.aniworld.mobile
 
 import android.content.Context
 import android.content.Intent
@@ -511,10 +511,16 @@ class MobilePlayerActivity : ComponentActivity() {
 
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
-                if (episode.path.startsWith("hdfilme_")) {
-                    HdFilmeScraper.fetchHostersForEpisode(episode.path)
-                } else {
-                    AniWorldScraper.fetchEpisodeHosters(episode.path)
+                when {
+                    episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
+                        SerienStreamScraper.fetchEpisodeHosters(episode.path)
+                    }
+                    episode.path.startsWith("hdfilme_") -> {
+                        HdFilmeScraper.fetchHostersForEpisode(episode.path)
+                    }
+                    else -> {
+                        AniWorldScraper.fetchEpisodeHosters(episode.path)
+                    }
                 }
             }.getOrDefault(emptyList())
 
