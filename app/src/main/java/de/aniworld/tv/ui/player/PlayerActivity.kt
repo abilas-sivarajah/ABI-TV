@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -108,6 +109,10 @@ class PlayerActivity : ComponentActivity() {
     private var selectedLangKey by mutableStateOf(LanguageOption.GER_DUB.langKey)
     private val failedHosterPaths = mutableSetOf<String>()
 
+    private var isLiveStream by mutableStateOf(false)
+    private var directStreamUrl: String? = null
+    private var streamHeaders: Map<String, String> = emptyMap()
+
     private var isResolving by mutableStateOf(true)
     private var statusMessage by mutableStateOf("Lade verfügbare Streams...")
     private var errorMessage by mutableStateOf<String?>(null)
@@ -173,6 +178,11 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun handleIntent(intent: Intent) {
+        val live = intent.getBooleanExtra(EXTRA_IS_LIVE, false)
+        val directUrl = intent.getStringExtra(EXTRA_DIRECT_STREAM_URL)
+        @Suppress("UNCHECKED_CAST")
+        val headers = intent.getSerializableExtra(EXTRA_STREAM_HEADERS) as? HashMap<String, String>
+
         val newSlug = intent.getStringExtra(EXTRA_ANIME_SLUG).orEmpty()
         val newTitle = intent.getStringExtra(EXTRA_ANIME_TITLE).orEmpty()
         val newCover = intent.getStringExtra(EXTRA_COVER_URL).orEmpty()
@@ -185,6 +195,35 @@ class PlayerActivity : ComponentActivity() {
         if (newTitle.isNotBlank()) animeTitle = newTitle
         if (newCover.isNotBlank()) coverUrl = newCover
         selectedLangKey = newLangKey
+
+        if (live && !directUrl.isNullOrBlank()) {
+            isLiveStream = true
+            directStreamUrl = directUrl
+            streamHeaders = headers ?: emptyMap()
+            val liveTitle = newTitle.ifBlank { "Live TV" }
+            val fakeEp = EpisodeItem(
+                number = 1,
+                seasonLabel = "LIVE",
+                path = "live_stream",
+                titleDe = liveTitle,
+                titleEn = "",
+                languages = emptyList()
+            )
+            currentEpisode = fakeEp
+            isResolving = false
+            errorMessage = null
+            statusMessage = "Starte Live Stream..."
+
+            val resolved = ResolvedStream(
+                streamUrl = directUrl,
+                isHls = directUrl.contains(".m3u8", ignoreCase = true) || !directUrl.contains(".mp4", ignoreCase = true),
+                hosterName = "Live TV",
+                language = LanguageOption.GER_DUB,
+                headers = streamHeaders
+            )
+            startExoPlayer(fakeEp, resolved)
+            return
+        }
 
         val ep = IntentCompat.getSerializableExtra(intent, EXTRA_EPISODE, EpisodeItem::class.java)
         @Suppress("UNCHECKED_CAST")
@@ -397,20 +436,36 @@ class PlayerActivity : ComponentActivity() {
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            activeHoster?.let { h ->
-                                LanguageBadge(h.language)
+                            if (isLiveStream) {
                                 Box(
                                     modifier = Modifier
                                         .clip(RoundedCornerShape(6.dp))
-                                        .background(BgElevated)
+                                        .background(Color(0xFFEF4444))
                                         .padding(horizontal = 10.dp, vertical = 4.dp)
                                 ) {
                                     Text(
-                                        text = "Hoster: ${h.hosterName}",
-                                        color = TextPrimary,
+                                        text = "🔴 LIVE SENDER",
+                                        color = Color.White,
                                         fontSize = 12.sp,
                                         fontWeight = FontWeight.Bold
                                     )
+                                }
+                            } else {
+                                activeHoster?.let { h ->
+                                    LanguageBadge(h.language)
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .background(BgElevated)
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "Hoster: ${h.hosterName}",
+                                            color = TextPrimary,
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -428,46 +483,69 @@ class PlayerActivity : ComponentActivity() {
                             )
                             .padding(horizontal = 36.dp, vertical = 22.dp)
                     ) {
-                        // Fortschrittsbalken & Zeit
-                        val fraction = if (durationMs > 0) {
-                            (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                        } else 0f
+                        if (isLiveStream) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Color(0xFFEF4444))
+                                )
+                                Text(
+                                    text = "LIVE ÜBERTRAGUNG",
+                                    color = Color(0xFFEF4444),
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
+                                Spacer(modifier = Modifier.weight(1f))
+                                Text(
+                                    text = animeTitle,
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
+                        } else {
+                            // Fortschrittsbalken & Zeit
+                            val fraction = if (durationMs > 0) {
+                                (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
+                            } else 0f
 
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(14.dp)
-                        ) {
-                            Text(
-                                text = formatDuration(currentPositionMs),
-                                color = TextPrimary,
-                                fontSize = 13.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            LinearProgressIndicator(
-                                progress = { fraction },
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(6.dp)
-                                    .clip(RoundedCornerShape(3.dp)),
-                                color = AccentCyan,
-                                trackColor = Color.White.copy(alpha = 0.25f)
-                            )
-                            Text(
-                                text = formatDuration(durationMs),
-                                color = TextSecondary,
-                                fontSize = 13.sp
-                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(14.dp)
+                            ) {
+                                Text(
+                                    text = formatDuration(currentPositionMs),
+                                    color = TextPrimary,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold
+                                )
+                                LinearProgressIndicator(
+                                    progress = { fraction },
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .height(6.dp)
+                                        .clip(RoundedCornerShape(3.dp)),
+                                    color = AccentCyan,
+                                    trackColor = Color.White.copy(alpha = 0.25f)
+                                )
+                                Text(
+                                    text = formatDuration(durationMs),
+                                    color = TextSecondary,
+                                    fontSize = 13.sp
+                                )
+                            }
                         }
 
                         Spacer(modifier = Modifier.height(14.dp))
 
                         // Steuerbuttons + Sprach-/Hosterwahl + Nächste Episode
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
+                        if (isLiveStream) {
                             Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                 TvFocusableButton(
                                     text = if (isPlaying) "⏸ Pause" else "▶ Play",
@@ -478,54 +556,88 @@ class PlayerActivity : ComponentActivity() {
                                     }
                                 )
                                 TvFocusableButton(
-                                    text = "⏪ -10s",
+                                    text = "🔄 Neu verbinden",
                                     onClick = {
                                         keepControlsAlive()
-                                        seekBy(-10_000L)
-                                    }
-                                )
-                                TvFocusableButton(
-                                    text = "⏩ +10s",
-                                    onClick = {
-                                        keepControlsAlive()
-                                        seekBy(10_000L)
-                                    }
-                                )
-                                TvFocusableButton(
-                                    text = "+85s Intro Skip",
-                                    onClick = {
-                                        keepControlsAlive()
-                                        seekBy(85_000L)
-                                    }
-                                )
-
-                                val nextEp = findNextEpisode()
-                                if (nextEp != null) {
-                                    TvFocusableButton(
-                                        text = "⏭ Folge ${nextEp.number}",
-                                        onClick = {
-                                            keepControlsAlive()
-                                            persistCurrentProgress()
-                                            loadEpisodeAndPlay(nextEp)
+                                        directStreamUrl?.let { url ->
+                                            val fakeEp = currentEpisode ?: return@let
+                                            val resolved = ResolvedStream(
+                                                streamUrl = url,
+                                                isHls = true,
+                                                hosterName = "Live TV",
+                                                language = LanguageOption.GER_DUB,
+                                                headers = streamHeaders
+                                            )
+                                            startExoPlayer(fakeEp, resolved)
                                         }
-                                    )
-                                }
+                                    }
+                                )
                             }
-
-                            // Verfügbare Hoster / Sprachen für diese Folge direkt umschaltbar
-                            LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(availableHosters, key = { it.redirectPath }) { hoster ->
-                                    val isCurrent = activeHoster?.redirectPath == hoster.redirectPath
+                        } else {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                                     TvFocusableButton(
-                                        text = "${hoster.language.shortLabel} • ${hoster.hosterName}",
-                                        isSelected = isCurrent,
-                                        badgeColor = Color(hoster.language.badgeColorHex),
+                                        text = if (isPlaying) "⏸ Pause" else "▶ Play",
+                                        isPrimary = true,
                                         onClick = {
                                             keepControlsAlive()
-                                            selectedLangKey = hoster.langKey
-                                            resolveAndPlaySingleHoster(hoster)
+                                            exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
                                         }
                                     )
+                                    TvFocusableButton(
+                                        text = "⏪ -10s",
+                                        onClick = {
+                                            keepControlsAlive()
+                                            seekBy(-10_000L)
+                                        }
+                                    )
+                                    TvFocusableButton(
+                                        text = "⏩ +10s",
+                                        onClick = {
+                                            keepControlsAlive()
+                                            seekBy(10_000L)
+                                        }
+                                    )
+                                    TvFocusableButton(
+                                        text = "+85s Intro Skip",
+                                        onClick = {
+                                            keepControlsAlive()
+                                            seekBy(85_000L)
+                                        }
+                                    )
+
+                                    val nextEp = findNextEpisode()
+                                    if (nextEp != null) {
+                                        TvFocusableButton(
+                                            text = "⏭ Folge ${nextEp.number}",
+                                            onClick = {
+                                                keepControlsAlive()
+                                                persistCurrentProgress()
+                                                loadEpisodeAndPlay(nextEp)
+                                            }
+                                        )
+                                    }
+                                }
+
+                                // Verfügbare Hoster / Sprachen für diese Folge direkt umschaltbar
+                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    items(availableHosters, key = { it.redirectPath }) { hoster ->
+                                        val isCurrent = activeHoster?.redirectPath == hoster.redirectPath
+                                        TvFocusableButton(
+                                            text = "${hoster.language.shortLabel} • ${hoster.hosterName}",
+                                            isSelected = isCurrent,
+                                            badgeColor = Color(hoster.language.badgeColorHex),
+                                            onClick = {
+                                                keepControlsAlive()
+                                                selectedLangKey = hoster.langKey
+                                                resolveAndPlaySingleHoster(hoster)
+                                            }
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -533,7 +645,11 @@ class PlayerActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(6.dp))
 
                         Text(
-                            text = "Steuerkreuz Links/Rechts: Spulen • OK: Play/Pause • Hoch/Runter: Hoster & Intro-Skip • Zurück: Ausblenden/Beenden",
+                            text = if (isLiveStream) {
+                                "OK: Play/Pause • Links/Rechts: Neu verbinden • Zurück: Sender beenden"
+                            } else {
+                                "Steuerkreuz Links/Rechts: Spulen • OK: Play/Pause • Hoch/Runter: Hoster & Intro-Skip • Zurück: Ausblenden/Beenden"
+                            },
                             color = TextMuted,
                             fontSize = 11.sp
                         )
@@ -619,7 +735,9 @@ class PlayerActivity : ComponentActivity() {
 
     private fun startExoPlayer(episode: EpisodeItem, stream: ResolvedStream) {
         Log.e("PlayerActivity", "Starting ExoPlayer url=${stream.streamUrl}, headers=${stream.headers}")
-        val resumePos = if (currentPositionMs > 5_000L) {
+        val resumePos = if (isLiveStream) {
+            0L
+        } else if (currentPositionMs > 5_000L) {
             currentPositionMs
         } else {
             LocalStorage.getSavedPositionForEpisode(episode.path)
@@ -648,7 +766,7 @@ class PlayerActivity : ComponentActivity() {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
-                        if (playbackState == Player.STATE_ENDED) {
+                        if (!isLiveStream && playbackState == Player.STATE_ENDED) {
                             LocalStorage.markEpisodeWatched(episode.path)
                             findNextEpisode()?.let { next ->
                                 currentPositionMs = 0L
@@ -662,6 +780,10 @@ class PlayerActivity : ComponentActivity() {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
+                        if (isLiveStream) {
+                            errorMessage = "Live-Stream Fehler (${error.errorCodeName})."
+                            return
+                        }
                         // Automatischer Hoster-Fallback bei Stream-Abbruch
                         val current = activeHoster
                         if (current != null) {
@@ -688,7 +810,7 @@ class PlayerActivity : ComponentActivity() {
         }
 
         player.setMediaItem(mediaItemBuilder.build())
-        if (resumePos > 0L) {
+        if (!isLiveStream && resumePos > 0L) {
             player.seekTo(resumePos)
         }
         player.playWhenReady = true
@@ -720,6 +842,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun persistCurrentProgress() {
+        if (isLiveStream) return
         val ep = currentEpisode ?: return
         val p = exoPlayer ?: return
         val pos = p.currentPosition
@@ -868,12 +991,29 @@ class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        const val EXTRA_IS_LIVE = "extra_is_live"
+        const val EXTRA_DIRECT_STREAM_URL = "extra_direct_stream_url"
+        const val EXTRA_STREAM_HEADERS = "extra_stream_headers"
         private const val EXTRA_ANIME_SLUG = "extra_anime_slug"
         private const val EXTRA_ANIME_TITLE = "extra_anime_title"
         private const val EXTRA_COVER_URL = "extra_cover_url"
         private const val EXTRA_EPISODE = "extra_episode"
         private const val EXTRA_SEASON_EPISODES = "extra_season_episodes"
         private const val EXTRA_PREFERRED_LANG_KEY = "extra_preferred_lang_key"
+
+        fun liveIntent(
+            context: Context,
+            channelName: String,
+            streamUrl: String,
+            logoUrl: String = "",
+            headers: HashMap<String, String> = HashMap()
+        ): Intent = Intent(context, PlayerActivity::class.java).apply {
+            putExtra(EXTRA_IS_LIVE, true)
+            putExtra(EXTRA_ANIME_TITLE, channelName)
+            putExtra(EXTRA_COVER_URL, logoUrl)
+            putExtra(EXTRA_DIRECT_STREAM_URL, streamUrl)
+            putExtra(EXTRA_STREAM_HEADERS, headers)
+        }
 
         fun intent(
             context: Context,

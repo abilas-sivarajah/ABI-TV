@@ -22,6 +22,7 @@ object LocalStorage {
     private const val KEY_GITHUB_REPO = "github_repo_slug"
     private const val KEY_IGNORED_UPDATE_TAG = "ignored_update_tag"
     private const val KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
+    private const val KEY_CUSTOM_M3U_URL = "custom_m3u_url_v1"
 
     private val gson = Gson()
     private val prefs: SharedPreferences by lazy {
@@ -61,6 +62,12 @@ object LocalStorage {
     var updateSnoozedUntil: Long
         get() = prefs.getLong(KEY_UPDATE_SNOOZED_UNTIL, 0L)
         set(value) = prefs.edit().putLong(KEY_UPDATE_SNOOZED_UNTIL, value).apply()
+
+    // ------------------- Live TV / M3U -------------------
+
+    var customM3uUrl: String
+        get() = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
+        set(value) = prefs.edit().putString(KEY_CUSTOM_M3U_URL, value).apply()
 
     // ------------------- Merkliste (Watchlist) -------------------
 

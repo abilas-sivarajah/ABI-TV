@@ -67,6 +67,16 @@ class MainActivity : ComponentActivity() {
                         onResumeWatch = { entry ->
                             resumeFromProgress(entry)
                         },
+                        onPlayLiveChannel = { channel ->
+                            val liveIntent = PlayerActivity.liveIntent(
+                                context = this@MainActivity,
+                                channelName = channel.name,
+                                streamUrl = channel.streamUrl,
+                                logoUrl = channel.logoUrl,
+                                headers = HashMap(channel.headers)
+                            )
+                            startActivity(liveIntent)
+                        },
                         onUpdateFound = { release ->
                             availableRelease = release
                         }

@@ -69,6 +69,7 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
 import de.aniworld.tv.data.model.CatalogSection
 import de.aniworld.tv.data.model.LanguageOption
+import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.SearchScope
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
@@ -97,6 +98,7 @@ import kotlinx.coroutines.launch
 enum class MainNavTab(val label: String) {
     HOME("🏠 Animes"),
     MOVIES("🎬 Filme & Serien"),
+    LIVETV("📺 Live TV"),
     SEARCH("🔍 Suche"),
     GENRES("🎭 Genres"),
     WATCHLIST("★ Merkliste"),
@@ -139,6 +141,7 @@ fun HomeScreen(
     onRetry: () -> Unit,
     onOpenAnime: (AnimeCard) -> Unit,
     onResumeWatch: (WatchProgressEntry) -> Unit,
+    onPlayLiveChannel: (LiveTvChannel) -> Unit = {},
     onUpdateFound: (AppRelease) -> Unit = {}
 ) {
     var preferredLang by remember { mutableStateOf(LocalStorage.preferredLanguage) }
@@ -218,6 +221,10 @@ fun HomeScreen(
                     uiState = uiState,
                     watchlist = watchlist,
                     onOpenAnime = onOpenAnime
+                )
+
+                MainNavTab.LIVETV -> LiveTvScreen(
+                    onPlayChannel = onPlayLiveChannel
                 )
 
                 MainNavTab.SEARCH -> SearchTabContent(
