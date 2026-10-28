@@ -34,6 +34,8 @@ import androidx.compose.material.icons.filled.Forward10
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -87,20 +89,25 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.LanguageOption
+import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.HttpClient
+import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.data.remote.StreamResolver
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
+private val LiveRed = Color(0xFFEF4444)
+
 @UnstableApi
 class MobilePlayerActivity : ComponentActivity() {
 
-    private var exoPlayer: ExoPlayer? = null
+    // Als Compose-Zustand, damit die Videofläche nach Neuverbinden/Hoster-Wechsel den neuen Player bekommt
+    private var exoPlayer by mutableStateOf<ExoPlayer?>(null)
 
     private var animeSlug: String = ""
     private var animeTitle: String = ""
@@ -121,6 +128,13 @@ class MobilePlayerActivity : ComponentActivity() {
     private var controlsVisible by mutableStateOf(true)
     private var showCastSheet by mutableStateOf(false)
 
+    // Live-Sender: direkte Stream-Adresse statt Hoster-Auflösung, keine Zeitleiste
+    private var isLiveStream by mutableStateOf(false)
+    private var liveStreamUrl: String = ""
+    private var liveHeaders: Map<String, String> = emptyMap()
+    private var liveRetryCount = 0
+    private var pausedInBackground = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enterFullscreen()
@@ -133,8 +147,15 @@ class MobilePlayerActivity : ComponentActivity() {
 
         val ep = IntentCompat.getSerializableExtra(intent, EXTRA_EPISODE, EpisodeItem::class.java)
         currentEpisode = ep
+        val liveUrl = intent.getStringExtra(EXTRA_LIVE_STREAM_URL).orEmpty()
 
-        if (ep != null) {
+        if (liveUrl.isNotBlank()) {
+            isLiveStream = true
+            liveStreamUrl = liveUrl
+            @Suppress("UNCHECKED_CAST")
+            liveHeaders = (intent.getSerializableExtra(EXTRA_LIVE_HEADERS) as? HashMap<String, String>).orEmpty()
+            playLive()
+        } else if (ep != null) {
             loadEpisodeAndPlay(ep)
         } else {
             errorMessage = "Keine Episode ausgewählt."
@@ -198,6 +219,9 @@ class MobilePlayerActivity : ComponentActivity() {
                             this.player = playerInstance
                         }
                     },
+                    update = { view ->
+                        if (view.player !== playerInstance) view.player = playerInstance
+                    },
                     modifier = Modifier.fillMaxSize()
                 )
             }
@@ -237,6 +261,14 @@ class MobilePlayerActivity : ComponentActivity() {
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
+                                if (isLiveStream) {
+                                    Text(
+                                        text = "🔴 LIVE",
+                                        color = LiveRed,
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                }
                                 currentEpisode?.let { ep ->
                                     val sText = if (ep.seasonLabel.equals("Filme", true)) "Film" else "S${ep.seasonLabel} E${ep.number}"
                                     Text(
@@ -252,7 +284,24 @@ class MobilePlayerActivity : ComponentActivity() {
 
                         // Cast-Button oben rechts
                         IconButton(onClick = {
-                            if (connectedDevice != null) {
+                            if (connectedDevice != null && isLiveStream) {
+                                lifecycleScope.launch {
+                                    val ok = MobileCastManager.playLiveOnTv(
+                                        LiveTvChannel(
+                                            id = "live",
+                                            name = animeTitle,
+                                            logoUrl = coverUrl,
+                                            streamUrl = liveStreamUrl,
+                                            category = "live",
+                                            headers = liveHeaders
+                                        )
+                                    )
+                                    if (ok) {
+                                        exoPlayer?.pause()
+                                        finish()
+                                    }
+                                }
+                            } else if (connectedDevice != null) {
                                 // Direkt an TV übergeben!
                                 currentEpisode?.let { ep ->
                                     lifecycleScope.launch {
@@ -300,6 +349,15 @@ class MobilePlayerActivity : ComponentActivity() {
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
                             Text(text = errorMessage.orEmpty(), color = Color(0xFFFF5252), fontSize = 14.sp)
+                            if (isLiveStream) {
+                                Spacer(modifier = Modifier.height(12.dp))
+                                Button(
+                                    onClick = { reconnectLive() },
+                                    colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = Color(0xFF050811))
+                                ) {
+                                    Text("Erneut versuchen", fontWeight = FontWeight.Bold)
+                                }
+                            }
                         }
                     } else {
                         // Play/Pause & 10s Seek in der Mitte
@@ -308,8 +366,10 @@ class MobilePlayerActivity : ComponentActivity() {
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(36.dp)
                         ) {
-                            IconButton(onClick = { seekBy(-10_000L) }, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = TextPrimary, modifier = Modifier.size(32.dp))
+                            if (!isLiveStream) {
+                                IconButton(onClick = { seekBy(-10_000L) }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = TextPrimary, modifier = Modifier.size(32.dp))
+                                }
                             }
 
                             IconButton(
@@ -327,14 +387,32 @@ class MobilePlayerActivity : ComponentActivity() {
                                 )
                             }
 
-                            IconButton(onClick = { seekBy(10_000L) }, modifier = Modifier.size(48.dp)) {
-                                Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = TextPrimary, modifier = Modifier.size(32.dp))
+                            if (!isLiveStream) {
+                                IconButton(onClick = { seekBy(10_000L) }, modifier = Modifier.size(48.dp)) {
+                                    Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = TextPrimary, modifier = Modifier.size(32.dp))
+                                }
                             }
                         }
                     }
 
-                    // Unten: Zeitleiste
-                    if (!isResolving && errorMessage == null) {
+                    // Unten: Zeitleiste (Live-Sender: nur Hinweis)
+                    if (isLiveStream && !isResolving && errorMessage == null) {
+                        Row(
+                            modifier = Modifier
+                                .align(Alignment.BottomStart)
+                                .padding(bottom = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(10.dp)
+                                    .clip(CircleShape)
+                                    .background(LiveRed)
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(text = "LIVE-ÜBERTRAGUNG", color = LiveRed, fontSize = 12.sp, fontWeight = FontWeight.Bold)
+                        }
+                    } else if (!isResolving && errorMessage == null) {
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -371,6 +449,50 @@ class MobilePlayerActivity : ComponentActivity() {
                 CastBottomSheet(onDismiss = { showCastSheet = false })
             }
         }
+    }
+
+    /** Startet den Live-Sender (neu) am aktuellen Live-Punkt. */
+    private fun playLive() {
+        errorMessage = null
+        isResolving = false
+        startExoPlayer(
+            ResolvedStream(
+                streamUrl = liveStreamUrl,
+                isHls = LiveTvRepository.isLikelyHls(liveStreamUrl),
+                hosterName = "Live TV",
+                language = LanguageOption.GER_DUB,
+                headers = liveHeaders
+            )
+        )
+    }
+
+    private fun reconnectLive() {
+        resolveJob?.cancel()
+        liveRetryCount = 0
+        playLive()
+    }
+
+    private fun handleLiveError(error: PlaybackException) {
+        // Zu weit hinter dem Live-Punkt (z. B. nach Pause): zum aktuellen Live-Punkt springen
+        val player = exoPlayer
+        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && player != null) {
+            player.seekToDefaultPosition()
+            player.prepare()
+            return
+        }
+        if (liveRetryCount < MAX_LIVE_RETRIES) {
+            liveRetryCount++
+            isResolving = true
+            statusMessage = "Verbindung unterbrochen – verbinde neu ($liveRetryCount/$MAX_LIVE_RETRIES)..."
+            resolveJob?.cancel()
+            resolveJob = lifecycleScope.launch {
+                delay(2_000L * liveRetryCount)
+                playLive()
+            }
+            return
+        }
+        isResolving = false
+        errorMessage = "Der Sender ist gerade nicht erreichbar (${error.errorCodeName})."
     }
 
     private fun loadEpisodeAndPlay(episode: EpisodeItem) {
@@ -422,7 +544,7 @@ class MobilePlayerActivity : ComponentActivity() {
 
     private fun startExoPlayer(stream: ResolvedStream) {
         releasePlayer()
-        val resumePos = LocalStorage.getSavedPositionForEpisode(currentEpisode?.path.orEmpty())
+        val resumePos = if (isLiveStream) 0L else LocalStorage.getSavedPositionForEpisode(currentEpisode?.path.orEmpty())
 
         val nonUaHeaders = stream.headers.filterKeys { !it.equals("User-Agent", ignoreCase = true) }
         val httpFactory = OkHttpDataSource.Factory(HttpClient.okHttp)
@@ -441,7 +563,15 @@ class MobilePlayerActivity : ComponentActivity() {
                 setHandleAudioBecomingNoisy(true)
                 setWakeMode(C.WAKE_MODE_NETWORK)
                 addListener(object : Player.Listener {
+                    override fun onPlaybackStateChanged(playbackState: Int) {
+                        if (playbackState == Player.STATE_READY) liveRetryCount = 0
+                    }
+
                     override fun onPlayerError(error: PlaybackException) {
+                        if (isLiveStream) {
+                            handleLiveError(error)
+                            return
+                        }
                         val current = activeHoster
                         if (current != null) {
                             failedHosterPaths.add(current.redirectPath)
@@ -503,10 +633,23 @@ class MobilePlayerActivity : ComponentActivity() {
         )
     }
 
+    override fun onStart() {
+        super.onStart()
+        // Live-Sender nach der Rückkehr am aktuellen Live-Punkt weiterlaufen lassen
+        if (pausedInBackground && isLiveStream) {
+            exoPlayer?.let {
+                it.seekToDefaultPosition()
+                it.play()
+            }
+        }
+        pausedInBackground = false
+    }
+
     override fun onStop() {
         super.onStop()
         // Ohne Hintergrund-Wiedergabe (keine Mediensession) beim Verlassen pausieren statt unsichtbar weiterzuspielen
         persistCurrentProgress()
+        pausedInBackground = exoPlayer?.isPlaying == true
         exoPlayer?.pause()
     }
 
@@ -538,11 +681,27 @@ class MobilePlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val MAX_LIVE_RETRIES = 3
+        private const val EXTRA_LIVE_STREAM_URL = "extra_live_stream_url"
+        private const val EXTRA_LIVE_HEADERS = "extra_live_headers"
         private const val EXTRA_ANIME_SLUG = "extra_anime_slug"
         private const val EXTRA_ANIME_TITLE = "extra_anime_title"
         private const val EXTRA_COVER_URL = "extra_cover_url"
         private const val EXTRA_EPISODE = "extra_episode"
         private const val EXTRA_PREFERRED_LANG_KEY = "extra_preferred_lang_key"
+
+        fun liveIntent(
+            context: Context,
+            channelName: String,
+            streamUrl: String,
+            logoUrl: String = "",
+            headers: HashMap<String, String> = HashMap()
+        ): Intent = Intent(context, MobilePlayerActivity::class.java).apply {
+            putExtra(EXTRA_ANIME_TITLE, channelName)
+            putExtra(EXTRA_COVER_URL, logoUrl)
+            putExtra(EXTRA_LIVE_STREAM_URL, streamUrl)
+            putExtra(EXTRA_LIVE_HEADERS, headers)
+        }
 
         fun intent(
             context: Context,

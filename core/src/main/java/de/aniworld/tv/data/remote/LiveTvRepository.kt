@@ -3,9 +3,13 @@ package de.aniworld.tv.data.remote
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvCategory
 import de.aniworld.tv.data.model.LiveTvChannel
+import de.aniworld.tv.data.model.LiveTvLoadResult
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
+import java.io.IOException
 
 object LiveTvRepository {
 
@@ -23,7 +27,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "prosieben",
             name = "ProSieben",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/z/z7/ProSieben_Logo_2015.svg/512px-ProSieben_Logo_2015.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/pro-sieben-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_pro_sieben_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -31,7 +35,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "sat1",
             name = "SAT.1",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6f/Sat.1_Logo_2022.svg/512px-Sat.1_Logo_2022.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/sat-1-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_sat_eins_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -39,7 +43,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "rtl",
             name = "RTL",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/66/RTL_Group_2021_Logo.svg/512px-RTL_Group_2021_Logo.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/rtl-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_rtl_ger_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -47,7 +51,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "vox",
             name = "VOX",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/VOX_Logo_2020.svg/512px-VOX_Logo_2020.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/vox-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_vox_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -55,7 +59,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "kabeleins",
             name = "kabel eins",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a2/Kabel_Eins_Logo_2015.svg/512px-Kabel_Eins_Logo_2015.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/kabel-eins-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_kabel_eins_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -63,7 +67,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "rtl2",
             name = "RTL Zwei",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f1/RTLZWEI_Logo_2019.svg/512px-RTLZWEI_Logo_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/rtl-zwei-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_rtl_zwei_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -71,7 +75,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "superrtl",
             name = "Super RTL",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cd/Super_RTL_Logo_2019.svg/512px-Super_RTL_Logo_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/rtl-super-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_super_rtl_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -79,7 +83,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "nitro",
             name = "Nitro",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/Nitro_Logo.svg/512px-Nitro_Logo.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/nitro-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_rtl_nitro_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -87,7 +91,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "prosieben_maxx",
             name = "ProSieben MAXX",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e2/ProSieben_MAXX_Logo.svg/512px-ProSieben_MAXX_Logo.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/pro-sieben-maxx-de.png",
             streamUrl = "https://s6.hopslan.com/pro7maxxX/index.m3u8",
             category = "main",
             qualityBadge = "HD"
@@ -95,7 +99,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "sixx",
             name = "sixx",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/12/Sixx_Logo.svg/512px-Sixx_Logo.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/sixx-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_sixx_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "720p"
@@ -103,7 +107,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "sat1_gold",
             name = "SAT.1 Gold",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6d/Sat.1_Gold_Logo_2019.svg/512px-Sat.1_Gold_Logo_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/tv-logo/tv-logos/main/countries/germany/sat-1-gold-de.png",
             streamUrl = "https://dash4.antik.sk/live/test_sat_eins_gold_tizen/playlist.m3u8",
             category = "main",
             qualityBadge = "576p"
@@ -111,7 +115,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "daserste",
             name = "Das Erste HD (ARD)",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Das_Erste_Logo_2015.svg/512px-Das_Erste_Logo_2015.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/daserstehd.png",
             streamUrl = "https://daserste-live.ard-mcdn.de/daserste/live/hls/de/master.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -119,7 +123,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "zdf",
             name = "ZDF HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c5/ZDF_logo1.svg/512px-ZDF_logo1.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/zdfhd.png",
             streamUrl = "https://zdf-hls-15.akamaized.net/hls/live/2016498/de/veryhigh/master.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -127,7 +131,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "arte",
             name = "Arte HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/1/19/Arte_Logo_2017.svg/512px-Arte_Logo_2017.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/artehd.png",
             streamUrl = "https://artesimulcast.akamaized.net/hls/live/2030993/artelive_de/master.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -135,7 +139,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "drei_sat",
             name = "3sat HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/8/81/3sat_2019.svg/512px-3sat_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/3sat.png",
             streamUrl = "https://zdf-hls-18.akamaized.net/hls/live/2016501/dach/veryhigh/master.m3u8",
             category = "main",
             qualityBadge = "1080p"
@@ -227,7 +231,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "tagesschau24",
             name = "tagesschau24 HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Tagesschau24_logo_2014.svg/512px-Tagesschau24_logo_2014.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/tagesschau24.png",
             streamUrl = "https://tagesschau.akamaized.net/hls/live/2020115/tagesschau/tagesschau_1/master.m3u8",
             category = "news",
             qualityBadge = "1080p"
@@ -235,7 +239,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "welt",
             name = "WELT Live",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d4/WELT_Logo_2018.svg/512px-WELT_Logo_2018.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/welt.png",
             streamUrl = "https://dash4.antik.sk/live/test_welt_tizen/playlist.m3u8",
             category = "news",
             qualityBadge = "720p"
@@ -243,7 +247,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "ntv",
             name = "n-tv Live",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f6/N-tv_logo-september2017.svg/512px-N-tv_logo-september2017.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/ntv.png",
             streamUrl = "https://dash4.antik.sk/live/test_ntv_tizen/playlist.m3u8",
             category = "news",
             qualityBadge = "720p"
@@ -251,7 +255,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "zdfinfo",
             name = "ZDFinfo HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/ca/Zdfinfo_logo_2021.svg/512px-Zdfinfo_logo_2021.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/zdfinfohd.png",
             streamUrl = "https://zdf-hls-17.akamaized.net/hls/live/2016500/de/veryhigh/master.m3u8",
             category = "news",
             qualityBadge = "1080p"
@@ -259,7 +263,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "zdfneo",
             name = "ZDFneo HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/8/87/ZDFneo_logo_2017.svg/512px-ZDFneo_logo_2017.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/zdfneohd.png",
             streamUrl = "https://zdf-hls-16.akamaized.net/hls/live/2016499/de/veryhigh/master.m3u8",
             category = "news",
             qualityBadge = "1080p"
@@ -267,7 +271,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "kika",
             name = "KiKA HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/KiKa_Logo_2012.svg/512px-KiKa_Logo_2012.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/kika.png",
             streamUrl = "https://dash4.antik.sk/live/test_kika_tizen/playlist.m3u8",
             category = "news",
             qualityBadge = "720p"
@@ -275,7 +279,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "wdr",
             name = "WDR Fernsehen HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e0/WDR_Fernsehen_Logo_2016.svg/512px-WDR_Fernsehen_Logo_2016.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/wdrhd.png",
             streamUrl = "https://wdr-live.ard-mcdn.de/wdr/live/hls/de/master.m3u8",
             category = "news",
             qualityBadge = "1080p"
@@ -283,7 +287,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "swr",
             name = "SWR Fernsehen HD",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/2/26/SWR_Logo_2023.svg/512px-SWR_Logo_2023.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/swrhd.png",
             streamUrl = "https://dash4.antik.sk/live/test_swr_tizen/playlist.m3u8",
             category = "news",
             qualityBadge = "720p"
@@ -293,7 +297,7 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "servustv_at",
             name = "ServusTV Österreich (F1 Live)",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/46/Servus_TV_Logo_2019.svg/512px-Servus_TV_Logo_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/servustvhd.png",
             streamUrl = "https://s6.hopslan.com/servuz1/index.m3u8",
             category = "at_ch",
             qualityBadge = "HD"
@@ -301,21 +305,72 @@ object LiveTvRepository {
         LiveTvChannel(
             id = "orf1",
             name = "ORF 1 (F1 Live)",
-            logoUrl = "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4c/ORF1_Logo_2019.svg/512px-ORF1_Logo_2019.svg.png",
+            logoUrl = "https://raw.githubusercontent.com/jnk22/kodinerds-iptv/master/logos/tv/orf1hd.png",
             streamUrl = "https://test02.mdn.ors.at/orf/orf1/qxa/manifest.m3u8",
             category = "at_ch",
             qualityBadge = "HD"
         )
     )
 
-    suspend fun loadChannels(): List<LiveTvChannel> = withContext(Dispatchers.IO) {
-        val list = PRESET_CHANNELS.toMutableList()
+    // Eigene M3U-Liste nur einmal pro Adresse laden; "Liste aktualisieren" erzwingt ein Neuladen
+    @Volatile
+    private var customCache: Pair<String, List<LiveTvChannel>>? = null
+
+    private val logoAttr = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE)
+    private val nameAttr = Regex("""tvg-name="([^"]*)"""", RegexOption.IGNORE_CASE)
+    private val nonHlsExtensions = listOf(".ts", ".mp4", ".mkv", ".mp3", ".aac", ".flv", ".mpd")
+
+    suspend fun loadChannels(forceRefresh: Boolean = false): LiveTvLoadResult = withContext(Dispatchers.IO) {
         val customUrl = LocalStorage.customM3uUrl.trim()
-        if (customUrl.isNotBlank()) {
-            val custom = runCatching { fetchM3u(customUrl) }.getOrDefault(emptyList())
-            list.addAll(custom)
+        if (customUrl.isBlank()) return@withContext LiveTvLoadResult(PRESET_CHANNELS)
+
+        val cached = customCache
+        if (!forceRefresh && cached != null && cached.first == customUrl) {
+            return@withContext LiveTvLoadResult(PRESET_CHANNELS + cached.second)
         }
-        list
+
+        try {
+            val custom = fetchM3u(customUrl)
+            customCache = customUrl to custom
+            LiveTvLoadResult(
+                channels = PRESET_CHANNELS + custom,
+                customError = if (custom.isEmpty()) "Die eigene Liste enthält keine abspielbaren Sender." else null
+            )
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            LiveTvLoadResult(
+                channels = PRESET_CHANNELS,
+                customError = "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
+            )
+        }
+    }
+
+    /**
+     * Speichert die Adresse der eigenen M3U-Liste (leer = entfernen).
+     * Ergänzt ein fehlendes http:// und gibt false zurück, wenn es keine gültige Adresse ist.
+     */
+    fun saveCustomM3uUrl(input: String): Boolean {
+        val trimmed = input.trim()
+        val normalized = when {
+            trimmed.isEmpty() -> ""
+            trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) ->
+                trimmed.toHttpUrlOrNull()?.toString() ?: return false
+            else -> "http://$trimmed".toHttpUrlOrNull()?.toString() ?: return false
+        }
+        LocalStorage.customM3uUrl = normalized
+        customCache = null
+        return true
+    }
+
+    /** HLS erkennen; MPEG-TS-, MP4- oder DASH-Streams aus IPTV-Listen dürfen nicht als HLS geöffnet werden. */
+    fun isLikelyHls(url: String): Boolean {
+        val path = url.substringBefore('?').substringBefore('#').lowercase()
+        return when {
+            path.endsWith(".m3u8") || path.endsWith(".m3u") -> true
+            nonHlsExtensions.any { path.endsWith(it) } -> false
+            else -> true
+        }
     }
 
     private fun fetchM3u(url: String): List<LiveTvChannel> {
@@ -323,43 +378,74 @@ object LiveTvRepository {
             .url(url)
             .header("User-Agent", HttpClient.USER_AGENT)
             .build()
-        val body = HttpClient.okHttp.newCall(req).execute().body?.string().orEmpty()
-        return parseM3u(body)
+        HttpClient.okHttp.newCall(req).execute().use { res ->
+            if (!res.isSuccessful) throw IOException("HTTP ${res.code}")
+            return parseM3u(res.body?.string().orEmpty())
+        }
     }
 
     fun parseM3u(content: String): List<LiveTvChannel> {
-        val lines = content.lines()
         val channels = mutableListOf<LiveTvChannel>()
         var currentName = ""
         var currentLogo = ""
-        var currentGroup = "custom"
+        val currentHeaders = mutableMapOf<String, String>()
 
-        for (line in lines) {
+        for (line in content.lineSequence()) {
             val trimmed = line.trim()
-            if (trimmed.startsWith("#EXTINF")) {
-                currentName = trimmed.substringAfterLast(",").trim()
-                val logoMatch = Regex("""tvg-logo="([^"]+)"""").find(trimmed)
-                currentLogo = logoMatch?.groupValues?.get(1).orEmpty()
-                val groupMatch = Regex("""group-title="([^"]+)"""").find(trimmed)
-                currentGroup = groupMatch?.groupValues?.get(1)?.lowercase() ?: "custom"
-            } else if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
-                if (currentName.isNotBlank()) {
-                    val id = "custom_" + channels.size
-                    channels.add(
-                        LiveTvChannel(
-                            id = id,
-                            name = currentName,
-                            logoUrl = currentLogo,
-                            streamUrl = trimmed,
-                            category = "custom",
-                            qualityBadge = "M3U"
+            when {
+                trimmed.startsWith("#EXTINF", ignoreCase = true) -> {
+                    currentName = extinfTitle(trimmed).ifBlank {
+                        nameAttr.find(trimmed)?.groupValues?.get(1).orEmpty()
+                    }
+                    currentLogo = logoAttr.find(trimmed)?.groupValues?.get(1).orEmpty()
+                    currentHeaders.clear()
+                }
+
+                // VLC-Optionen: manche Sender liefern nur mit passendem User-Agent/Referer
+                trimmed.startsWith("#EXTVLCOPT:", ignoreCase = true) -> {
+                    val option = trimmed.substringAfter(':')
+                    val value = option.substringAfter('=', "").trim()
+                    if (value.isNotEmpty()) {
+                        when (option.substringBefore('=').trim().lowercase()) {
+                            "http-user-agent" -> currentHeaders["User-Agent"] = value
+                            "http-referrer", "http-referer" -> currentHeaders["Referer"] = value
+                            "http-origin" -> currentHeaders["Origin"] = value
+                        }
+                    }
+                }
+
+                trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> {
+                    if (currentName.isNotBlank()) {
+                        channels.add(
+                            LiveTvChannel(
+                                id = "custom_" + channels.size,
+                                name = currentName,
+                                logoUrl = currentLogo,
+                                streamUrl = trimmed,
+                                category = "custom",
+                                qualityBadge = "M3U",
+                                headers = HashMap(currentHeaders)
+                            )
                         )
-                    )
+                    }
                     currentName = ""
                     currentLogo = ""
+                    currentHeaders.clear()
                 }
             }
         }
         return channels
+    }
+
+    /** Sendername nach dem ersten Komma außerhalb von Anführungszeichen (Attribute dürfen Kommas enthalten). */
+    private fun extinfTitle(line: String): String {
+        var inQuotes = false
+        line.forEachIndexed { i, c ->
+            when (c) {
+                '"' -> inQuotes = !inQuotes
+                ',' -> if (!inQuotes) return line.substring(i + 1).trim()
+            }
+        }
+        return ""
     }
 }

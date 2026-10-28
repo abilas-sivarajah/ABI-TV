@@ -19,7 +19,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 object TvCastServer {
 
     private const val TAG = "TvCastServer"
-    private const val PROTOCOL_VERSION = 2
+    // 2 = Kopplung, 3 = Live-Sender per /play
+    private const val PROTOCOL_VERSION = 3
     private const val MAX_BODY_BYTES = 64 * 1024
     private const val MAX_LINE_BYTES = 8 * 1024
 
@@ -226,6 +227,25 @@ object TvCastServer {
                 method == "POST" && path.startsWith("/play") -> {
                     try {
                         val obj = JsonParser.parseString(body).asJsonObject
+                        // Ab Protokoll 3: Live-Sender direkt per Stream-Adresse
+                        if (obj.get("type")?.asString == "live") {
+                            val streamUrl = obj.get("streamUrl")?.asString.orEmpty()
+                            if (!streamUrl.startsWith("http://", true) && !streamUrl.startsWith("https://", true)) {
+                                sendJson(out, 400, "Bad Request", errorJson("bad_stream_url"))
+                                return
+                            }
+                            val headers = obj.getAsJsonObject("headers")?.entrySet()
+                                ?.associate { (key, value) -> key to value.asString }
+                                .orEmpty()
+                            TvCastManager.handleLiveCommand(
+                                channelName = obj.get("channelName")?.asString.orEmpty(),
+                                streamUrl = streamUrl,
+                                logoUrl = obj.get("logoUrl")?.asString.orEmpty(),
+                                headers = headers
+                            )
+                            sendJson(out, 200, "OK", JsonObject().apply { addProperty("success", true) }.toString())
+                            return
+                        }
                         val cmd = PlayCommand(
                             animeSlug = obj.get("animeSlug")?.asString.orEmpty(),
                             animeTitle = obj.get("animeTitle")?.asString.orEmpty(),

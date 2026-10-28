@@ -12,6 +12,12 @@ data class LiveTvChannel(
     val headers: Map<String, String> = emptyMap()
 ) : Serializable
 
+/** Senderliste plus ggf. Fehler beim Laden der eigenen M3U-Liste (die festen Sender gibt es immer). */
+data class LiveTvLoadResult(
+    val channels: List<LiveTvChannel>,
+    val customError: String? = null
+)
+
 data class LiveTvCategory(
     val id: String,
     val title: String,

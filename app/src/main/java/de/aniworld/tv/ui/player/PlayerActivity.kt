@@ -78,6 +78,7 @@ import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.HttpClient
+import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.ui.components.LanguageBadge
 import de.aniworld.tv.ui.components.TvFocusableButton
@@ -96,7 +97,8 @@ import kotlinx.coroutines.launch
 @UnstableApi
 class PlayerActivity : ComponentActivity() {
 
-    private var exoPlayer: ExoPlayer? = null
+    // Als Compose-Zustand, damit die Videofläche nach Neuverbinden/Hoster-Wechsel den neuen Player bekommt
+    private var exoPlayer by mutableStateOf<ExoPlayer?>(null)
 
     private var animeSlug: String = ""
     private var animeTitle: String = ""
@@ -112,6 +114,7 @@ class PlayerActivity : ComponentActivity() {
     private var isLiveStream by mutableStateOf(false)
     private var directStreamUrl: String? = null
     private var streamHeaders: Map<String, String> = emptyMap()
+    private var liveRetryCount = 0
 
     private var isResolving by mutableStateOf(true)
     private var statusMessage by mutableStateOf("Lade verfügbare Streams...")
@@ -197,31 +200,28 @@ class PlayerActivity : ComponentActivity() {
         selectedLangKey = newLangKey
 
         if (live && !directUrl.isNullOrBlank()) {
+            // Läuft gerade eine Folge (z. B. per Handy umgeschaltet), deren Fortschritt vorher sichern
+            persistCurrentProgress()
+            resolveJob?.cancel()
             isLiveStream = true
             directStreamUrl = directUrl
             streamHeaders = headers ?: emptyMap()
-            val liveTitle = newTitle.ifBlank { "Live TV" }
-            val fakeEp = EpisodeItem(
+            activeHoster = null
+            availableHosters = emptyList()
+            seasonEpisodes = arrayListOf()
+            currentPositionMs = 0L
+            durationMs = 0L
+            liveRetryCount = 0
+            currentEpisode = EpisodeItem(
                 number = 1,
-                seasonLabel = "LIVE",
+                seasonLabel = LIVE_SEASON_LABEL,
                 path = "live_stream",
-                titleDe = liveTitle,
+                titleDe = newTitle.ifBlank { "Live TV" },
                 titleEn = "",
                 languages = emptyList()
             )
-            currentEpisode = fakeEp
-            isResolving = false
-            errorMessage = null
             statusMessage = "Starte Live Stream..."
-
-            val resolved = ResolvedStream(
-                streamUrl = directUrl,
-                isHls = directUrl.contains(".m3u8", ignoreCase = true) || !directUrl.contains(".mp4", ignoreCase = true),
-                hosterName = "Live TV",
-                language = LanguageOption.GER_DUB,
-                headers = streamHeaders
-            )
-            startExoPlayer(fakeEp, resolved)
+            playLive()
             return
         }
 
@@ -373,7 +373,11 @@ class PlayerActivity : ComponentActivity() {
                                 text = "Erneut versuchen",
                                 isPrimary = true,
                                 onClick = {
-                                    currentEpisode?.let { loadEpisodeAndPlay(it) }
+                                    if (isLiveStream) {
+                                        reconnectLive()
+                                    } else {
+                                        currentEpisode?.let { loadEpisodeAndPlay(it) }
+                                    }
                                 }
                             )
                             TvFocusableButton(
@@ -410,16 +414,16 @@ class PlayerActivity : ComponentActivity() {
                     ) {
                         Column(modifier = Modifier.weight(1f)) {
                             Text(
-                                text = animeTitle,
+                                text = if (isLiveStream) "Live TV" else animeTitle,
                                 color = AccentCyan,
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Bold
                             )
                             if (ep != null) {
-                                val epLabel = if (ep.seasonLabel.equals("Filme", true)) {
-                                    "Film ${ep.number}: ${ep.displayTitle}"
-                                } else {
-                                    "Staffel ${ep.seasonLabel} • Folge ${ep.number}: ${ep.displayTitle}"
+                                val epLabel = when {
+                                    isLiveStream -> ep.displayTitle
+                                    ep.seasonLabel.equals("Filme", true) -> "Film ${ep.number}: ${ep.displayTitle}"
+                                    else -> "Staffel ${ep.seasonLabel} • Folge ${ep.number}: ${ep.displayTitle}"
                                 }
                                 Text(
                                     text = epLabel,
@@ -559,17 +563,7 @@ class PlayerActivity : ComponentActivity() {
                                     text = "🔄 Neu verbinden",
                                     onClick = {
                                         keepControlsAlive()
-                                        directStreamUrl?.let { url ->
-                                            val fakeEp = currentEpisode ?: return@let
-                                            val resolved = ResolvedStream(
-                                                streamUrl = url,
-                                                isHls = true,
-                                                hosterName = "Live TV",
-                                                language = LanguageOption.GER_DUB,
-                                                headers = streamHeaders
-                                            )
-                                            startExoPlayer(fakeEp, resolved)
-                                        }
+                                        reconnectLive()
                                     }
                                 )
                             }
@@ -646,7 +640,7 @@ class PlayerActivity : ComponentActivity() {
 
                         Text(
                             text = if (isLiveStream) {
-                                "OK: Play/Pause • Links/Rechts: Neu verbinden • Zurück: Sender beenden"
+                                "OK: Play/Pause • Hoch/Runter: Steuerung • Zurück: Sender beenden"
                             } else {
                                 "Steuerkreuz Links/Rechts: Spulen • OK: Play/Pause • Hoch/Runter: Hoster & Intro-Skip • Zurück: Ausblenden/Beenden"
                             },
@@ -659,9 +653,59 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
+    /** Startet den Live-Sender (neu) am aktuellen Live-Punkt. */
+    private fun playLive() {
+        val url = directStreamUrl ?: return
+        val ep = currentEpisode ?: return
+        errorMessage = null
+        isResolving = false
+        startExoPlayer(
+            ep,
+            ResolvedStream(
+                streamUrl = url,
+                isHls = LiveTvRepository.isLikelyHls(url),
+                hosterName = "Live TV",
+                language = LanguageOption.GER_DUB,
+                headers = streamHeaders
+            )
+        )
+    }
+
+    private fun reconnectLive() {
+        resolveJob?.cancel()
+        liveRetryCount = 0
+        playLive()
+    }
+
+    private fun handleLiveError(error: PlaybackException) {
+        // Nach Pause oder Hänger zu weit hinter dem Live-Punkt: einfach zum aktuellen Live-Punkt springen
+        val player = exoPlayer
+        if (error.errorCode == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW && player != null) {
+            player.seekToDefaultPosition()
+            player.prepare()
+            return
+        }
+        // Kurze Aussetzer der Quelle selbst abfangen, statt sofort einen Fehler zu zeigen
+        if (liveRetryCount < MAX_LIVE_RETRIES) {
+            liveRetryCount++
+            isResolving = true
+            statusMessage = "Verbindung unterbrochen – verbinde neu ($liveRetryCount/$MAX_LIVE_RETRIES)..."
+            resolveJob?.cancel()
+            resolveJob = lifecycleScope.launch {
+                delay(2_000L * liveRetryCount)
+                playLive()
+            }
+            return
+        }
+        isResolving = false
+        errorMessage = "Der Sender ist gerade nicht erreichbar (${error.errorCodeName})."
+    }
+
     private fun loadEpisodeAndPlay(episode: EpisodeItem) {
         resolveJob?.cancel()
         persistCurrentProgress()
+        isLiveStream = false
+        directStreamUrl = null
         currentPositionMs = 0L
         durationMs = 0L
         exoPlayer?.stop()
@@ -766,6 +810,7 @@ class PlayerActivity : ComponentActivity() {
                 addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
+                        if (playbackState == Player.STATE_READY) liveRetryCount = 0
                         if (!isLiveStream && playbackState == Player.STATE_ENDED) {
                             LocalStorage.markEpisodeWatched(episode.path)
                             findNextEpisode()?.let { next ->
@@ -781,7 +826,7 @@ class PlayerActivity : ComponentActivity() {
 
                     override fun onPlayerError(error: PlaybackException) {
                         if (isLiveStream) {
-                            errorMessage = "Live-Stream Fehler (${error.errorCodeName})."
+                            handleLiveError(error)
                             return
                         }
                         // Automatischer Hoster-Fallback bei Stream-Abbruch
@@ -829,6 +874,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun seekBy(deltaMs: Long) {
+        // Live-Sender haben keine Zeitleiste: Spulen (auch vom Handy) ignorieren
+        if (isLiveStream) return
         val p = exoPlayer ?: return
         val dur = p.duration
         val target = (p.currentPosition + deltaMs).coerceAtLeast(0L)
@@ -945,8 +992,11 @@ class PlayerActivity : ComponentActivity() {
         // Nach Home-Taste/Bildschirmschoner wurde der Player in onStop freigegeben: an gleicher Stelle neu starten
         if (releasedInBackground) {
             releasedInBackground = false
-            activeHoster?.let { resolveAndPlaySingleHoster(it) }
-                ?: currentEpisode?.let { loadEpisodeAndPlay(it) }
+            when {
+                isLiveStream -> reconnectLive()
+                activeHoster != null -> resolveAndPlaySingleHoster(activeHoster!!)
+                else -> currentEpisode?.let { loadEpisodeAndPlay(it) }
+            }
         }
     }
 
@@ -991,6 +1041,10 @@ class PlayerActivity : ComponentActivity() {
     }
 
     companion object {
+        /** Kennzeichnet Live-Sender im Status für die Handy-Fernbedienung. */
+        const val LIVE_SEASON_LABEL = "LIVE"
+        private const val MAX_LIVE_RETRIES = 3
+
         const val EXTRA_IS_LIVE = "extra_is_live"
         const val EXTRA_DIRECT_STREAM_URL = "extra_direct_stream_url"
         const val EXTRA_STREAM_HEADERS = "extra_stream_headers"

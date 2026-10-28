@@ -62,6 +62,8 @@ fun MiniRemoteBar(
         modifier = modifier
     ) {
         val s = status ?: return@AnimatedVisibility
+        // Der TV meldet Live-Sender mit Staffel "LIVE": keine Zeitleiste, kein Spulen
+        val isLive = s.seasonLabel == "LIVE"
 
         Column(
             modifier = Modifier
@@ -107,10 +109,10 @@ fun MiniRemoteBar(
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
-                        val epText = if (s.episodeTitle.isNotBlank()) {
-                            "S${s.seasonLabel} E${s.episodeNumber}: ${s.episodeTitle}"
-                        } else {
-                            "Läuft auf ${connected?.name ?: "TV"}"
+                        val epText = when {
+                            isLive -> "🔴 Live auf ${connected?.name ?: "TV"}"
+                            s.episodeTitle.isNotBlank() -> "S${s.seasonLabel} E${s.episodeNumber}: ${s.episodeTitle}"
+                            else -> "Läuft auf ${connected?.name ?: "TV"}"
                         }
                         Text(
                             text = epText,
@@ -124,11 +126,13 @@ fun MiniRemoteBar(
 
                 // Steuerungsknöpfe (10s zurück, Play/Pause, 10s vor)
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(
-                        onClick = { MobileCastManager.controlTv("seek_by", -10_000L) },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = TextPrimary, modifier = Modifier.size(20.dp))
+                    if (!isLive) {
+                        IconButton(
+                            onClick = { MobileCastManager.controlTv("seek_by", -10_000L) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.Replay10, contentDescription = "-10s", tint = TextPrimary, modifier = Modifier.size(20.dp))
+                        }
                     }
 
                     IconButton(
@@ -146,28 +150,32 @@ fun MiniRemoteBar(
                         )
                     }
 
-                    IconButton(
-                        onClick = { MobileCastManager.controlTv("seek_by", 10_000L) },
-                        modifier = Modifier.size(36.dp)
-                    ) {
-                        Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = TextPrimary, modifier = Modifier.size(20.dp))
+                    if (!isLive) {
+                        IconButton(
+                            onClick = { MobileCastManager.controlTv("seek_by", 10_000L) },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(Icons.Default.Forward10, contentDescription = "+10s", tint = TextPrimary, modifier = Modifier.size(20.dp))
+                        }
                     }
                 }
             }
 
             // Fortschrittsbalken
-            val progress = if (s.durationMs > 0) {
-                (s.positionMs.toFloat() / s.durationMs.toFloat()).coerceIn(0f, 1f)
-            } else 0f
+            if (!isLive) {
+                val progress = if (s.durationMs > 0) {
+                    (s.positionMs.toFloat() / s.durationMs.toFloat()).coerceIn(0f, 1f)
+                } else 0f
 
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(3.dp),
-                color = AccentCyan,
-                trackColor = Color.White.copy(alpha = 0.1f)
-            )
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(3.dp),
+                    color = AccentCyan,
+                    trackColor = Color.White.copy(alpha = 0.1f)
+                )
+            }
         }
     }
 }

@@ -70,6 +70,17 @@ class MainActivity : ComponentActivity() {
                                 showCastSheet = true
                             },
                             onResumeWatch = { entry -> resumeFromProgress(entry) },
+                            onPlayLiveChannel = { channel ->
+                                startActivity(
+                                    MobilePlayerActivity.liveIntent(
+                                        context = this@MainActivity,
+                                        channelName = channel.name,
+                                        streamUrl = channel.streamUrl,
+                                        logoUrl = channel.logoUrl,
+                                        headers = HashMap(channel.headers)
+                                    )
+                                )
+                            },
                             onUpdateFound = { release -> availableRelease = release }
                         )
                     } else {

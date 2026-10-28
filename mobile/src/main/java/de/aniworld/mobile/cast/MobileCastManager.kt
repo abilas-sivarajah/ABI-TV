@@ -9,6 +9,7 @@ import android.widget.Toast
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import de.aniworld.tv.AniWorldApp
+import de.aniworld.tv.data.model.LiveTvChannel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -66,6 +67,7 @@ object MobileCastManager {
 
     private const val TAG = "MobileCastManager"
     const val DEFAULT_PORT = 8765
+    const val PROTOCOL_LIVE_TV = 3
 
     private const val PREFS_NAME = "aniworld_mobile_cast"
     private const val KEY_LAST_IP = "last_tv_ip"
@@ -295,6 +297,64 @@ object MobileCastManager {
             .apply()
 
         toast("Verbindung zum TV getrennt")
+    }
+
+    /**
+     * Spielt einen Live-Sender auf dem verbundenen Fernseher ab (braucht TV-Protokoll 3, ab ABI TV 1.0.4).
+     */
+    suspend fun playLiveOnTv(channel: LiveTvChannel): Boolean = withContext(Dispatchers.IO) {
+        var device = _connectedDevice.value
+        if (device == null) {
+            toast("Bitte zuerst mit dem Fernseher verbinden.")
+            return@withContext false
+        }
+
+        if (device.protocol < PROTOCOL_LIVE_TV) {
+            // Gespeicherte Version kann veraltet sein, falls der TV inzwischen aktualisiert wurde
+            val fresh = probe(device)
+            if (fresh != null && fresh.protocol >= PROTOCOL_LIVE_TV) {
+                device = device.copy(protocol = fresh.protocol)
+                _connectedDevice.value = device
+                prefs.edit().putInt(KEY_LAST_PROTOCOL, device.protocol).apply()
+            } else {
+                toast("Live TV braucht auf dem Fernseher ABI TV 1.0.4 oder neuer.")
+                return@withContext false
+            }
+        }
+
+        try {
+            val payload = JsonObject().apply {
+                addProperty("type", "live")
+                addProperty("channelName", channel.name)
+                addProperty("streamUrl", channel.streamUrl)
+                addProperty("logoUrl", channel.logoUrl)
+                add("headers", JsonObject().apply { channel.headers.forEach { (k, v) -> addProperty(k, v) } })
+            }.toString()
+            val req = authorizedRequest(device, "/play")
+                .post(payload.toRequestBody(jsonType))
+                .build()
+            httpClient.newCall(req).execute().use { res ->
+                when {
+                    res.isSuccessful -> {
+                        toast("${channel.name} läuft auf ${device.name}")
+                        startStatusPolling(device)
+                        true
+                    }
+                    res.code == 401 -> {
+                        onUnauthorized(device)
+                        false
+                    }
+                    else -> {
+                        toast("Der Fernseher konnte den Sender nicht starten (${res.code}).")
+                        false
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "playLiveOnTv fehlgeschlagen", e)
+            toast("Fehler beim Senden an den TV: ${e.message}")
+            false
+        }
     }
 
     /**

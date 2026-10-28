@@ -156,6 +156,23 @@ object TvCastManager {
         }
     }
 
+    /** Startet einen Live-Sender vom Handy; ein laufender Player übernimmt ihn per onNewIntent. */
+    fun handleLiveCommand(channelName: String, streamUrl: String, logoUrl: String, headers: Map<String, String>) {
+        scope.launch(Dispatchers.Main) {
+            val intent = PlayerActivity.liveIntent(
+                context = AniWorldApp.instance,
+                channelName = channelName,
+                streamUrl = streamUrl,
+                logoUrl = logoUrl,
+                headers = HashMap(headers)
+            ).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+            }
+            AniWorldApp.instance.startActivity(intent)
+            Log.i(TAG, "Live-Sender vom Handy gestartet: $channelName")
+        }
+    }
+
     fun handleControlCommand(action: String, arg: Long = 0L): Boolean {
         val control = activePlayerControl
         if (control != null) {

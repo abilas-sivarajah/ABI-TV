@@ -28,6 +28,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LiveTv
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
@@ -81,6 +82,7 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
 import de.aniworld.tv.data.model.CatalogSection
 import de.aniworld.tv.data.model.LanguageOption
+import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.SearchScope
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
@@ -95,7 +97,8 @@ import kotlinx.coroutines.delay
 
 enum class MobileTab(val label: String) {
     ANIMES("Animes"),
-    MOVIES("Filme & Serien"),
+    MOVIES("Filme"),
+    LIVE_TV("Live TV"),
     SEARCH("Suche"),
     WATCHLIST("Merkliste")
 }
@@ -110,6 +113,7 @@ fun MobileHomeScreen(
     onOpenAnime: (AnimeCard) -> Unit,
     onOpenCastSheet: () -> Unit,
     onResumeWatch: (WatchProgressEntry) -> Unit,
+    onPlayLiveChannel: (LiveTvChannel) -> Unit = {},
     onUpdateFound: (AppRelease) -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -189,7 +193,7 @@ fun MobileHomeScreen(
                         selected = currentTab == MobileTab.ANIMES,
                         onClick = { currentTab = MobileTab.ANIMES },
                         icon = { Icon(Icons.Default.Home, contentDescription = null) },
-                        label = { Text(MobileTab.ANIMES.label, fontSize = 11.sp) },
+                        label = { Text(MobileTab.ANIMES.label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -203,7 +207,21 @@ fun MobileHomeScreen(
                         selected = currentTab == MobileTab.MOVIES,
                         onClick = { currentTab = MobileTab.MOVIES },
                         icon = { Icon(Icons.Default.Movie, contentDescription = null) },
-                        label = { Text(MobileTab.MOVIES.label, fontSize = 11.sp) },
+                        label = { Text(MobileTab.MOVIES.label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                        colors = NavigationBarItemDefaults.colors(
+                            selectedIconColor = AccentCyan,
+                            selectedTextColor = AccentCyan,
+                            unselectedIconColor = TextSecondary,
+                            unselectedTextColor = TextSecondary,
+                            indicatorColor = AccentCyan.copy(alpha = 0.15f)
+                        )
+                    )
+
+                    NavigationBarItem(
+                        selected = currentTab == MobileTab.LIVE_TV,
+                        onClick = { currentTab = MobileTab.LIVE_TV },
+                        icon = { Icon(Icons.Default.LiveTv, contentDescription = null) },
+                        label = { Text(MobileTab.LIVE_TV.label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -224,7 +242,7 @@ fun MobileHomeScreen(
                             currentTab = MobileTab.SEARCH
                         },
                         icon = { Icon(Icons.Default.Search, contentDescription = null) },
-                        label = { Text(MobileTab.SEARCH.label, fontSize = 11.sp) },
+                        label = { Text(MobileTab.SEARCH.label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -238,7 +256,7 @@ fun MobileHomeScreen(
                         selected = currentTab == MobileTab.WATCHLIST,
                         onClick = { currentTab = MobileTab.WATCHLIST },
                         icon = { Icon(Icons.Default.Bookmark, contentDescription = null) },
-                        label = { Text(MobileTab.WATCHLIST.label, fontSize = 11.sp) },
+                        label = { Text(MobileTab.WATCHLIST.label, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
                         colors = NavigationBarItemDefaults.colors(
                             selectedIconColor = AccentCyan,
                             selectedTextColor = AccentCyan,
@@ -274,6 +292,10 @@ fun MobileHomeScreen(
                         searchScope = SearchScope.MOVIES
                         currentTab = MobileTab.SEARCH
                     }
+                )
+
+                MobileTab.LIVE_TV -> MobileLiveTvScreen(
+                    onPlayChannel = onPlayLiveChannel
                 )
 
                 MobileTab.SEARCH -> MobileSearchTab(
