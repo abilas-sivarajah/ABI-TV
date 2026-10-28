@@ -1,0 +1,55 @@
+name: Build & Release ABI TV
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Release APKs
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build Release APKs (TV & Mobile)
+        run: ./gradlew :app:assembleRelease :mobile:assembleRelease --no-daemon
+
+      - name: Prepare APKs for Release
+        run: |
+          mkdir -p release-artifacts
+          cp app/build/outputs/apk/release/app-release.apk release-artifacts/ABI_TV.apk
+          cp mobile/build/outputs/apk/release/mobile-release.apk release-artifacts/ABI_Mobile.apk
+          # Kopien für abwärtskompatible Scripte
+          cp release-artifacts/ABI_TV.apk release-artifacts/AniWorld_TV.apk
+          cp release-artifacts/ABI_Mobile.apk release-artifacts/AniWorld_Mobile.apk
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-artifacts/ABI_TV.apk
+            release-artifacts/ABI_Mobile.apk
+            release-artifacts/AniWorld_TV.apk
+            release-artifacts/AniWorld_Mobile.apk
+          generate_release_notes: true
+          draft: false
+          prerelease: false
