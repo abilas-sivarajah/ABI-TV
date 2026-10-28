@@ -69,9 +69,6 @@ jobs:
           mkdir -p release-artifacts
           cp app/build/outputs/apk/release/app-release.apk release-artifacts/ABI_TV.apk
           cp mobile/build/outputs/apk/release/mobile-release.apk release-artifacts/ABI_Mobile.apk
-          # Kopien für abwärtskompatible Scripte
-          cp release-artifacts/ABI_TV.apk release-artifacts/AniWorld_TV.apk
-          cp release-artifacts/ABI_Mobile.apk release-artifacts/AniWorld_Mobile.apk
 
       - name: Show signing certificate
         run: |
@@ -86,8 +83,6 @@ jobs:
           files: |
             release-artifacts/ABI_TV.apk
             release-artifacts/ABI_Mobile.apk
-            release-artifacts/AniWorld_TV.apk
-            release-artifacts/AniWorld_Mobile.apk
           generate_release_notes: true
           draft: false
           prerelease: false
