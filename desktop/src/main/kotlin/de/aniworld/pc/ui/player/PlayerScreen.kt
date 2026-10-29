@@ -194,7 +194,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
         }
     }
 
-    val showBars = !isFullscreen || controlsVisible || controller.isResolving || controller.errorMessage != null
+    val showBars = !isFullscreen || controlsVisible || controller.isResolving || controller.isStarting || controller.errorMessage != null
     // Mauszeiger im Vollbild mit den Leisten ausblenden
     LaunchedEffect(showBars) {
         controller.videoCanvas.cursor = if (showBars) Cursor.getDefaultCursor() else BLANK_CURSOR
@@ -202,7 +202,8 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
 
     // Compose kann nicht über das VLC-Bild zeichnen: solange geladen wird, ein Fehler oder der
     // Kopplungscode angezeigt wird, schrumpft das Bild und die Meldung erscheint an seiner Stelle
-    val showVideo = !controller.isResolving && controller.errorMessage == null && pairingNotice == null
+    val isLoading = controller.isResolving || controller.isStarting
+    val showVideo = !isLoading && controller.errorMessage == null && pairingNotice == null
 
     Column(
         modifier = Modifier
@@ -225,7 +226,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
                 modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
             )
 
-            if (controller.isResolving) {
+            if (isLoading && controller.errorMessage == null) {
                 StatusCard {
                     CircularProgressIndicator(color = AccentCyan)
                     Spacer(modifier = Modifier.height(12.dp))

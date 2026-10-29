@@ -85,6 +85,9 @@ class PlayerController(private val scope: CoroutineScope) {
 
     var isResolving by mutableStateOf(true)
         private set
+    /** Stream aufgelöst, VLC verbindet aber noch (noch kein Bild). */
+    var isStarting by mutableStateOf(false)
+        private set
     var statusMessage by mutableStateOf("Lade verfügbare Streams...")
         private set
     var errorMessage by mutableStateOf<String?>(null)
@@ -119,11 +122,18 @@ class PlayerController(private val scope: CoroutineScope) {
             applyPendingSeek()
         }
 
+        override fun videoOutput(mediaPlayer: MediaPlayer, newCount: Int) = onUi {
+            if (newCount > 0) onFirstPicture()
+        }
+
         override fun paused(mediaPlayer: MediaPlayer) = onUi { isPlaying = false }
         override fun stopped(mediaPlayer: MediaPlayer) = onUi { isPlaying = false }
         override fun buffering(mediaPlayer: MediaPlayer, newCache: Float) = onUi { isBuffering = newCache < 100f }
         override fun lengthChanged(mediaPlayer: MediaPlayer, newLength: Long) = onUi { durationMs = newLength.coerceAtLeast(0L) }
-        override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) = onUi { currentPositionMs = newTime.coerceAtLeast(0L) }
+        override fun timeChanged(mediaPlayer: MediaPlayer, newTime: Long) = onUi {
+            currentPositionMs = newTime.coerceAtLeast(0L)
+            if (newTime > 0L) onFirstPicture()
+        }
         override fun finished(mediaPlayer: MediaPlayer) = onUi { onFinished() }
         override fun error(mediaPlayer: MediaPlayer) = onUi { onPlaybackError("Stream lässt sich nicht öffnen") }
     }
@@ -267,6 +277,7 @@ class PlayerController(private val scope: CoroutineScope) {
     fun loadEpisodeAndPlay(episode: EpisodeItem) {
         resolveJob?.cancel()
         startWatchdog?.cancel()
+        isStarting = false
         persistCurrentProgress()
         isLiveStream = false
         directStreamUrl = null
@@ -301,8 +312,12 @@ class PlayerController(private val scope: CoroutineScope) {
             }
 
             availableHosters = hosters
-            // Zuerst Hoster mit der bevorzugten Sprache probieren, danach andere Sprachen als Fallback
-            val orderedCandidates = hosters.sortedWith(compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 })
+            // Zuerst Hoster mit der bevorzugten Sprache probieren, danach andere Sprachen als Fallback;
+            // Hoster, die eben erst versagt haben, kommen ans Ende (sonst wartet man bei jedem Öffnen erneut)
+            val orderedCandidates = hosters.sortedWith(
+                compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 }
+                    .thenBy { if (failedRecently(it)) 1 else 0 }
+            )
             if (!playFirstWorkingHoster(episode, orderedCandidates)) {
                 isResolving = false
                 errorMessage = "Keiner der Hoster (${hosters.joinToString { it.hosterName }}) konnte aufgelöst werden."
@@ -327,7 +342,7 @@ class PlayerController(private val scope: CoroutineScope) {
                     startPlayback(ep, resolved)
                 }
                 .onFailure { err ->
-                    failedHosterPaths.add(hoster.redirectPath)
+                    markFailed(hoster)
                     isResolving = false
                     errorMessage = "${hoster.hosterName} fehlgeschlagen: ${err.message}"
                 }
@@ -350,7 +365,7 @@ class PlayerController(private val scope: CoroutineScope) {
                 startPlayback(episode, resolved)
                 return true
             }
-            failedHosterPaths.add(candidate.redirectPath)
+            markFailed(candidate)
         }
         return false
     }
@@ -359,7 +374,7 @@ class PlayerController(private val scope: CoroutineScope) {
     private fun fallbackToRemainingHosters(reason: String) {
         val ep = currentEpisode ?: return
         activeHoster?.let { current ->
-            failedHosterPaths.add(current.redirectPath)
+            markFailed(current)
             StreamResolver.invalidateCache(current.redirectPath)
         }
         val remaining = availableHosters
@@ -392,6 +407,8 @@ class PlayerController(private val scope: CoroutineScope) {
             else -> LocalStorage.getSavedPositionForEpisode(episode.path)
         }
         durationMs = 0L
+        isStarting = true
+        statusMessage = "Starte Wiedergabe über ${stream.hosterName}..."
 
         // Das Bild muss im Fenster hängen, sonst öffnet VLC ein eigenes Fenster
         withTimeoutOrNull(3_000L) { while (!videoCanvas.isDisplayable) delay(30L) }
@@ -412,7 +429,7 @@ class PlayerController(private val scope: CoroutineScope) {
         val startedAt = System.currentTimeMillis()
         startWatchdog = scope.launch {
             delay(START_TIMEOUT_MS)
-            if (!isPlaying && currentPositionMs <= 0L && System.currentTimeMillis() - startedAt >= START_TIMEOUT_MS) {
+            if (isStarting && System.currentTimeMillis() - startedAt >= START_TIMEOUT_MS) {
                 AppLog.w(TAG, "Kein Bild nach ${START_TIMEOUT_MS / 1000} s: ${stream.hosterName}")
                 mp.controls().stop()
                 onPlaybackError("${stream.hosterName} antwortet nicht")
@@ -420,8 +437,24 @@ class PlayerController(private val scope: CoroutineScope) {
         }
     }
 
-    private fun applyPendingSeek() {
+    private fun onFirstPicture() {
+        if (!isStarting) return
+        isStarting = false
         startWatchdog?.cancel()
+        activeHoster?.let { recentlyFailed.remove(it.redirectPath) }
+    }
+
+    private fun markFailed(hoster: HosterLink) {
+        failedHosterPaths.add(hoster.redirectPath)
+        recentlyFailed[hoster.redirectPath] = System.currentTimeMillis()
+    }
+
+    private fun failedRecently(hoster: HosterLink): Boolean {
+        val at = recentlyFailed[hoster.redirectPath] ?: return false
+        return System.currentTimeMillis() - at < RECENT_FAILURE_MS
+    }
+
+    private fun applyPendingSeek() {
         val target = pendingSeekMs
         if (target <= 0L) return
         pendingSeekMs = 0L
@@ -449,6 +482,7 @@ class PlayerController(private val scope: CoroutineScope) {
     }
 
     private fun onPlaybackError(reason: String) {
+        isStarting = false
         if (isLiveStream) handleLiveError(reason) else fallbackToRemainingHosters(reason)
     }
 
@@ -533,6 +567,10 @@ class PlayerController(private val scope: CoroutineScope) {
         /** Kennzeichnet Live-Sender im Status für die Handy-Fernbedienung (wie auf dem TV). */
         const val LIVE_SEASON_LABEL = "LIVE"
         private const val MAX_LIVE_RETRIES = 3
-        private const val START_TIMEOUT_MS = 20_000L
+        private const val START_TIMEOUT_MS = 15_000L
+        private const val RECENT_FAILURE_MS = 30 * 60 * 1000L
+
+        /** Über Player-Neustarts hinweg: welche Hoster gerade nicht gingen (Adresse -> Zeitpunkt). */
+        private val recentlyFailed = java.util.concurrent.ConcurrentHashMap<String, Long>()
     }
 }
