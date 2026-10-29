@@ -10,6 +10,7 @@ import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HttpClient
+import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.StreamResolver
 import kotlinx.coroutines.runBlocking
 import uk.co.caprica.vlcj.factory.MediaPlayerFactory
@@ -48,6 +49,11 @@ fun main() {
     StreamResolver.browserExtractor = chromium
 
     runBlocking {
+        println("== S.to: South Park")
+        val southPark = SerienStreamScraper.fetchDetail("sto:southpark")
+        val seasonLabels = southPark.seasons.map { it.label }
+        check(southPark.seasons.count { !it.isMovies } >= 29, "${southPark.seasons.size} Staffeln: ${seasonLabels.joinToString(" ")}")
+
         println("== Filmpalast: Interstellar")
         val detail = FilmpalastScraper.fetchDetail("filmpalast:/stream/interstellar")
         val filmHosters = FilmpalastScraper.fetchHostersForFilm(detail.episodes.first().path)

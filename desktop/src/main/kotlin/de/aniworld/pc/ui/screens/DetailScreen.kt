@@ -1,5 +1,6 @@
 package de.aniworld.pc.ui.screens
 
+import de.aniworld.pc.ui.compat.ScrollLazyRow
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -14,6 +15,7 @@ import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -276,7 +278,7 @@ fun DetailScreen(
                             FilmpalastScraper.isFilmpalastSlug(animeSlug)
                         val langChoices = if (isMovieSource) listOf(LanguageOption.GER_DUB) else LanguageOption.entries
 
-                        LazyRow(
+                        ScrollLazyRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
                             verticalAlignment = Alignment.CenterVertically,
                             contentPadding = PaddingValues(vertical = 4.dp)
@@ -375,10 +377,13 @@ fun DetailScreen(
                             fontWeight = FontWeight.Bold
                         )
                         Spacer(modifier = Modifier.height(10.dp))
-                        LazyRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        // Umbrechen statt einer Zeile: Serien wie South Park haben fast 30 Staffeln,
+                        // die am PC sonst hinter dem Fensterrand verschwinden
+                        FlowRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
-                            items(currentDetail.seasons, key = { it.path }) { season ->
+                            currentDetail.seasons.forEach { season ->
                                 val isSelected = currentDetail.currentSeasonPath.endsWith(season.path) ||
                                     (selectedSeasonPath == null && season == currentDetail.seasons.firstOrNull { !it.isMovies })
                                 val label = if (season.isMovies) "🎬 Filme & Specials" else "Staffel ${season.label}"

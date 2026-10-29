@@ -1,5 +1,6 @@
 package de.aniworld.pc.ui.screens
 
+import de.aniworld.pc.ui.compat.ScrollLazyRow
 import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
@@ -168,7 +169,7 @@ fun LiveTvScreen(
         Spacer(modifier = Modifier.height(14.dp))
 
         // Kategorien-Auswahl (Tabs mit D-Pad Steuerbarkeit)
-        LazyRow(
+        ScrollLazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {

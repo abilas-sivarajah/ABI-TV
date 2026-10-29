@@ -1,5 +1,6 @@
 package de.aniworld.pc.ui.screens
 
+import de.aniworld.pc.ui.compat.ScrollLazyRow
 import de.aniworld.pc.ui.compat.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -342,7 +343,7 @@ private fun TopTvNavigationBar(
             }
 
             // Zentrierte Haupt-Tabs mit genügend Platz für Fokus-Skalierung
-            LazyRow(
+            ScrollLazyRow(
                 modifier = Modifier
                     .weight(1f)
                     .padding(horizontal = 14.dp),
@@ -457,7 +458,7 @@ private fun HomeTabContent(
                         title = "▶️ Weiterschauen",
                         subtitle = "${continueWatching.size} Animes im Verlauf"
                     )
-                    LazyRow(
+                    ScrollLazyRow(
                         contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
@@ -643,7 +644,7 @@ private fun CatalogRowSection(
 ) {
     Column {
         SectionHeader(title = title, subtitle = "${items.size} Titel")
-        LazyRow(
+        ScrollLazyRow(
             contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
             horizontalArrangement = Arrangement.spacedBy(18.dp)
         ) {
@@ -887,7 +888,7 @@ private fun CatalogBrowser(
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Horizontale Kategorie-Leiste (Suche, Übersicht, Genres...)
-        LazyRow(
+        ScrollLazyRow(
             contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
@@ -1237,7 +1238,7 @@ private fun SearchTabContent(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
-                LazyRow(
+                ScrollLazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     items(quickSuggestions) { suggestion ->
@@ -1408,7 +1409,7 @@ private fun WatchlistTabContent(
                         title = "▶️ Zuletzt geschaut (Weiterschauen)",
                         subtitle = "${continueWatching.size} Animes"
                     )
-                    LazyRow(
+                    ScrollLazyRow(
                         contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
                     ) {
@@ -1440,7 +1441,7 @@ private fun WatchlistTabContent(
                 )
             }
             item {
-                LazyRow(
+                ScrollLazyRow(
                     contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
                     horizontalArrangement = Arrangement.spacedBy(18.dp)
                 ) {

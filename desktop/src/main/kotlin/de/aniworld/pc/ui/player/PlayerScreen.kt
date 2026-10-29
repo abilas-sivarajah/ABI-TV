@@ -1,5 +1,6 @@
 package de.aniworld.pc.ui.player
 
+import de.aniworld.pc.ui.compat.ScrollLazyRow
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -436,7 +437,7 @@ private fun PlayerBottomBar(
 
             // Verfügbare Hoster / Sprachen für diese Folge direkt umschaltbar
             if (!controller.isLiveStream) {
-                LazyRow(
+                ScrollLazyRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                     modifier = Modifier.padding(start = 16.dp)
                 ) {
