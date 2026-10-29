@@ -131,10 +131,10 @@ object StreamResolver {
             }
         }
 
-        val initialReferer = if (SerienStreamRef.isStoUrl(hoster.redirectPath)) {
-            "${SerienStreamScraper.BASE_URL}/"
-        } else {
-            "${HttpClient.BASE_URL}/"
+        val initialReferer = when {
+            hoster.redirectPath.contains("filmpalast.to") -> "https://filmpalast.to/"
+            SerienStreamRef.isStoUrl(hoster.redirectPath) -> "${SerienStreamScraper.BASE_URL}/"
+            else -> "${HttpClient.BASE_URL}/"
         }
         var (currentUrl, html) = HttpClient.getHtml(hoster.redirectPath, initialReferer)
 

@@ -75,6 +75,7 @@ import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.SearchScope
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
+import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.update.AppRelease
@@ -566,7 +567,12 @@ private fun HeroBanner(
                         .padding(horizontal = 8.dp, vertical = 3.dp)
                 ) {
                     Text(
-                        text = if (anime.cleanSlug.startsWith("hdfilme:")) "HD-FILME HIGHLIGHT" else "ANIWORLD EMPFEHLUNG",
+                        text = when {
+                            anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
+                            anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
+                            anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
+                            else -> "ANIWORLD EMPFEHLUNG"
+                        },
                         color = AccentCyan,
                         fontSize = 10.sp,
                         fontWeight = FontWeight.Bold
@@ -712,9 +718,9 @@ private fun MoviesTabContent(
         }
         isLoading = true
         if (path == "OVERVIEW") {
-            uiState.moviesOverviewSections = runCatching { HdFilmeScraper.fetchHomeSections() }.getOrDefault(emptyList())
+            uiState.moviesOverviewSections = runCatching { FilmpalastScraper.fetchHomeSections() }.getOrDefault(emptyList())
         } else {
-            val firstPage = runCatching { HdFilmeScraper.fetchCategory(path) }.getOrDefault(emptyList())
+            val firstPage = runCatching { FilmpalastScraper.fetchCategory(path) }.getOrDefault(emptyList())
             uiState.moviesCategoryItems = firstPage.distinctBy { it.cleanSlug }
             uiState.moviesLoadedPath = path
             uiState.moviesPage = 1
@@ -731,7 +737,7 @@ private fun MoviesTabContent(
         isLoadingMore = true
         loadMoreFailed = false
         scope.launch {
-            val result = runCatching { HdFilmeScraper.fetchCategory(path, nextPage) }
+            val result = runCatching { FilmpalastScraper.fetchCategory(path, nextPage) }
             // Inzwischen andere Kategorie gewählt: Ergebnis verwerfen
             if (uiState.moviesLoadedPath == path) {
                 result.onSuccess { more ->
@@ -755,15 +761,15 @@ private fun MoviesTabContent(
             uiState.searchScope = SearchScope.MOVIES
             uiState.selectTab(MainNavTab.SEARCH)
         },
-        categories = HdFilmeScraper.CATEGORIES,
+        categories = FilmpalastScraper.CATEGORIES,
         selectedCategoryPath = selectedCategoryPath,
         onSelectCategory = { uiState.moviesCategoryPath = it },
         overviewSections = uiState.moviesOverviewSections,
         categoryItems = uiState.moviesCategoryItems,
         isLoading = isLoading ||
             (selectedCategoryPath != "OVERVIEW" && uiState.moviesLoadedPath != selectedCategoryPath),
-        loadingText = "Lade Filme von HD-Filme.one...",
-        emptyText = "Keine Filme gefunden. HD-Filme.one ist gerade nicht erreichbar.",
+        loadingText = "Lade Filme von Filmpalast...",
+        emptyText = "Keine Filme gefunden. Filmpalast ist gerade nicht erreichbar.",
         onRetry = { reloadKey++ },
         watchlist = watchlist,
         onOpenAnime = onOpenAnime,
@@ -1028,7 +1034,7 @@ private fun SearchTabContent(
                     runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
                 }
                 SearchScope.MOVIES -> {
-                    runCatching { HdFilmeScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
+                    runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
                 }
                 SearchScope.ALL -> {
                     val animeDeferred = async {
@@ -1038,7 +1044,7 @@ private fun SearchTabContent(
                         runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
                     }
                     val movieDeferred = async {
-                        runCatching { HdFilmeScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
+                        runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
                     }
                     animeDeferred.await() + seriesDeferred.await() + movieDeferred.await()
                 }

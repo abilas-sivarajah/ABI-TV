@@ -91,6 +91,7 @@ import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.SearchScope
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
+import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.update.AppRelease
@@ -268,14 +269,14 @@ fun MobileHomeScreen(
 
                 MobileTab.MOVIES -> MobileCatalogTab(
                     catalog = state.movies,
-                    categories = HdFilmeScraper.CATEGORIES,
+                    categories = FilmpalastScraper.CATEGORIES,
                     searchLabel = "🔍 Filme suchen",
-                    emptyText = "Keine Filme gefunden. HD-Filme.one ist gerade nicht erreichbar.",
+                    emptyText = "Keine Filme gefunden. Filmpalast ist gerade nicht erreichbar.",
                     watchlist = watchlist,
                     onOpenAnime = onOpenAnime,
                     onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
-                    loadOverview = { HdFilmeScraper.fetchHomeSections() },
-                    loadCategory = { path, page -> HdFilmeScraper.fetchCategory(path, page) },
+                    loadOverview = { FilmpalastScraper.fetchHomeSections() },
+                    loadCategory = { path, page -> FilmpalastScraper.fetchCategory(path, page) },
                     loadMoreLabel = "Mehr Filme laden"
                 )
 
@@ -817,12 +818,12 @@ private fun MobileSearchTab(
                     runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
                 }
                 SearchScope.MOVIES -> {
-                    runCatching { HdFilmeScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
+                    runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
                 }
                 SearchScope.ALL -> {
                     val a = async { runCatching { AniWorldScraper.searchAnimes(trimmed) }.getOrDefault(emptyList()) }
                     val s = async { runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList()) }
-                    val m = async { runCatching { HdFilmeScraper.searchMovies(trimmed) }.getOrDefault(emptyList()) }
+                    val m = async { runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList()) }
                     a.await() + s.await() + m.await()
                 }
             }

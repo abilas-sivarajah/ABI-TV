@@ -41,6 +41,9 @@ data class AnimeCard(
     val genreOrSubtitle: String = "",
     val rating: String = ""
 ) : Serializable {
+    val isFilmpalast: Boolean
+        get() = slug.startsWith("filmpalast:") || slug.contains("filmpalast.to")
+
     val isHdFilme: Boolean
         get() = slug.startsWith("hdfilme:") || slug.contains("hd-filme.one")
 
@@ -49,6 +52,14 @@ data class AnimeCard(
 
     val cleanSlug: String
         get() = when {
+            isFilmpalast -> {
+                val rel = slug
+                    .removePrefix("filmpalast:")
+                    .removePrefix("https://filmpalast.to")
+                    .removePrefix("//filmpalast.to")
+                    .trim()
+                "filmpalast:${if (rel.startsWith("/")) rel else "/$rel"}"
+            }
             isHdFilme -> {
                 val rel = slug.removePrefix("hdfilme:").removePrefix("https://hd-filme.one").trim()
                 "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
@@ -65,6 +76,7 @@ data class AnimeCard(
 
     val streamPath: String
         get() = when {
+            isFilmpalast -> cleanSlug
             isHdFilme -> cleanSlug
             isSto -> "/serie/${SerienStreamRef.bareSlug(slug)}"
             else -> "/anime/stream/$cleanSlug"

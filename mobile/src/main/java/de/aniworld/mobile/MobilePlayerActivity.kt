@@ -93,6 +93,7 @@ import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
+import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.HttpClient
@@ -512,6 +513,9 @@ class MobilePlayerActivity : ComponentActivity() {
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
                 when {
+                    episode.path.startsWith("filmpalast") || episode.path.contains("/stream/") -> {
+                        FilmpalastScraper.fetchHostersForFilm(episode.path)
+                    }
                     episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
                         SerienStreamScraper.fetchEpisodeHosters(episode.path)
                     }

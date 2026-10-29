@@ -68,6 +68,7 @@ import de.aniworld.tv.data.model.AnimeDetail
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.remote.AniWorldScraper
+import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import kotlinx.coroutines.launch
@@ -97,7 +98,9 @@ fun MobileDetailScreen(
         errorMsg = null
         runCatching {
             // Gleiche Reihenfolge wie auf dem TV: HD-Filme, dann S.to, sonst AniWorld
-            if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
+            if (FilmpalastScraper.isFilmpalastSlug(animeSlug)) {
+                FilmpalastScraper.fetchDetail(animeSlug)
+            } else if (HdFilmeScraper.isHdFilmeSlug(animeSlug)) {
                 HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
             } else if (SerienStreamScraper.isStoSlug(animeSlug)) {
                 SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
