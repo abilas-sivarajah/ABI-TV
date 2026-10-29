@@ -6,7 +6,6 @@ import de.aniworld.tv.data.model.CatalogSection
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.LanguageOption
-import de.aniworld.tv.data.model.SeasonLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -17,6 +16,7 @@ import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.abs
 
 /**
  * Vollständiger Scraper für https://filmpalast.to
@@ -46,15 +46,20 @@ object FilmpalastScraper {
         "/search/genre/Familie" to "👨‍👩‍👧 Familie"
     )
 
+    private const val EPISODE_PREFIX = "filmpalast_stream:"
+
     fun isFilmpalastSlug(slug: String): Boolean =
-        slug.startsWith(PREFIX) || slug.contains("filmpalast.to") || slug.startsWith("/stream/")
+        slug.startsWith(PREFIX) || slug.contains("filmpalast.to")
+
+    /** Episoden-Pfad eines Filmpalast-Films (nicht über "/stream/" erkennen – das enthalten auch AniWorld-Pfade). */
+    fun isFilmpalastEpisodePath(path: String): Boolean = path.startsWith(EPISODE_PREFIX)
 
     private fun normalizePath(raw: String): String {
         var clean = raw
             .removePrefix(PREFIX)
             .removePrefix(BASE_URL)
             .removePrefix("//filmpalast.to")
-            .removePrefix("filmpalast_stream:")
+            .removePrefix(EPISODE_PREFIX)
             .trim()
         if (!clean.startsWith("/")) clean = "/$clean"
         return clean
@@ -93,7 +98,9 @@ object FilmpalastScraper {
         }
         if (title.isBlank() || href.isBlank()) return null
 
-        val imgEl = article.selectFirst("img")
+        // Das erste <img> im Artikel ist die Bewertungsgrafik (star_on.png), nicht das Cover
+        val imgEl = article.selectFirst("img.cover-opacity")
+            ?: article.select("img").firstOrNull { !it.attr("src").contains("/images/star_") }
         var cover = imgEl?.attr("src")?.trim().orEmpty()
         if (cover.startsWith("//")) cover = "https:$cover"
         else if (cover.startsWith("/")) cover = "$BASE_URL$cover"
@@ -104,6 +111,7 @@ object FilmpalastScraper {
         val yearText = article.selectFirst("span.coverDetails:contains(Jahr:)")?.text()?.trim().orEmpty()
 
         val subtitle = when {
+            title.contains("*ENGLISH*", ignoreCase = true) -> "Englisch (OV)"
             yearText.isNotBlank() -> yearText
             imdbText.isNotBlank() -> "IMDb: $imdbText"
             else -> ""
@@ -173,14 +181,7 @@ object FilmpalastScraper {
         val url = "$BASE_URL$path"
         val doc = fetchDoc(url)
 
-        var title = doc.selectFirst("em[itemprop=name]")?.text()?.trim().orEmpty()
-        if (title.isBlank()) {
-            title = doc.selectFirst("h2.header-single")?.text()?.trim().orEmpty()
-        }
-        if (title.isBlank()) {
-            val rawTitle = doc.title().trim()
-            title = rawTitle.substringBefore("Stream").substringBefore("kostenlos").trim()
-        }
+        val title = parseTitle(doc)
 
         var cover = doc.selectFirst("img.cover2")?.attr("src")?.trim().orEmpty()
         if (cover.isBlank()) {
@@ -193,35 +194,30 @@ object FilmpalastScraper {
         else if (cover.startsWith("/")) cover = "$BASE_URL$cover"
 
         var desc = ""
-        val descEl = doc.selectFirst("p:has(em[itemprop=name]) + p")
-            ?: doc.selectFirst("div.text-justify")
-            ?: doc.selectFirst("div.description")
+        val descEl = doc.selectFirst("span[itemprop=description]")
+            ?: doc.selectFirst("p:has(em[itemprop=name]) + p")
         if (descEl != null) {
             desc = descEl.text().trim()
         }
 
-        val yearText = Regex("""(\d{4})""").find(
-            doc.selectFirst("span:contains(Jahr:)")?.text().orEmpty()
-        )?.value.orEmpty()
+        val yearText = parseYear(doc)
 
         val imdbRating = doc.selectFirst("span:contains(Imdb:)")?.text()
             ?.substringAfter("Imdb:")?.trim().orEmpty()
 
-        val genres = doc.select("a[href*=/search/genre/]")
+        // Nur der Block "Kategorien, Genre" des Films – sonst kämen alle Genres aus dem Seitenmenü mit
+        val genreBlock = doc.select("li > p")
+            .firstOrNull { it.ownText().contains("Genre", ignoreCase = true) }
+            ?.parent()
+        val genres = genreBlock?.select("a[href*=/search/genre/]").orEmpty()
             .map { it.text().trim() }
             .filter { it.isNotBlank() && !it.equals("Englisch", ignoreCase = true) }
             .distinct()
 
-        val dummySeason = SeasonLink(
-            label = "Film",
-            path = "filmpalast_stream:$path",
-            isMovies = true
-        )
-
         val dummyEpisode = EpisodeItem(
             number = 1,
             seasonLabel = "Film",
-            path = "filmpalast_stream:$path",
+            path = "$EPISODE_PREFIX$path",
             titleDe = title.ifBlank { "Hauptfilm" },
             titleEn = "",
             languages = listOf(LanguageOption.GER_DUB)
@@ -237,8 +233,9 @@ object FilmpalastScraper {
             ageRating = "",
             rating = imdbRating,
             genres = genres,
-            seasons = listOf(dummySeason),
-            currentSeasonPath = dummySeason.path,
+            // Wie bei HD-Filme: ein Film hat keine Staffeln (Detailseite zeigt dann "▶ Film starten")
+            seasons = emptyList(),
+            currentSeasonPath = path,
             episodes = listOf(dummyEpisode)
         )
 
@@ -246,17 +243,90 @@ object FilmpalastScraper {
         return detail
     }
 
-    suspend fun fetchHostersForFilm(streamPath: String): List<HosterLink> {
-        val path = normalizePath(streamPath)
-        val url = "$BASE_URL$path"
-        val doc = runCatching { fetchDoc(url) }.getOrNull() ?: return emptyList()
+    private fun parseTitle(doc: Document): String {
+        var title = doc.selectFirst("em[itemprop=name]")?.text()?.trim().orEmpty()
+        if (title.isBlank()) {
+            title = doc.selectFirst("h2.header-single")?.text()?.trim().orEmpty()
+        }
+        if (title.isBlank()) {
+            val rawTitle = doc.title().trim()
+            title = rawTitle.substringBefore("Stream").substringBefore("kostenlos").trim()
+        }
+        return title
+    }
 
+    private fun parseYear(doc: Document): String =
+        Regex("""Veröffentlicht:\s*(\d{4})""").find(doc.text())?.groupValues?.getOrNull(1).orEmpty()
+
+    /**
+     * Hoster eines Films: zuerst die von Filmpalast, ergänzt um denselben Film bei HD-Filme (DeVideoSRC).
+     * Die Zweitquelle greift z.B. bei Interstellar, dessen VOE-Datei auf Filmpalast gelöscht ist.
+     */
+    suspend fun fetchHostersForFilm(streamPath: String): List<HosterLink> = coroutineScope {
+        val path = normalizePath(streamPath)
+        // Titel/Jahr sind meist schon von der Detailseite bekannt -> Zweitquelle parallel laden
+        val cached = detailCache[path]
+        val earlyFallback = cached?.title?.takeIf { it.isNotBlank() }?.let { title ->
+            async { fetchHdFilmeHosters(title, cached.years) }
+        }
+
+        val doc = runCatching { fetchDoc("$BASE_URL$path") }.getOrNull()
+        val own = doc?.let { parseStreamLinks(it) }.orEmpty()
+        val fallback = earlyFallback?.await()
+            ?: doc?.let { d ->
+                parseTitle(d).takeIf { it.isNotBlank() }?.let { fetchHdFilmeHosters(it, parseYear(d)) }
+            }.orEmpty()
+
+        // sortedBy ist stabil: bei gleichem Rang kommen die Filmpalast-Hoster zuerst
+        (own + fallback).distinctBy { it.redirectPath }.sortedBy { hosterRank(it) }
+    }
+
+    // Nativ zuverlässig auflösbare Hoster zuerst, Captcha-geschützte (Mixdrop, Doodstream) zuletzt
+    private fun hosterRank(hoster: HosterLink): Int = when (hoster.hosterName.lowercase()) {
+        "voe" -> 0
+        "supervideo" -> 1
+        "vidmoly" -> 2
+        "mixdrop" -> 8
+        "doodstream" -> 9
+        else -> 5
+    }
+
+    private suspend fun fetchHdFilmeHosters(title: String, year: String): List<HosterLink> {
+        return runCatching {
+            val wanted = normalizeTitle(title)
+            val candidates = HdFilmeScraper.searchMovies(cleanTitle(title))
+                .filter { normalizeTitle(it.title) == wanted }
+                .take(3)
+            for (card in candidates) {
+                val detail = HdFilmeScraper.fetchDetail(card.slug)
+                // Remakes mit gleichem Titel (z.B. Dune 1984/2021) über das Jahr auseinanderhalten;
+                // ±1 Jahr erlaubt, weil deutscher Start und Originaljahr oft auseinanderliegen
+                val wantedYear = year.toIntOrNull()
+                val foundYear = detail.years.toIntOrNull()
+                if (wantedYear != null && foundYear != null && abs(wantedYear - foundYear) > 1) continue
+                val moviePath = detail.episodes.singleOrNull()?.path ?: continue
+                if (!moviePath.startsWith("hdfilme_movie:")) continue
+                return HdFilmeScraper.fetchHostersForEpisode(moviePath)
+            }
+            emptyList<HosterLink>()
+        }.getOrDefault(emptyList())
+    }
+
+    /** Entfernt Markierungen wie "*ENGLISH*" aus dem Titel. */
+    private fun cleanTitle(title: String): String =
+        title.replace(Regex("""\*[^*]*\*"""), "").trim()
+
+    private fun normalizeTitle(title: String): String =
+        cleanTitle(title).lowercase().filter { it.isLetterOrDigit() }
+
+    private fun parseStreamLinks(doc: Document): List<HosterLink> {
         val hosterLinks = mutableListOf<HosterLink>()
 
         for (ul in doc.select("ul.currentStreamLinks")) {
             val hostName = ul.selectFirst(".hostName")?.text()?.trim() ?: "Stream"
             val playA = ul.selectFirst("a.iconPlay") ?: ul.selectFirst("a[href^=http]") ?: continue
-            val href = playA.attr("href").trim()
+            // Firestream öffnet seinen Player per JS und hat statt href ein data-player-url
+            val href = playA.attr("href").trim().ifBlank { playA.attr("data-player-url").trim() }
             if (href.startsWith("http")) {
                 val cleanName = when {
                     hostName.contains("VOE", ignoreCase = true) || href.contains("voe.sx") -> "VOE"
@@ -277,15 +347,15 @@ object FilmpalastScraper {
             }
         }
 
-        // VOE an die erste Stelle setzen
-        hosterLinks.sortBy { if (it.hosterName == "VOE") 0 else 1 }
         return hosterLinks
     }
 
     suspend fun searchMovies(query: String): List<AnimeCard> {
         val trimmed = query.trim()
         if (trimmed.length < 2) return emptyList()
-        val encoded = runCatching { URLEncoder.encode(trimmed, "UTF-8") }.getOrDefault(trimmed)
+        // URLEncoder macht aus Leerzeichen "+", Filmpalast erwartet im Pfad aber %20 (sonst 0 Treffer)
+        val encoded = runCatching { URLEncoder.encode(trimmed, "UTF-8").replace("+", "%20") }
+            .getOrDefault(trimmed)
         val url = "$BASE_URL/search/title/$encoded"
         val doc = runCatching { fetchDoc(url) }.getOrNull() ?: return emptyList()
         return doc.select("article").mapNotNull { parseArticle(it) }

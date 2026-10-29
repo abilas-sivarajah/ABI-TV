@@ -266,8 +266,10 @@ fun DetailScreen(
                         Spacer(modifier = Modifier.height(18.dp))
 
                         // Haupt-Aktionsleiste (Abspielen / Weiterschauen / Merkliste / Sprache)
-                        val isHdFilme = HdFilmeScraper.isHdFilmeSlug(animeSlug)
-                        val langChoices = if (isHdFilme) listOf(LanguageOption.GER_DUB) else LanguageOption.entries
+                        // Filmquellen (HD-Filme, Filmpalast) haben nur deutschen Ton und keine Folgen
+                        val isMovieSource = HdFilmeScraper.isHdFilmeSlug(animeSlug) ||
+                            FilmpalastScraper.isFilmpalastSlug(animeSlug)
+                        val langChoices = if (isMovieSource) listOf(LanguageOption.GER_DUB) else LanguageOption.entries
 
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -304,7 +306,7 @@ fun DetailScreen(
                             } else if (firstEp != null) {
                                 item {
                                     TvFocusableButton(
-                                        text = if (isHdFilme && currentDetail.seasons.isEmpty()) "▶ Film starten" else "▶ Folge 1 starten",
+                                        text = if (isMovieSource && currentDetail.seasons.isEmpty()) "▶ Film starten" else "▶ Folge 1 starten",
                                         isPrimary = true,
                                         modifier = Modifier.focusRequester(primaryFocusRequester),
                                         onClick = {

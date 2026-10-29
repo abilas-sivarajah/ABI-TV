@@ -49,6 +49,19 @@ object StreamResolver {
 
     private val VOE_JUNK_TOKENS = listOf("*~", "%?", "@$", "^^", "#&", "!!", "~@")
 
+    // Nur der <title> wird geprüft: Doodstream hat z.B. ein verstecktes "Not Found"-Template im Body
+    private val DEAD_LINK_TITLE_MARKERS = listOf(
+        "not found", "file was deleted", "file is no longer available", "video not found", "datei nicht gefunden"
+    )
+
+    private class DeadLinkException(message: String) : IllegalStateException(message)
+
+    private fun isDeadLinkPage(html: String): Boolean {
+        val title = Regex("""<title>([^<]*)</title>""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.getOrNull(1)?.lowercase().orEmpty()
+        return DEAD_LINK_TITLE_MARKERS.any { title.contains(it) }
+    }
+
     fun invalidateCache(redirectPath: String) {
         streamCache.remove(redirectPath)
     }
@@ -60,11 +73,13 @@ object StreamResolver {
         }
 
         // Stufe 1: Schnell-Auflösung über OkHttp
-        val fastResult = withContext(Dispatchers.IO) {
+        val fastAttempt = withContext(Dispatchers.IO) {
             runCatching { resolveDirect(hoster) }
                 .onFailure { Log.e("StreamResolver", "resolveDirect failed for ${hoster.redirectPath}", it) }
-                .getOrNull()
         }
+        // Bei gelöschten Dateien bringt auch die WebView nichts
+        fastAttempt.exceptionOrNull()?.let { if (it is DeadLinkException) throw it }
+        val fastResult = fastAttempt.getOrNull()
         if (fastResult != null) {
             Log.e("StreamResolver", "Fast resolved: ${fastResult.streamUrl} headers=${fastResult.headers}")
             streamCache[hoster.redirectPath] = now to fastResult
@@ -131,10 +146,10 @@ object StreamResolver {
             }
         }
 
-        val initialReferer = when {
-            hoster.redirectPath.contains("filmpalast.to") -> "https://filmpalast.to/"
-            SerienStreamRef.isStoUrl(hoster.redirectPath) -> "${SerienStreamScraper.BASE_URL}/"
-            else -> "${HttpClient.BASE_URL}/"
+        val initialReferer = if (SerienStreamRef.isStoUrl(hoster.redirectPath)) {
+            "${SerienStreamScraper.BASE_URL}/"
+        } else {
+            "${HttpClient.BASE_URL}/"
         }
         var (currentUrl, html) = HttpClient.getHtml(hoster.redirectPath, initialReferer)
 
@@ -147,6 +162,11 @@ object StreamResolver {
                 currentUrl = next.first
                 html = next.second
             }
+        }
+
+        // Gelöschte Dateien (z.B. VOE "404 - Not found") sofort melden, statt 16 s im WebView zu warten
+        if (isDeadLinkPage(html)) {
+            throw DeadLinkException("${hoster.hosterName}: Datei nicht mehr verfügbar ($currentUrl)")
         }
 
         val originReferer = runCatching {

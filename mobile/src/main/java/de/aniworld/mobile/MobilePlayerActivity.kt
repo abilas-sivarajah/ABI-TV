@@ -513,7 +513,8 @@ class MobilePlayerActivity : ComponentActivity() {
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
                 when {
-                    episode.path.startsWith("filmpalast") || episode.path.contains("/stream/") -> {
+                    // Nur das eindeutige Präfix: AniWorld-Pfade (/anime/stream/...) enthalten ebenfalls "/stream/"
+                    FilmpalastScraper.isFilmpalastEpisodePath(episode.path) -> {
                         FilmpalastScraper.fetchHostersForFilm(episode.path)
                     }
                     episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
@@ -537,20 +538,31 @@ class MobilePlayerActivity : ComponentActivity() {
             availableHosters = hosters
             val ordered = hosters.sortedWith(compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 })
 
-            for (candidate in ordered) {
-                statusMessage = "Verbinde mit ${candidate.hosterName}..."
-                val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
-                if (resolved != null) {
-                    activeHoster = candidate
-                    isResolving = false
-                    startExoPlayer(resolved)
-                    return@launch
-                }
+            if (!playFirstWorkingHoster(ordered)) {
+                isResolving = false
+                errorMessage = "Keiner der Hoster konnte geladen werden."
             }
-
-            isResolving = false
-            errorMessage = "Keiner der Hoster konnte geladen werden."
         }
+    }
+
+    /**
+     * Probiert die Hoster der Reihe nach durch und startet den ersten, der sich auflösen lässt.
+     * Nicht auflösbare Hoster werden gemerkt, damit ein späterer Fallback sie überspringt.
+     */
+    private suspend fun playFirstWorkingHoster(candidates: List<HosterLink>): Boolean {
+        for (candidate in candidates) {
+            if (candidate.redirectPath in failedHosterPaths) continue
+            statusMessage = "Verbinde mit ${candidate.hosterName}..."
+            val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
+            if (resolved != null) {
+                activeHoster = candidate
+                isResolving = false
+                startExoPlayer(resolved)
+                return true
+            }
+            failedHosterPaths.add(candidate.redirectPath)
+        }
+        return false
     }
 
     private fun startExoPlayer(stream: ResolvedStream) {
@@ -588,15 +600,20 @@ class MobilePlayerActivity : ComponentActivity() {
                             failedHosterPaths.add(current.redirectPath)
                             StreamResolver.invalidateCache(current.redirectPath)
                         }
-                        val next = availableHosters.firstOrNull { it.redirectPath !in failedHosterPaths }
-                        if (next != null) {
-                            activeHoster = next
-                            lifecycleScope.launch {
-                                val res = runCatching { StreamResolver.resolveHoster(next) }.getOrNull()
-                                if (res != null) startExoPlayer(res)
-                            }
-                        } else {
+                        // Alle übrigen Hoster nacheinander probieren, statt nach einem stehen zu bleiben
+                        val remaining = availableHosters.filter { it.redirectPath !in failedHosterPaths }
+                        if (remaining.isEmpty()) {
                             errorMessage = "Wiedergabefehler (${error.errorCodeName})"
+                            return
+                        }
+                        isResolving = true
+                        errorMessage = null
+                        resolveJob?.cancel()
+                        resolveJob = lifecycleScope.launch {
+                            if (!playFirstWorkingHoster(remaining)) {
+                                isResolving = false
+                                errorMessage = "Wiedergabefehler (${error.errorCodeName}) – kein weiterer Hoster verfügbar."
+                            }
                         }
                     }
                 })

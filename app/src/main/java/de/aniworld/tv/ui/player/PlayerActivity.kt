@@ -722,7 +722,8 @@ class PlayerActivity : ComponentActivity() {
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
                 when {
-                    episode.path.startsWith("filmpalast") || episode.path.contains("/stream/") -> {
+                    // Nur das eindeutige Präfix: AniWorld-Pfade (/anime/stream/...) enthalten ebenfalls "/stream/"
+                    FilmpalastScraper.isFilmpalastEpisodePath(episode.path) -> {
                         FilmpalastScraper.fetchHostersForFilm(episode.path)
                     }
                     episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
@@ -750,20 +751,55 @@ class PlayerActivity : ComponentActivity() {
                 compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 }
             )
 
-            for (candidate in orderedCandidates) {
-                statusMessage = "Verbinde mit ${candidate.hosterName} (${candidate.language.shortLabel})..."
-                val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
-                if (resolved != null) {
-                    activeHoster = candidate
-                    selectedLangKey = candidate.langKey
-                    isResolving = false
-                    startExoPlayer(episode, resolved)
-                    return@launch
-                }
+            if (!playFirstWorkingHoster(episode, orderedCandidates)) {
+                isResolving = false
+                errorMessage = "Keiner der Hoster (${hosters.joinToString { it.hosterName }}) konnte aufgelöst werden."
             }
+        }
+    }
 
+    /**
+     * Probiert die Hoster der Reihe nach durch und startet den ersten, der sich auflösen lässt.
+     * Nicht auflösbare Hoster werden gemerkt, damit ein späterer Fallback sie überspringt.
+     */
+    private suspend fun playFirstWorkingHoster(episode: EpisodeItem, candidates: List<HosterLink>): Boolean {
+        for (candidate in candidates) {
+            if (candidate.redirectPath in failedHosterPaths) continue
+            statusMessage = "Verbinde mit ${candidate.hosterName} (${candidate.language.shortLabel})..."
+            val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
+            if (resolved != null) {
+                activeHoster = candidate
+                selectedLangKey = candidate.langKey
+                isResolving = false
+                startExoPlayer(episode, resolved)
+                return true
+            }
+            failedHosterPaths.add(candidate.redirectPath)
+        }
+        return false
+    }
+
+    /** Automatischer Fallback nach einem Wiedergabefehler: alle übrigen Hoster nacheinander probieren. */
+    private fun fallbackToRemainingHosters(error: PlaybackException) {
+        val ep = currentEpisode ?: return
+        val remaining = availableHosters
+            .filter { it.redirectPath !in failedHosterPaths }
+            .sortedWith(compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 })
+        if (remaining.isEmpty()) {
             isResolving = false
-            errorMessage = "Keiner der Hoster (${hosters.joinToString { it.hosterName }}) konnte aufgelöst werden."
+            errorMessage = "Wiedergabefehler (${error.errorCodeName})"
+            return
+        }
+
+        persistCurrentProgress()
+        isResolving = true
+        errorMessage = null
+        resolveJob?.cancel()
+        resolveJob = lifecycleScope.launch {
+            if (!playFirstWorkingHoster(ep, remaining)) {
+                isResolving = false
+                errorMessage = "Wiedergabefehler (${error.errorCodeName}) – kein weiterer Hoster verfügbar."
+            }
         }
     }
 
@@ -846,16 +882,7 @@ class PlayerActivity : ComponentActivity() {
                             failedHosterPaths.add(current.redirectPath)
                             StreamResolver.invalidateCache(current.redirectPath)
                         }
-                        val nextCandidate = availableHosters.firstOrNull {
-                            it.redirectPath !in failedHosterPaths && it.langKey == selectedLangKey
-                        } ?: availableHosters.firstOrNull {
-                            it.redirectPath !in failedHosterPaths
-                        }
-                        if (nextCandidate != null) {
-                            resolveAndPlaySingleHoster(nextCandidate)
-                        } else {
-                            errorMessage = "Wiedergabefehler (${error.errorCodeName})"
-                        }
+                        fallbackToRemainingHosters(error)
                     }
                 })
             }

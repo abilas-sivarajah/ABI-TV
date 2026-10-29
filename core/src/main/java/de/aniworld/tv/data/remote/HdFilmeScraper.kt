@@ -218,6 +218,8 @@ object HdFilmeScraper {
         val movieFrameSrc = doc.selectFirst("#hd-player-frame")?.attr("data-src").orEmpty()
         val seriesImdbMatch = Regex("""var\s+imdb\s*=\s*['"](tt\d+)['"]""").find(html)
         val fallbackEmbedMatch = Regex("""var\s+FALLBACK\s*=\s*['"](https?://[^'"]+)['"]""").find(html)
+        // <title>Interstellar (2014) Kostenlos Stream Online | HDfilme</title>
+        val releaseYear = Regex("""\((\d{4})\)""").find(doc.title())?.groupValues?.getOrNull(1).orEmpty()
 
         val detail = if (movieFrameSrc.isNotBlank()) {
             // --- FILM ---
@@ -236,7 +238,7 @@ object HdFilmeScraper {
                 description = desc,
                 coverUrl = coverUrl,
                 backdropUrl = backdropUrl,
-                years = "",
+                years = releaseYear,
                 ageRating = "HD",
                 rating = "",
                 genres = genres,
@@ -510,6 +512,7 @@ object HdFilmeScraper {
                 rawName.contains("mixdrop", true) -> "Mixdrop"
                 rawName.contains("dropload", true) -> "Dropload"
                 rawName.contains("vidmoly", true) -> "Vidmoly"
+                rawName.contains("supervideo", true) -> "Supervideo"
                 else -> rawName.substringBefore(".").replaceFirstChar { it.uppercase() }
             }
 
@@ -523,15 +526,16 @@ object HdFilmeScraper {
             )
         }
 
-        // VOE -> Dropload -> Doodstream -> Mixdrop -> Vidmoly
+        // Nativ zuverlässig auflösbare Hoster zuerst; Mixdrop (reCAPTCHA) und Doodstream (Turnstile) zuletzt
         return list.sortedBy { h ->
             when (h.hosterName.lowercase()) {
                 "voe" -> 0
-                "dropload" -> 1
-                "doodstream" -> 2
-                "mixdrop" -> 3
-                "vidmoly" -> 4
-                else -> 5
+                "supervideo" -> 1
+                "vidmoly" -> 2
+                "dropload" -> 3
+                "mixdrop" -> 5
+                "doodstream" -> 6
+                else -> 4
             }
         }
     }
