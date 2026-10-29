@@ -260,7 +260,7 @@ object FilmpalastScraper {
 
     /**
      * Hoster eines Films: zuerst die von Filmpalast, ergänzt um denselben Film bei HD-Filme (DeVideoSRC).
-     * Die Zweitquelle greift z.B. bei Interstellar, dessen VOE-Datei auf Filmpalast gelöscht ist.
+     * Die Zweitquelle hilft, wenn auf Filmpalast kein Hoster mehr abspielbar ist (gelöschte VOE-Dateien usw.).
      */
     suspend fun fetchHostersForFilm(streamPath: String): List<HosterLink> = coroutineScope {
         val path = normalizePath(streamPath)
@@ -281,10 +281,11 @@ object FilmpalastScraper {
         (own + fallback).distinctBy { it.redirectPath }.sortedBy { hosterRank(it) }
     }
 
-    // Nativ zuverlässig auflösbare Hoster zuerst, Captcha-geschützte (Mixdrop, Doodstream) zuletzt
+    // Zuverlässig abspielbare Hoster zuerst, Captcha-geschützte (Mixdrop, Doodstream) zuletzt.
+    // Supervideo bleibt im Mittelfeld: die Playlist steckt hinter einer JS-Prüfung, die ExoPlayer nicht besteht.
     private fun hosterRank(hoster: HosterLink): Int = when (hoster.hosterName.lowercase()) {
         "voe" -> 0
-        "supervideo" -> 1
+        "firestream" -> 1
         "vidmoly" -> 2
         "mixdrop" -> 8
         "doodstream" -> 9

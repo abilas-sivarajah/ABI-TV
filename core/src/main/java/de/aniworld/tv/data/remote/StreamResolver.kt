@@ -50,8 +50,9 @@ object StreamResolver {
     private val VOE_JUNK_TOKENS = listOf("*~", "%?", "@$", "^^", "#&", "!!", "~@")
 
     // Nur der <title> wird geprüft: Doodstream hat z.B. ein verstecktes "Not Found"-Template im Body
+    // VOE liefert je nach Accept-Language "404 - Not found" oder "404 - Nicht gefunden"
     private val DEAD_LINK_TITLE_MARKERS = listOf(
-        "not found", "file was deleted", "file is no longer available", "video not found", "datei nicht gefunden"
+        "not found", "nicht gefunden", "file was deleted", "file is no longer available", "video not found"
     )
 
     private class DeadLinkException(message: String) : IllegalStateException(message)

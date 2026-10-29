@@ -530,7 +530,6 @@ object HdFilmeScraper {
         return list.sortedBy { h ->
             when (h.hosterName.lowercase()) {
                 "voe" -> 0
-                "supervideo" -> 1
                 "vidmoly" -> 2
                 "dropload" -> 3
                 "mixdrop" -> 5
