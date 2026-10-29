@@ -1,9 +1,8 @@
 package de.aniworld.tv.cast
 
-import android.content.Context
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import de.aniworld.tv.AniWorldApp
+import de.aniworld.tv.platform.KeyValueStore
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -32,12 +31,13 @@ sealed interface PairResult {
 }
 
 /**
- * Kopplung zwischen Handy und Fernseher: Nur Handys, die einmal den am TV angezeigten
- * Code eingegeben haben, dürfen Wiedergabe starten oder steuern.
+ * Kopplung zwischen Handy und Fernseher (bzw. PC): Nur Handys, die einmal den am Gerät
+ * angezeigten Code eingegeben haben, dürfen Wiedergabe starten oder steuern.
  */
 object CastPairing {
 
-    private const val PREFS_NAME = "aniworld_tv_cast"
+    /** Name der SharedPreferences auf Android bzw. der Datei am PC – nicht ändern, sonst sind Kopplungen weg. */
+    const val PREFS_NAME = "aniworld_tv_cast"
     private const val KEY_TV_ID = "tv_id"
     private const val KEY_PAIRED = "paired_clients_v1"
 
@@ -53,9 +53,10 @@ object CastPairing {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val lock = Any()
 
-    private val prefs by lazy {
-        AniWorldApp.instance.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    }
+    @Volatile
+    private var storeRef: KeyValueStore? = null
+    private val prefs: KeyValueStore
+        get() = storeRef ?: error("CastPairing.init() wurde nicht aufgerufen.")
 
     // Schlüssel ist der SHA-256 des Tokens, damit das Token selbst nicht im Speicher liegt
     private val pairedClients: MutableMap<String, PairedClient> by lazy { readPairedClients() }
@@ -74,11 +75,12 @@ object CastPairing {
     /** Stabile Kennung dieses Fernsehers, damit das Handy die Kopplung auch nach IP-Wechsel wiederfindet. */
     val tvId: String by lazy {
         prefs.getString(KEY_TV_ID, null) ?: UUID.randomUUID().toString().also {
-            prefs.edit().putString(KEY_TV_ID, it).apply()
+            prefs.putString(KEY_TV_ID, it)
         }
     }
 
-    fun init() {
+    fun init(store: KeyValueStore) {
+        storeRef = store
         synchronized(lock) { _pairedCount.value = pairedClients.size }
     }
 
@@ -180,7 +182,7 @@ object CastPairing {
     }.getOrDefault(mutableMapOf())
 
     private fun savePairedClients() {
-        prefs.edit().putString(KEY_PAIRED, gson.toJson(pairedClients)).apply()
+        prefs.putString(KEY_PAIRED, gson.toJson(pairedClients))
         _pairedCount.value = pairedClients.size
     }
 }

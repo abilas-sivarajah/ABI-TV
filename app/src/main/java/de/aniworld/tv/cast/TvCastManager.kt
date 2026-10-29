@@ -7,36 +7,17 @@ import android.util.Log
 import de.aniworld.tv.AniWorldApp
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.LanguageOption
+import de.aniworld.tv.platform.SharedPrefsStore
 import de.aniworld.tv.ui.player.PlayerActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
-data class PlayCommand(
-    val animeSlug: String,
-    val animeTitle: String,
-    val coverUrl: String,
-    val episodePath: String,
-    val episodeNumber: Int,
-    val seasonLabel: String,
-    val titleDe: String,
-    val preferredLangKey: Int
-)
-
-data class CastStatus(
-    val isPlaying: Boolean = false,
-    val title: String = "",
-    val episodeTitle: String = "",
-    val seasonLabel: String = "",
-    val episodeNumber: Int = 0,
-    val positionMs: Long = 0L,
-    val durationMs: Long = 0L
-)
-
-object TvCastManager {
+object TvCastManager : CastHost {
 
     private const val TAG = "TvCastManager"
     const val HTTP_PORT = 8765
@@ -45,13 +26,16 @@ object TvCastManager {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     private val _castStatus = MutableStateFlow(CastStatus())
-    val castStatus = _castStatus.asStateFlow()
+    override val castStatus: StateFlow<CastStatus> = _castStatus.asStateFlow()
 
     // Steuerungskanal für den aktiven Player
     var activePlayerControl: ((action: String, arg: Long) -> Unit)? = null
     var activePlayerPlayCommand: ((cmd: PlayCommand) -> Unit)? = null
 
-    val deviceName: String
+    override val deviceModel: String
+        get() = Build.MODEL
+
+    override val deviceName: String
         get() {
             val model = Build.MODEL.trim()
             val product = Build.PRODUCT.trim()
@@ -66,8 +50,8 @@ object TvCastManager {
     fun start(context: Context) {
         scope.launch {
             try {
-                CastPairing.init()
-                TvCastServer.start(HTTP_PORT, UDP_PORT)
+                CastPairing.init(SharedPrefsStore(context, CastPairing.PREFS_NAME))
+                CastServer.start(HTTP_PORT, UDP_PORT, this@TvCastManager)
                 NsdHelper.register(context, deviceName, HTTP_PORT)
                 Log.i(TAG, "TvCastManager gestartet auf Port $HTTP_PORT für '$deviceName'")
             } catch (e: Exception) {
@@ -79,7 +63,7 @@ object TvCastManager {
     fun stop(context: Context) {
         try {
             NsdHelper.unregister(context)
-            TvCastServer.stop()
+            CastServer.stop()
             Log.i(TAG, "TvCastManager gestoppt")
         } catch (e: Exception) {
             Log.e(TAG, "Fehler beim Stoppen des TvCastManager", e)
@@ -113,7 +97,7 @@ object TvCastManager {
     /**
      * Startet den Player auf dem Fernseher mit den vom Smartphone übergebenen Parametern.
      */
-    fun handlePlayCommand(cmd: PlayCommand) {
+    override fun handlePlayCommand(cmd: PlayCommand) {
         scope.launch(Dispatchers.Main) {
             val directHandler = activePlayerPlayCommand
             if (directHandler != null) {
@@ -157,7 +141,7 @@ object TvCastManager {
     }
 
     /** Startet einen Live-Sender vom Handy; ein laufender Player übernimmt ihn per onNewIntent. */
-    fun handleLiveCommand(channelName: String, streamUrl: String, logoUrl: String, headers: Map<String, String>) {
+    override fun handleLiveCommand(channelName: String, streamUrl: String, logoUrl: String, headers: Map<String, String>) {
         scope.launch(Dispatchers.Main) {
             val intent = PlayerActivity.liveIntent(
                 context = AniWorldApp.instance,
@@ -173,7 +157,7 @@ object TvCastManager {
         }
     }
 
-    fun handleControlCommand(action: String, arg: Long = 0L): Boolean {
+    override fun handleControlCommand(action: String, arg: Long): Boolean {
         val control = activePlayerControl
         if (control != null) {
             scope.launch(Dispatchers.Main) {

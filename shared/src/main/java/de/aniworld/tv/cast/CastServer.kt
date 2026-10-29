@@ -1,9 +1,8 @@
 package de.aniworld.tv.cast
 
-import android.os.Build
-import android.util.Log
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
+import de.aniworld.tv.platform.AppLog
 import java.io.BufferedInputStream
 import java.io.ByteArrayOutputStream
 import java.io.InputStream
@@ -16,9 +15,13 @@ import java.net.Socket
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
-object TvCastServer {
+/**
+ * HTTP- und UDP-Server, über den gekoppelte Handys Fernseher bzw. PC finden und steuern.
+ * Was bei "play" oder "control" passiert, entscheidet der jeweilige [CastHost].
+ */
+object CastServer {
 
-    private const val TAG = "TvCastServer"
+    private const val TAG = "CastServer"
     // 2 = Kopplung, 3 = Live-Sender per /play
     private const val PROTOCOL_VERSION = 3
     private const val MAX_BODY_BYTES = 64 * 1024
@@ -29,17 +32,30 @@ object TvCastServer {
     private val isRunning = AtomicBoolean(false)
     private val executor = Executors.newCachedThreadPool()
 
-    fun start(httpPort: Int, udpPort: Int) {
-        if (isRunning.getAndSet(true)) return
+    @Volatile
+    private lateinit var host: CastHost
 
-        // 1. HTTP Server starten
-        executor.execute {
+    /** Port, auf dem der HTTP-Server tatsächlich lauscht (0 = keiner). */
+    @Volatile
+    var boundHttpPort: Int = 0
+        private set
+
+    fun start(httpPort: Int, udpPort: Int, host: CastHost) {
+        if (isRunning.getAndSet(true)) return
+        this.host = host
+
+        // 1. HTTP Server starten. Ist der Port belegt (am PC z. B. durch ein anderes Programm),
+        // auf einen freien ausweichen: Das Handy übernimmt den Port aus der UDP-Antwort.
+        val ss = bindHttpServer(httpPort, udpPort)
+        if (ss == null) {
+            AppLog.e(TAG, "Kein freier Port für den HTTP Cast-Server gefunden (ab $httpPort)")
+        } else {
+            serverSocket = ss
+            boundHttpPort = ss.localPort
+        }
+        if (ss != null) executor.execute {
             try {
-                val ss = ServerSocket()
-                ss.reuseAddress = true
-                ss.bind(InetSocketAddress("0.0.0.0", httpPort))
-                serverSocket = ss
-                Log.i(TAG, "HTTP Cast-Server lauscht auf Port $httpPort")
+                AppLog.i(TAG, "HTTP Cast-Server lauscht auf Port ${ss.localPort}")
 
                 while (isRunning.get()) {
                     try {
@@ -50,7 +66,7 @@ object TvCastServer {
                             try {
                                 handleClient(client)
                             } catch (e: Exception) {
-                                Log.w(TAG, "Anfrage abgebrochen: ${e.javaClass.simpleName}")
+                                AppLog.w(TAG, "Anfrage abgebrochen: ${e.javaClass.simpleName}")
                             }
                         }
                     } catch (e: Exception) {
@@ -58,7 +74,7 @@ object TvCastServer {
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Fehler im HTTP Server-Thread", e)
+                AppLog.e(TAG, "Fehler im HTTP Server-Thread", e)
             }
         }
 
@@ -69,7 +85,7 @@ object TvCastServer {
                 udp.reuseAddress = true
                 udp.bind(InetSocketAddress("0.0.0.0", udpPort))
                 udpSocket = udp
-                Log.i(TAG, "UDP Discovery-Server lauscht auf Port $udpPort")
+                AppLog.i(TAG, "UDP Discovery-Server lauscht auf Port $udpPort")
 
                 val buffer = ByteArray(512)
                 while (isRunning.get()) {
@@ -78,7 +94,8 @@ object TvCastServer {
                         udp.receive(packet)
                         val msg = String(packet.data, 0, packet.length, Charsets.UTF_8).trim()
                         if (msg.startsWith("ANIWORLD_DISCOVER")) {
-                            val respStr = "ANIWORLD_PONG:$httpPort:${TvCastManager.deviceName}:${Build.MODEL}"
+                            if (boundHttpPort == 0) continue
+                            val respStr = "ANIWORLD_PONG:$boundHttpPort:${host.deviceName}:${host.deviceModel}"
                             val respBytes = respStr.toByteArray(Charsets.UTF_8)
                             val respPacket = DatagramPacket(
                                 respBytes,
@@ -87,20 +104,37 @@ object TvCastServer {
                                 packet.port
                             )
                             udp.send(respPacket)
-                            Log.d(TAG, "Discovery-Anfrage von ${packet.address} beantwortet")
+                            AppLog.d(TAG, "Discovery-Anfrage von ${packet.address} beantwortet")
                         }
                     } catch (e: Exception) {
                         if (!isRunning.get()) break
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Fehler im UDP Discovery-Thread", e)
+                AppLog.e(TAG, "Fehler im UDP Discovery-Thread", e)
             }
         }
     }
 
+    private fun bindHttpServer(preferredPort: Int, udpPort: Int): ServerSocket? {
+        val candidates = listOf(preferredPort) + (preferredPort + 2..preferredPort + 12).filter { it != udpPort }
+        for (port in candidates) {
+            val ss = ServerSocket()
+            try {
+                ss.reuseAddress = true
+                ss.bind(InetSocketAddress("0.0.0.0", port))
+                if (port != preferredPort) AppLog.w(TAG, "Port $preferredPort ist belegt – weiche auf $port aus")
+                return ss
+            } catch (e: Exception) {
+                runCatching { ss.close() }
+            }
+        }
+        return null
+    }
+
     fun stop() {
         isRunning.set(false)
+        boundHttpPort = 0
         try {
             serverSocket?.close()
         } catch (_: Exception) {}
@@ -168,8 +202,8 @@ object TvCastServer {
                     val json = JsonObject().apply {
                         addProperty("status", "ok")
                         addProperty("service", "aniworld_tv_cast")
-                        addProperty("name", TvCastManager.deviceName)
-                        addProperty("model", Build.MODEL)
+                        addProperty("name", host.deviceName)
+                        addProperty("model", host.deviceModel)
                         addProperty("version", PROTOCOL_VERSION)
                         addProperty("tvId", CastPairing.tvId)
                         addProperty("paired", CastPairing.isAuthorized(token))
@@ -211,7 +245,7 @@ object TvCastServer {
                 }
 
                 method == "GET" && path.startsWith("/status") -> {
-                    val status = TvCastManager.castStatus.value
+                    val status = host.castStatus.value
                     val json = JsonObject().apply {
                         addProperty("isPlaying", status.isPlaying)
                         addProperty("title", status.title)
@@ -237,7 +271,7 @@ object TvCastServer {
                             val headers = obj.getAsJsonObject("headers")?.entrySet()
                                 ?.associate { (key, value) -> key to value.asString }
                                 .orEmpty()
-                            TvCastManager.handleLiveCommand(
+                            host.handleLiveCommand(
                                 channelName = obj.get("channelName")?.asString.orEmpty(),
                                 streamUrl = streamUrl,
                                 logoUrl = obj.get("logoUrl")?.asString.orEmpty(),
@@ -256,14 +290,14 @@ object TvCastServer {
                             titleDe = obj.get("titleDe")?.asString.orEmpty(),
                             preferredLangKey = obj.get("preferredLangKey")?.asInt ?: 1
                         )
-                        TvCastManager.handlePlayCommand(cmd)
+                        host.handlePlayCommand(cmd)
                         val resp = JsonObject().apply {
                             addProperty("success", true)
                             addProperty("message", "Playback gestartet auf TV")
                         }.toString()
                         sendResponse(out, 200, "OK", "application/json", resp)
                     } catch (e: Exception) {
-                        Log.e(TAG, "Fehler beim Verarbeiten von /play", e)
+                        AppLog.e(TAG, "Fehler beim Verarbeiten von /play", e)
                         sendJson(out, 400, "Bad Request", errorJson("bad_request"))
                     }
                 }
@@ -273,7 +307,7 @@ object TvCastServer {
                         val obj = JsonParser.parseString(body).asJsonObject
                         val action = obj.get("action")?.asString.orEmpty()
                         val arg = obj.get("arg")?.asLong ?: 0L
-                        val handled = TvCastManager.handleControlCommand(action, arg)
+                        val handled = host.handleControlCommand(action, arg)
                         val resp = JsonObject().apply {
                             addProperty("success", handled)
                             addProperty("action", action)

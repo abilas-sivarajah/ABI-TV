@@ -2,7 +2,8 @@ plugins {
     id("com.android.library")
 }
 
-// Gemeinsame Datenschicht (Scraper, Speicher, Modelle, Updater) für TV- und Mobile-App
+// Android-Teil der Datenschicht (WebView, SharedPreferences, APK-Updater) für TV- und Mobile-App;
+// der plattformunabhängige Teil liegt in :shared
 android {
     namespace = "de.aniworld.core"
     compileSdk = 37
@@ -22,10 +23,10 @@ android {
 }
 
 dependencies {
+    // Modelle, Scraper, Stream-Auflösung & Speicher (reiner JVM-Code, auch für die PC-App)
+    api(project(":shared"))
+
     // Typen dieser Bibliotheken tauchen in der öffentlichen API der Datenschicht auf
     api("androidx.core:core-ktx:1.15.0")
-    api("com.squareup.okhttp3:okhttp:4.12.0")
-    api("org.jsoup:jsoup:1.16.1")
-    api("com.google.code.gson:gson:2.11.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
 }

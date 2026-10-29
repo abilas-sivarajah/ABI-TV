@@ -1,49 +1,36 @@
 package de.aniworld.tv.data.remote
 
-import android.annotation.SuppressLint
-import android.graphics.Bitmap
-import android.net.http.SslError
-import android.os.Handler
-import android.os.Looper
-import android.util.Base64
-import android.util.Log
-import android.webkit.JavascriptInterface
-import android.webkit.SslErrorHandler
-import android.webkit.WebResourceRequest
-import android.webkit.WebResourceResponse
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import com.google.gson.JsonParser
-import de.aniworld.tv.AniWorldApp
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.model.SerienStreamRef
+import de.aniworld.tv.platform.AppLog
+import de.aniworld.tv.platform.BrowserStreamExtractor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.FormBody
 import okhttp3.Request
+import okio.ByteString.Companion.decodeBase64
 import org.jsoup.Jsoup
-import java.io.ByteArrayInputStream
 import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
 
 /**
  * Zweistufiger Stream-Resolver:
  * 1. Schneller nativer OkHttp-Resolver für VOE (inkl. ROT13/Token/Base64-Entschlüsselung)
  *    und Vidmoly (direktes HLS-Parsing). Dauert < 1 Sekunde und benötigt 0 MB WebView-RAM.
- * 2. Automatischer Headless-WebView-Fallback für komplexe Hoster (Filemoon, Doodstream oder
+ * 2. Automatischer Fallback über einen unsichtbaren Browser der Plattform ([browserExtractor]:
+ *    WebView auf Android, Chromium am PC) für komplexe Hoster (Filemoon, Doodstream oder
  *    geänderte VOE-Skripte), der sofort nach dem Abgreifen der .m3u8/.mp4 URL geschlossen wird.
  */
 object StreamResolver {
 
     private const val CACHE_TTL_MS = 90 * 60 * 1000L // 90 Minuten
-    private const val WEBVIEW_TIMEOUT_MS = 16_000L
+
+    /** Wird von der Plattform beim Start gesetzt; ohne Browser entfällt Stufe 2. */
+    @Volatile
+    var browserExtractor: BrowserStreamExtractor? = null
 
     private val streamCache = ConcurrentHashMap<String, Pair<Long, ResolvedStream>>()
 
@@ -76,25 +63,25 @@ object StreamResolver {
         // Stufe 1: Schnell-Auflösung über OkHttp
         val fastAttempt = withContext(Dispatchers.IO) {
             runCatching { resolveDirect(hoster) }
-                .onFailure { Log.e("StreamResolver", "resolveDirect failed for ${hoster.redirectPath}", it) }
+                .onFailure { AppLog.e("StreamResolver", "resolveDirect failed for ${hoster.redirectPath}", it) }
         }
         // Bei gelöschten Dateien bringt auch die WebView nichts
         fastAttempt.exceptionOrNull()?.let { if (it is DeadLinkException) throw it }
         val fastResult = fastAttempt.getOrNull()
         if (fastResult != null) {
-            Log.e("StreamResolver", "Fast resolved: ${fastResult.streamUrl} headers=${fastResult.headers}")
+            AppLog.e("StreamResolver", "Fast resolved: ${fastResult.streamUrl} headers=${fastResult.headers}")
             streamCache[hoster.redirectPath] = now to fastResult
             return fastResult
         }
 
-        // Stufe 2: Unsichtbare WebView als Fallback
+        // Stufe 2: Unsichtbarer Browser als Fallback
         val redirectUrl = if (hoster.redirectPath.startsWith("http")) {
             hoster.redirectPath
         } else {
             "${HttpClient.BASE_URL}${hoster.redirectPath}"
         }
 
-        val webViewPair = extractViaWebView(redirectUrl)
+        val webViewPair = browserExtractor?.extract(redirectUrl, "${HttpClient.BASE_URL}/")
             ?: throw IllegalStateException("Stream konnte bei ${hoster.hosterName} nicht extrahiert werden.")
 
         val (streamUrl, pageUrl) = webViewPair
@@ -233,7 +220,7 @@ object StreamResolver {
             val decoded = if (raw.startsWith("http")) {
                 raw
             } else {
-                runCatching { String(Base64.decode(raw, Base64.DEFAULT), Charsets.UTF_8) }.getOrNull()
+                runCatching { decodeBase64Text(raw) }.getOrNull()
             }
             if (!decoded.isNullOrBlank() && decoded.startsWith("http")) {
                 return ResolvedStream(
@@ -413,7 +400,7 @@ object StreamResolver {
         val found = postDoc.select("a[href*=\".mp4\"], a[href*=\"dropcdn\"]")
             .map { it.attr("href").trim() }
             .firstOrNull { it.startsWith("http") }
-        Log.e("StreamResolver", "Dropload resolved fileCode=$fileCode -> $found")
+        AppLog.e("StreamResolver", "Dropload resolved fileCode=$fileCode -> $found")
         return found
     }
 
@@ -456,14 +443,14 @@ object StreamResolver {
         for (token in VOE_JUNK_TOKENS) {
             step = step.replace(token, "")
         }
-        val b64Step1 = String(Base64.decode(step, Base64.DEFAULT), Charsets.UTF_8)
+        val b64Step1 = decodeBase64Text(step)
         val shifted = buildString(b64Step1.length) {
             for (ch in b64Step1) {
                 append((ch.code - 3).toChar())
             }
         }
         val reversed = shifted.reversed()
-        val finalJson = String(Base64.decode(reversed, Base64.DEFAULT), Charsets.UTF_8)
+        val finalJson = decodeBase64Text(reversed)
         val obj = JsonParser.parseString(finalJson).asJsonObject
         return obj.get("source")?.asString?.takeIf { it.startsWith("http") }
             ?: obj.get("direct_access_url")?.asString?.takeIf { it.startsWith("http") }
@@ -479,183 +466,7 @@ object StreamResolver {
         }
     }
 
-    private val JS_PLAYER_HOOK = """
-        (function() {
-            if (window.__awHooked) return;
-            window.__awHooked = true;
-            var origJw = window.jwplayer;
-            function wrapJw(val) {
-                if (typeof val !== 'function') return val;
-                var fn = function() {
-                    var inst = val.apply(this, arguments);
-                    if (inst && inst.setup && !inst.__awSetup) {
-                        var origSetup = inst.setup;
-                        inst.setup = function(cfg) {
-                            try {
-                                if (cfg && cfg.sources && cfg.sources.length) {
-                                    for (var i = 0; i < cfg.sources.length; i++) {
-                                        if (cfg.sources[i].file) AndroidBridge.onStream(cfg.sources[i].file, location.href);
-                                    }
-                                }
-                                if (cfg && cfg.file) AndroidBridge.onStream(cfg.file, location.href);
-                            } catch (e) {}
-                            return origSetup.apply(this, arguments);
-                        };
-                        inst.__awSetup = true;
-                    }
-                    return inst;
-                };
-                return fn;
-            }
-            if (origJw) { window.jwplayer = wrapJw(origJw); }
-            setInterval(function() {
-                try {
-                    var vids = document.getElementsByTagName('video');
-                    for (var i = 0; i < vids.length; i++) {
-                        if (vids[i].src && vids[i].src.indexOf('http') === 0) {
-                            AndroidBridge.onStream(vids[i].src, location.href);
-                        }
-                    }
-                } catch (e) {}
-            }, 400);
-        })();
-    """.trimIndent()
-
-    @SuppressLint("SetJavaScriptEnabled", "JavascriptInterface")
-    private suspend fun extractViaWebView(targetUrl: String): Pair<String, String>? =
-        withContext(Dispatchers.Main) {
-            var webView: WebView? = null
-            try {
-                withTimeoutOrNull(WEBVIEW_TIMEOUT_MS) {
-                    suspendCancellableCoroutine { cont ->
-                        val done = AtomicBoolean(false)
-                        val mainHandler = Handler(Looper.getMainLooper())
-                        var lastPageUrl = targetUrl
-
-                        fun finishWith(streamUrl: String?, pageUrl: String) {
-                            if (done.compareAndSet(false, true)) {
-                                mainHandler.post {
-                                    try {
-                                        webView?.stopLoading()
-                                        webView?.loadUrl("about:blank")
-                                        webView?.destroy()
-                                        webView = null
-                                    } catch (_: Throwable) {}
-                                }
-                                if (cont.isActive) {
-                                    cont.resume(streamUrl?.let { it to pageUrl })
-                                }
-                            }
-                        }
-
-                        val wv = WebView(AniWorldApp.instance).apply {
-                            settings.apply {
-                                javaScriptEnabled = true
-                                domStorageEnabled = true
-                                databaseEnabled = true
-                                mediaPlaybackRequiresUserGesture = false
-                                blockNetworkImage = true
-                                mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                                userAgentString = HttpClient.USER_AGENT
-                            }
-
-                            addJavascriptInterface(
-                                object {
-                                    @JavascriptInterface
-                                    fun onStream(url: String?, ref: String?) {
-                                        if (!url.isNullOrBlank() && url.startsWith("http") && !url.contains("slides")) {
-                                            finishWith(url.trim(), ref ?: lastPageUrl)
-                                        }
-                                    }
-                                },
-                                "AndroidBridge"
-                            )
-
-                            webViewClient = object : WebViewClient() {
-                                override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
-                                    super.onPageStarted(view, url, favicon)
-                                    if (!url.isNullOrBlank()) lastPageUrl = url
-                                    view?.evaluateJavascript(JS_PLAYER_HOOK, null)
-                                }
-
-                                override fun onPageFinished(view: WebView?, url: String?) {
-                                    super.onPageFinished(view, url)
-                                    if (!url.isNullOrBlank()) lastPageUrl = url
-                                    view?.evaluateJavascript(JS_PLAYER_HOOK, null)
-                                }
-
-                                override fun shouldInterceptRequest(
-                                    view: WebView?,
-                                    request: WebResourceRequest?
-                                ): WebResourceResponse? {
-                                    val reqUrl = request?.url?.toString() ?: return null
-                                    if (isMediaStreamUrl(reqUrl)) {
-                                        finishWith(reqUrl, lastPageUrl)
-                                        return emptyResponse()
-                                    }
-                                    if (isBlockedAdOrAsset(reqUrl)) {
-                                        return emptyResponse()
-                                    }
-                                    return super.shouldInterceptRequest(view, request)
-                                }
-
-                                @SuppressLint("WebViewClientOnReceivedSslError")
-                                override fun onReceivedSslError(
-                                    view: WebView?,
-                                    handler: SslErrorHandler?,
-                                    error: SslError?
-                                ) {
-                                    handler?.proceed()
-                                }
-                            }
-                        }
-
-                        webView = wv
-                        cont.invokeOnCancellation {
-                            mainHandler.post {
-                                try {
-                                    webView?.stopLoading()
-                                    webView?.loadUrl("about:blank")
-                                    webView?.destroy()
-                                    webView = null
-                                } catch (_: Throwable) {}
-                            }
-                        }
-
-                        wv.loadUrl(targetUrl, mapOf("Referer" to "${HttpClient.BASE_URL}/"))
-                    }
-                }
-            } finally {
-                try {
-                    webView?.stopLoading()
-                    webView?.loadUrl("about:blank")
-                    webView?.destroy()
-                } catch (_: Throwable) {}
-            }
-        }
-
-    private fun isMediaStreamUrl(url: String): Boolean {
-        val lower = url.lowercase()
-        if (lower.contains("slides") || lower.contains("preview") || lower.contains("thumb")) return false
-        return lower.contains(".m3u8") ||
-            lower.contains("/hls2/") ||
-            (lower.contains(".mp4") && !lower.contains("ad"))
-    }
-
-    private fun isBlockedAdOrAsset(url: String): Boolean {
-        val lower = url.lowercase()
-        return lower.endsWith(".jpg") ||
-            lower.endsWith(".jpeg") ||
-            lower.endsWith(".png") ||
-            lower.endsWith(".gif") ||
-            lower.endsWith(".webp") ||
-            lower.endsWith(".woff2") ||
-            lower.contains("doubleclick") ||
-            lower.contains("googlesyndication") ||
-            lower.contains("popads") ||
-            lower.contains("adskeeper")
-    }
-
-    private fun emptyResponse(): WebResourceResponse =
-        WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+    /** Base64 wie android.util.Base64.DEFAULT (Standard- oder URL-Alphabet, Zeilenumbrüche erlaubt). */
+    private fun decodeBase64Text(input: String): String =
+        input.decodeBase64()?.utf8() ?: throw IllegalArgumentException("Ungültiges Base64")
 }

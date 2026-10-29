@@ -1,20 +1,19 @@
 package de.aniworld.tv.data.local
 
-import android.content.Context
-import android.content.SharedPreferences
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
-import de.aniworld.tv.AniWorldApp
 import de.aniworld.tv.data.model.AnimeCard
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.WatchProgressEntry
+import de.aniworld.tv.platform.KeyValueStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
 object LocalStorage {
 
-    private const val PREFS_NAME = "aniworld_tv_prefs"
+    /** Name der SharedPreferences auf Android bzw. der Datei am PC – nicht ändern, sonst sind Merkliste & Verlauf weg. */
+    const val PREFS_NAME = "aniworld_tv_prefs"
     private const val KEY_WATCHLIST = "watchlist_v1"
     private const val KEY_PROGRESS = "progress_v1"
     private const val KEY_WATCHED_EPS = "watched_episodes_v1"
@@ -25,18 +24,30 @@ object LocalStorage {
     private const val KEY_CUSTOM_M3U_URL = "custom_m3u_url_v1"
 
     private val gson = Gson()
-    private val prefs: SharedPreferences by lazy {
-        AniWorldApp.instance.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    }
 
-    private val _watchlistFlow = MutableStateFlow(readWatchlist())
+    @Volatile
+    private var storeRef: KeyValueStore? = null
+    private val prefs: KeyValueStore
+        get() = storeRef ?: error("LocalStorage.init() wurde beim App-Start nicht aufgerufen.")
+
+    // Erst in init() befüllen: Beim Laden des Objekts gibt es noch keinen Speicher, und eine
+    // leer gelesene Merkliste würde beim nächsten Speichern die echte überschreiben
+    private val _watchlistFlow = MutableStateFlow<List<AnimeCard>>(emptyList())
     val watchlistFlow: StateFlow<List<AnimeCard>> = _watchlistFlow.asStateFlow()
 
-    private val _progressFlow = MutableStateFlow(readProgressList())
+    private val _progressFlow = MutableStateFlow<List<WatchProgressEntry>>(emptyList())
     val progressFlow: StateFlow<List<WatchProgressEntry>> = _progressFlow.asStateFlow()
 
-    private val _watchedEpisodesFlow = MutableStateFlow(readWatchedEpisodes())
+    private val _watchedEpisodesFlow = MutableStateFlow<Set<String>>(emptySet())
     val watchedEpisodesFlow: StateFlow<Set<String>> = _watchedEpisodesFlow.asStateFlow()
+
+    /** Muss beim App-Start vor dem ersten Zugriff aufgerufen werden. */
+    fun init(store: KeyValueStore) {
+        storeRef = store
+        _watchlistFlow.value = readWatchlist()
+        _progressFlow.value = readProgressList()
+        _watchedEpisodesFlow.value = readWatchedEpisodes()
+    }
 
     // ------------------- Bevorzugte Sprache -------------------
 
@@ -46,28 +57,28 @@ object LocalStorage {
             return LanguageOption.fromKey(key) ?: LanguageOption.GER_DUB
         }
         set(value) {
-            prefs.edit().putInt(KEY_PREFERRED_LANG, value.langKey).apply()
+            prefs.putInt(KEY_PREFERRED_LANG, value.langKey)
         }
 
     // ------------------- GitHub Auto-Update -------------------
 
     var githubRepo: String
         get() = prefs.getString(KEY_GITHUB_REPO, "abilas-sivarajah/ABI-TV") ?: "abilas-sivarajah/ABI-TV"
-        set(value) = prefs.edit().putString(KEY_GITHUB_REPO, value).apply()
+        set(value) = prefs.putString(KEY_GITHUB_REPO, value)
 
     var ignoredUpdateTag: String
         get() = prefs.getString(KEY_IGNORED_UPDATE_TAG, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_IGNORED_UPDATE_TAG, value).apply()
+        set(value) = prefs.putString(KEY_IGNORED_UPDATE_TAG, value)
 
     var updateSnoozedUntil: Long
         get() = prefs.getLong(KEY_UPDATE_SNOOZED_UNTIL, 0L)
-        set(value) = prefs.edit().putLong(KEY_UPDATE_SNOOZED_UNTIL, value).apply()
+        set(value) = prefs.putLong(KEY_UPDATE_SNOOZED_UNTIL, value)
 
     // ------------------- Live TV / M3U -------------------
 
     var customM3uUrl: String
         get() = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
-        set(value) = prefs.edit().putString(KEY_CUSTOM_M3U_URL, value).apply()
+        set(value) = prefs.putString(KEY_CUSTOM_M3U_URL, value)
 
     // ------------------- Merkliste (Watchlist) -------------------
 
@@ -87,7 +98,7 @@ object LocalStorage {
             current.add(0, card.copy(slug = clean))
             true
         }
-        prefs.edit().putString(KEY_WATCHLIST, gson.toJson(current)).apply()
+        prefs.putString(KEY_WATCHLIST, gson.toJson(current))
         _watchlistFlow.value = current
         return added
     }
@@ -105,7 +116,7 @@ object LocalStorage {
         current.removeAll { it.animeSlug == entry.animeSlug }
         current.add(0, entry)
         val trimmed = current.take(40)
-        prefs.edit().putString(KEY_PROGRESS, gson.toJson(trimmed)).apply()
+        prefs.putString(KEY_PROGRESS, gson.toJson(trimmed))
         _progressFlow.value = trimmed
 
         // Ab 85 % Fortschritt Folge automatisch als gesehen markieren
@@ -131,7 +142,7 @@ object LocalStorage {
     fun removeFromContinueWatching(slug: String) {
         val clean = cleanSlug(slug)
         val updated = _progressFlow.value.filterNot { it.animeSlug == clean }
-        prefs.edit().putString(KEY_PROGRESS, gson.toJson(updated)).apply()
+        prefs.putString(KEY_PROGRESS, gson.toJson(updated))
         _progressFlow.value = updated
     }
 
@@ -146,7 +157,7 @@ object LocalStorage {
     fun markEpisodeWatched(episodePath: String) {
         val updated = _watchedEpisodesFlow.value.toMutableSet()
         if (updated.add(episodePath)) {
-            prefs.edit().putStringSet(KEY_WATCHED_EPS, updated).apply()
+            prefs.putStringSet(KEY_WATCHED_EPS, updated)
             _watchedEpisodesFlow.value = updated
         }
     }
@@ -155,16 +166,8 @@ object LocalStorage {
         episodePath in _watchedEpisodesFlow.value
 
     private fun readWatchedEpisodes(): Set<String> =
-        prefs.getStringSet(KEY_WATCHED_EPS, emptySet())?.toSet() ?: emptySet()
+        prefs.getStringSet(KEY_WATCHED_EPS, emptySet()).toSet()
 
-    private fun cleanSlug(raw: String): String =
-        if (raw.startsWith("hdfilme:") || raw.contains("hd-filme.one")) {
-            val rel = raw.removePrefix("hdfilme:").removePrefix("https://hd-filme.one").trim()
-            "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
-        } else {
-            raw.removePrefix("https://aniworld.to")
-                .removePrefix("/anime/stream/")
-                .substringBefore("/")
-                .trim()
-        }
+    // Gleiche Regeln wie die Karten selbst – eine eigene Kopie hatte Filmpalast-Slugs zu "filmpalast:" gekürzt
+    private fun cleanSlug(raw: String): String = AnimeCard(slug = raw, title = "", coverUrl = "").cleanSlug
 }
