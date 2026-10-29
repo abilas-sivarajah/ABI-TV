@@ -3,7 +3,10 @@ package de.aniworld.tv
 import android.app.Application
 import android.content.Context
 import android.util.Log
+import coil.ImageLoader
+import coil.ImageLoaderFactory
 import de.aniworld.tv.data.local.LocalStorage
+import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.platform.AppLog
 import de.aniworld.tv.platform.SharedPrefsStore
@@ -13,7 +16,7 @@ object AppContext {
     lateinit var context: Context
 }
 
-open class AniWorldApp : Application() {
+open class AniWorldApp : Application(), ImageLoaderFactory {
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -31,6 +34,13 @@ open class AniWorldApp : Application() {
         LocalStorage.init(SharedPrefsStore(this, LocalStorage.PREFS_NAME))
         StreamResolver.browserExtractor = WebViewStreamExtractor(this)
     }
+
+    // Cover von Filmpalast und S.to brauchen das DNS-over-HTTPS des gemeinsamen Clients,
+    // sonst bleiben sie im Mobilfunk (CUII-Sperre) leer
+    override fun newImageLoader(): ImageLoader =
+        ImageLoader.Builder(this)
+            .okHttpClient(HttpClient.okHttp)
+            .build()
 
     companion object {
         lateinit var instance: AniWorldApp

@@ -29,4 +29,7 @@ dependencies {
     // Typen dieser Bibliotheken tauchen in der öffentlichen API der Datenschicht auf
     api("androidx.core:core-ktx:1.15.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+
+    // Coil-Standardloader für TV- und Handy-App (Cover über denselben HTTP-Client wie die Scraper)
+    implementation("io.coil-kt:coil:2.7.0")
 }

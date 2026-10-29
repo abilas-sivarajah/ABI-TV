@@ -34,6 +34,9 @@ object StreamResolver {
 
     private val streamCache = ConcurrentHashMap<String, Pair<Long, ResolvedStream>>()
 
+    // Hoster-Seite, auf der Stufe 1 nach allen Weiterleitungen gelandet ist (Schlüssel: redirectPath)
+    private val hosterPages = ConcurrentHashMap<String, String>()
+
     private val VOE_JUNK_TOKENS = listOf("*~", "%?", "@$", "^^", "#&", "!!", "~@")
 
     // Nur der <title> wird geprüft: Doodstream hat z.B. ein verstecktes "Not Found"-Template im Body
@@ -65,6 +68,7 @@ object StreamResolver {
             runCatching { resolveDirect(hoster) }
                 .onFailure { AppLog.e("StreamResolver", "resolveDirect failed for ${hoster.redirectPath}", it) }
         }
+        val hosterPage = hosterPages.remove(hoster.redirectPath)
         // Bei gelöschten Dateien bringt auch die WebView nichts
         fastAttempt.exceptionOrNull()?.let { if (it is DeadLinkException) throw it }
         val fastResult = fastAttempt.getOrNull()
@@ -80,8 +84,11 @@ object StreamResolver {
         } else {
             "${HttpClient.BASE_URL}${hoster.redirectPath}"
         }
+        // Der Browser nutzt den DNS des Netzes, in dem S.to per CUII gesperrt ist – deshalb die schon
+        // über OkHttp (DNS-over-HTTPS) gefundene Hoster-Seite öffnen statt der S.to-Weiterleitung
+        val browserUrl = hosterPage ?: redirectUrl
 
-        val webViewPair = browserExtractor?.extract(redirectUrl, "${HttpClient.BASE_URL}/")
+        val webViewPair = browserExtractor?.extract(browserUrl, "${HttpClient.BASE_URL}/")
             ?: throw IllegalStateException("Stream konnte bei ${hoster.hosterName} nicht extrahiert werden.")
 
         val (streamUrl, pageUrl) = webViewPair
@@ -151,6 +158,7 @@ object StreamResolver {
                 html = next.second
             }
         }
+        hosterPages[hoster.redirectPath] = currentUrl
 
         // Gelöschte Dateien (z.B. VOE "404 - Not found") sofort melden, statt 16 s im WebView zu warten
         if (isDeadLinkPage(html)) {

@@ -19,6 +19,7 @@ kotlin {
 
 dependencies {
     api("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
     api("org.jsoup:jsoup:1.16.1")
     api("com.google.code.gson:gson:2.11.0")
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.2")
