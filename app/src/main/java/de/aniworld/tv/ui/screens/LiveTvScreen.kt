@@ -7,7 +7,6 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -55,10 +54,12 @@ import androidx.compose.ui.input.key.onPreviewKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -239,9 +240,9 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
     val keyboardController = LocalSoftwareKeyboardController.current
     val textFieldFocusRequester = remember { FocusRequester() }
     val boxFocusRequester = remember { FocusRequester() }
-    var hasEdited by remember { mutableStateOf(false) }
     var savedUrl by remember { mutableStateOf(LocalStorage.customM3uUrl) }
-    var draft by remember { mutableStateOf(savedUrl) }
+    // Mit Cursor am Textende: Das Feld wird bei jedem Öffnen neu angelegt und hätte ihn sonst am Anfang (wie im Suchfeld)
+    var draft by remember { mutableStateOf(TextFieldValue(savedUrl, TextRange(savedUrl.length))) }
     var isEditing by remember { mutableStateOf(false) }
     var isBoxFocused by remember { mutableStateOf(false) }
     var inputError by remember { mutableStateOf<String?>(null) }
@@ -249,9 +250,11 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
     fun save(value: String) {
         isEditing = false
         keyboardController?.hide()
+        // Fokus aufs Feld holen, solange das Textfeld noch da ist (sonst Absturz beim nächsten OK, wie im Suchfeld)
+        runCatching { boxFocusRequester.requestFocus() }
         if (LiveTvRepository.saveCustomM3uUrl(value)) {
             savedUrl = LocalStorage.customM3uUrl
-            draft = savedUrl
+            draft = TextFieldValue(savedUrl, TextRange(savedUrl.length))
             inputError = null
             onSaved()
         } else {
@@ -261,20 +264,16 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
 
     BackHandler(enabled = isEditing) {
         isEditing = false
-        draft = savedUrl
+        draft = TextFieldValue(savedUrl, TextRange(savedUrl.length))
         keyboardController?.hide()
+        runCatching { boxFocusRequester.requestFocus() }
     }
 
     LaunchedEffect(isEditing) {
         if (isEditing) {
-            hasEdited = true
             delay(50L)
             textFieldFocusRequester.requestFocus()
             keyboardController?.show()
-        } else if (hasEdited) {
-            // Nach dem Tippen den Fokus auf dem Feld lassen, statt ihn auf den ersten Tab springen zu lassen
-            delay(50L)
-            runCatching { boxFocusRequester.requestFocus() }
         }
     }
 
@@ -297,7 +296,7 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                         shape = RoundedCornerShape(10.dp)
                     )
                     .onFocusChanged { isBoxFocused = it.isFocused }
-                    .focusable(!isEditing)
+                    // Nur clickable als Fokusziel, damit der Fokus nach dem Tippen aufs Feld zurückkommt (wie im Suchfeld)
                     .clickable { isEditing = true }
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyUp &&
@@ -346,7 +345,7 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                         textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
                         cursorBrush = SolidColor(AccentCyan),
                         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-                        keyboardActions = KeyboardActions(onDone = { save(draft) }),
+                        keyboardActions = KeyboardActions(onDone = { save(draft.text) }),
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(textFieldFocusRequester)
@@ -354,7 +353,7 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                                 // Hardware-Enter erst beim Loslassen auswerten: sonst landet das Loslassen
                                 // auf dem nächsten fokussierten Element und löst dort einen Klick aus
                                 if (event.key == Key.Enter || event.key == Key.NumPadEnter) {
-                                    if (event.type == KeyEventType.KeyUp) save(draft)
+                                    if (event.type == KeyEventType.KeyUp) save(draft.text)
                                     true
                                 } else false
                             }

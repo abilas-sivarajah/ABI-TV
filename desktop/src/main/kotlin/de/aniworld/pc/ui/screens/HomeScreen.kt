@@ -5,7 +5,6 @@ import de.aniworld.pc.ui.compat.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.focusable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -58,9 +57,11 @@ import androidx.compose.ui.input.key.onKeyEvent
 import androidx.compose.ui.input.key.type
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -1087,18 +1088,38 @@ private fun SearchTabContent(
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val textFieldFocusRequester = remember { FocusRequester() }
+    val boxFocusRequester = remember { FocusRequester() }
     var isEditing by remember { mutableStateOf(false) }
     var isBoxFocused by remember { mutableStateOf(false) }
+    // Text samt Cursor des Eingabefelds. Das Feld wird bei jedem Einstieg neu angelegt und hätte den Cursor
+    // sonst am Textanfang, sodass Weitertippen vor dem alten Text landete
+    var fieldValue by remember { mutableStateOf(TextFieldValue(query, TextRange(query.length))) }
+    var textFieldHadFocus by remember { mutableStateOf(false) }
 
-    BackHandler(enabled = isEditing) {
+    fun startEditing() {
+        if (isEditing) return
+        fieldValue = TextFieldValue(query, TextRange(query.length))
+        textFieldHadFocus = false
+        isEditing = true
+    }
+
+    fun stopEditing(keepFocusOnBox: Boolean) {
+        if (!isEditing) return
         isEditing = false
         keyboardController?.hide()
+        // Den Fokus aufs Suchfeld holen, solange das Textfeld noch da ist: Verschwindet es mit Fokus, bleibt im
+        // Fokusbaum ein "ActiveParent ohne Kind" zurück, und das nächste OK auf dem Suchfeld ließ die App abstürzen
+        if (keepFocusOnBox) runCatching { boxFocusRequester.requestFocus() }
+    }
+
+    BackHandler(enabled = isEditing) {
+        stopEditing(keepFocusOnBox = true)
     }
 
     LaunchedEffect(isEditing) {
         if (isEditing) {
             delay(50L)
-            textFieldFocusRequester.requestFocus()
+            runCatching { textFieldFocusRequester.requestFocus() }
             keyboardController?.show()
         }
     }
@@ -1121,6 +1142,7 @@ private fun SearchTabContent(
                 modifier = Modifier
                     .weight(1f)
                     .height(46.dp)
+                    .focusRequester(boxFocusRequester)
                     .clip(RoundedCornerShape(10.dp))
                     .background(BgSurface)
                     .border(
@@ -1129,13 +1151,14 @@ private fun SearchTabContent(
                         shape = RoundedCornerShape(10.dp)
                     )
                     .onFocusChanged { isBoxFocused = it.isFocused }
-                    .focusable(!isEditing)
-                    .clickable { isEditing = true }
+                    // Nur clickable als Fokusziel: Ein zusätzliches focusable(!isEditing) wäre beim Beenden des
+                    // Tippens noch abgeschaltet, und der Fokus käme nicht aufs Suchfeld zurück
+                    .clickable { startEditing() }
                     .onKeyEvent { event ->
                         if (event.type == KeyEventType.KeyUp &&
                             (event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter)
                         ) {
-                            isEditing = true
+                            startEditing()
                             true
                         } else false
                     }
@@ -1178,22 +1201,31 @@ private fun SearchTabContent(
                     }
                 } else {
                     BasicTextField(
-                        value = query,
-                        onValueChange = { triggerSearch(it) },
+                        // Wurde die Suche von außen geändert (z. B. Vorschlag gewählt), gilt der neue Text
+                        value = if (fieldValue.text == query) fieldValue else TextFieldValue(query, TextRange(query.length)),
+                        onValueChange = {
+                            fieldValue = it
+                            triggerSearch(it.text)
+                        },
                         singleLine = true,
                         textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
                         cursorBrush = SolidColor(AccentCyan),
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                         keyboardActions = KeyboardActions(
-                            onSearch = {
-                                isEditing = false
-                                keyboardController?.hide()
-                                triggerSearch(query)
-                            }
+                            onSearch = { stopEditing(keepFocusOnBox = true) }
                         ),
                         modifier = Modifier
                             .fillMaxWidth()
                             .focusRequester(textFieldFocusRequester)
+                            .onFocusChanged { state ->
+                                // Verlässt der Fokus das Feld (z. B. per Pfeiltaste), ist das Tippen beendet;
+                                // beim nächsten OK beginnt es sauber neu statt in einem halb offenen Zustand
+                                if (state.isFocused) {
+                                    textFieldHadFocus = true
+                                } else if (textFieldHadFocus) {
+                                    stopEditing(keepFocusOnBox = false)
+                                }
+                            }
                     )
                 }
             }
@@ -1202,9 +1234,10 @@ private fun SearchTabContent(
                 TvFocusableButton(
                     text = "✕ Löschen",
                     onClick = {
-                        isEditing = false
-                        keyboardController?.hide()
+                        stopEditing(keepFocusOnBox = false)
                         triggerSearch("")
+                        // Der Knopf verschwindet mit dem Text, also den Fokus aufs Suchfeld setzen
+                        runCatching { boxFocusRequester.requestFocus() }
                     }
                 )
             }
