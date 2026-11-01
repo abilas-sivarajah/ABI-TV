@@ -15,6 +15,7 @@ import androidx.compose.ui.Modifier
 import androidx.lifecycle.lifecycleScope
 import de.aniworld.mobile.cast.MobileCastManager
 import de.aniworld.mobile.ui.components.CastBottomSheet
+import de.aniworld.mobile.ui.components.IntroAnimation
 import de.aniworld.mobile.ui.screens.MobileDetailScreen
 import de.aniworld.mobile.ui.screens.MobileHomeScreen
 import de.aniworld.mobile.ui.screens.MobileHomeState
@@ -44,10 +45,13 @@ class MainActivity : ComponentActivity() {
     private var detailStack by mutableStateOf<List<AnimeCard>>(emptyList())
     private var showCastSheet by mutableStateOf(false)
     private var availableRelease by mutableStateOf<AppRelease?>(null)
+    private var showIntro by mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        // Nur beim echten Start, nicht wenn Android die Activity neu aufbaut
+        showIntro = savedInstanceState == null
         MobileCastManager.init(this)
         loadHomeCatalog()
 
@@ -119,6 +123,11 @@ class MainActivity : ComponentActivity() {
                             release = release,
                             onDismiss = { availableRelease = null }
                         )
+                    }
+
+                    // Start-Animation; die Startseite lädt dahinter schon
+                    if (showIntro) {
+                        IntroAnimation(onFinished = { showIntro = false })
                     }
                 }
             }

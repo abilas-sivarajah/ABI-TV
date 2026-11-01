@@ -22,6 +22,7 @@ import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
+import de.aniworld.tv.ui.components.IntroAnimation
 import de.aniworld.tv.ui.components.TvPairingOverlay
 import de.aniworld.tv.ui.components.TvUpdateOverlay
 import de.aniworld.tv.ui.player.PlayerActivity
@@ -39,9 +40,12 @@ class MainActivity : ComponentActivity() {
     private var isLoadingHome by mutableStateOf(true)
     private var homeError by mutableStateOf<String?>(null)
     private var availableRelease by mutableStateOf<AppRelease?>(null)
+    private var showIntro by mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Nur beim echten Start, nicht wenn Android die Activity neu aufbaut
+        showIntro = savedInstanceState == null
         loadHomeCatalog()
 
         // Prüfe im Hintergrund automatisch auf GitHub-Updates
@@ -110,6 +114,11 @@ class MainActivity : ComponentActivity() {
 
                 // Kopplungscode für die Handy-Fernbedienung
                 TvPairingOverlay()
+
+                // Start-Animation; die Startseite lädt dahinter schon
+                if (showIntro) {
+                    IntroAnimation(onFinished = { showIntro = false })
+                }
             }
         }
     }

@@ -16,7 +16,7 @@
         android:largeHeap="true"
         android:roundIcon="@mipmap/ic_launcher"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AppCompat.NoActionBar"
+        android:theme="@style/Theme.AbiMobile"
         android:usesCleartextTraffic="true">
 
         <activity

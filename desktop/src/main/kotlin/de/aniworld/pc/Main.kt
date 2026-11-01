@@ -1,6 +1,13 @@
 package de.aniworld.pc
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.painter.BitmapPainter
 import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.unit.DpSize
@@ -18,6 +25,7 @@ import de.aniworld.pc.ui.DesktopApp
 import de.aniworld.pc.ui.compat.BackDispatcher
 import de.aniworld.pc.ui.compat.KeyDispatcher
 import de.aniworld.pc.ui.compat.LocalWindowState
+import de.aniworld.pc.ui.components.IntroAnimation
 import de.aniworld.pc.ui.theme.AniWorldTvTheme
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.StreamResolver
@@ -84,7 +92,14 @@ fun main() {
             window.minimumSize = java.awt.Dimension(1024, 640)
             CompositionLocalProvider(LocalWindowState provides windowState) {
                 AniWorldTvTheme {
-                    DesktopApp(chromium)
+                    var showIntro by remember { mutableStateOf(true) }
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        DesktopApp(chromium)
+                        // Start-Animation; die Startseite lädt dahinter schon
+                        if (showIntro) {
+                            IntroAnimation(onFinished = { showIntro = false })
+                        }
+                    }
                 }
             }
         }

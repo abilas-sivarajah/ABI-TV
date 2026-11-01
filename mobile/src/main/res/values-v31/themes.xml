@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 12+: Startbildschirm des Systems ohne Logo, das zeigt die eigene Start-Animation -->
+    <style name="Theme.AbiMobile" parent="Theme.AppCompat.NoActionBar">
+        <item name="android:windowSplashScreenBackground">@android:color/black</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@android:color/transparent</item>
+    </style>
+</resources>
