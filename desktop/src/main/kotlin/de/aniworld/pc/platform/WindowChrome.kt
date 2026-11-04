@@ -63,5 +63,8 @@ object WindowChrome {
                 apply()
             }
         })
+        // Java setzt die Fenster-Flags neu, wenn "Größe ändern" an/aus geht (maximiert ↔ normal)
+        frame.addWindowStateListener { java.awt.EventQueue.invokeLater { apply() } }
+        frame.addPropertyChangeListener("resizable") { java.awt.EventQueue.invokeLater { apply() } }
     }
 }

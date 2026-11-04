@@ -98,6 +98,8 @@ fun main() {
             state = windowState,
             // Keine weiße Windows-Titelleiste – die App zeichnet ihre eigene (AppTitleBar)
             undecorated = true,
+            // Größe ändern (Ränder ziehen) nur im normalen Fenster, nicht maximiert oder im Vollbild
+            resizable = windowState.placement == WindowPlacement.Floating,
             onPreviewKeyEvent = { KeyDispatcher.dispatch(it) }
         ) {
             LaunchedEffect(Unit) {
