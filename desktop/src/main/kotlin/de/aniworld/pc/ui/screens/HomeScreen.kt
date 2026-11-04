@@ -10,6 +10,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.pc.ui.theme.AccentAmber
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1169,8 +1172,8 @@ private fun CatalogRowSection(
     Column {
         SectionHeader(title = title, subtitle = "${items.size} Titel")
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
-            // Halb so breit wie die Reihe, aber nie so schmal, dass die Knöpfe nicht mehr passen
-            val panelWidth = ((maxWidth - 72.dp) / 2).coerceAtLeast(560.dp)
+            // Ein Viertel der Reihenbreite, aber nie so schmal, dass Text und Knöpfe nicht mehr passen
+            val panelWidth = ((maxWidth - 72.dp) / 4).coerceAtLeast(520.dp)
             ScrollLazyRow(
                 state = rowState,
                 contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
@@ -1350,13 +1353,13 @@ private fun TitleInfoPanel(
                         compact = true,
                         onClick = { play() }
                     )
-                    HeroButton(
-                        text = if (isBookmarked) "✓  Merkliste" else "+  Merkliste",
-                        primary = false,
-                        compact = true,
+                    // In der schmalen Kachel nur als runde Symbole
+                    TileIconButton(
+                        icon = if (isBookmarked) Icons.Filled.Check else Icons.Filled.Add,
+                        description = if (isBookmarked) "Auf der Merkliste" else "Zur Merkliste",
                         onClick = onToggleWatchlist
                     )
-                    HeroButton(text = "ⓘ  Details", primary = false, compact = true, onClick = onOpenDetail)
+                    TileIconButton(icon = Icons.Outlined.Info, description = "Details", onClick = onOpenDetail)
                 }
                 playError?.let {
                     Spacer(modifier = Modifier.height(6.dp))
@@ -1372,6 +1375,20 @@ private fun TitleInfoPanel(
         ) {
             NavIconButton(icon = Icons.Filled.Close, description = "Schließen", selected = false, onClick = onClose)
         }
+    }
+}
+
+/** Rundes Symbol in der Info-Kachel (Merkliste, Details). */
+@Composable
+private fun TileIconButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center
+    ) {
+        NavIconButton(icon = icon, description = description, selected = false, onClick = onClick, modifier = Modifier.size(36.dp))
     }
 }
 
