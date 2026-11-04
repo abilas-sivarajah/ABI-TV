@@ -9,7 +9,6 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.staticCompositionLocalOf
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.pc.ui.theme.AccentAmber
-import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -1107,7 +1106,7 @@ private fun HeroBanner(
 
 /** Knöpfe im Titelbild: weiß gefüllt (Hauptaktion) bzw. halbtransparent. */
 @Composable
-private fun HeroButton(text: String, primary: Boolean, onClick: () -> Unit) {
+private fun HeroButton(text: String, primary: Boolean, onClick: () -> Unit, compact: Boolean = false) {
     var focused by remember { mutableStateOf(false) }
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
@@ -1129,12 +1128,12 @@ private fun HeroButton(text: String, primary: Boolean, onClick: () -> Unit) {
             .pointerHoverIcon(PointerIcon.Hand)
             .onFocusChanged { focused = it.isFocused }
             .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 26.dp, vertical = 12.dp)
+            .padding(horizontal = if (compact) 16.dp else 26.dp, vertical = if (compact) 8.dp else 12.dp)
     ) {
         Text(
             text = text,
             color = if (primary) Color(0xFF0B0E14) else TextPrimary,
-            fontSize = 16.sp,
+            fontSize = if (compact) 14.sp else 16.sp,
             fontWeight = FontWeight.Bold,
             maxLines = 1
         )
@@ -1149,23 +1148,47 @@ private fun CatalogRowSection(
     onOpenAnime: (AnimeCard) -> Unit,
     onFocusAnime: (AnimeCard) -> Unit
 ) {
-    // Klick auf eine Karte klappt darunter einen Banner mit allen Infos auf (statt eine neue Seite zu öffnen)
+    // Klick auf eine Karte: an ihrer Stelle in der Reihe erscheint ein breites Info-Feld,
+    // die übrigen Titel reihen sich dahinter an und bleiben auswählbar
     val expandedState = LocalExpandedTitle.current
     val expandedSlug = expandedState.key?.takeIf { it.startsWith("$title|") }?.removePrefix("$title|")
-    val expandedAnime = items.firstOrNull { it.cleanSlug == expandedSlug }
-    // Position in der Reihe merken, damit sie nach dem Schließen wieder an derselben Stelle steht
     val rowState = rememberLazyListState()
+
+    // Info-Feld ins Bild holen, falls es am Rand steht
+    LaunchedEffect(expandedSlug) {
+        val index = items.indexOfFirst { it.cleanSlug == expandedSlug }
+        if (index < 0) return@LaunchedEffect
+        delay(60)
+        val visible = rowState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        val viewportEnd = rowState.layoutInfo.viewportEndOffset
+        if (visible == null || visible.offset < 0 || visible.offset + visible.size > viewportEnd) {
+            rowState.animateScrollToItem(index)
+        }
+    }
 
     Column {
         SectionHeader(title = title, subtitle = "${items.size} Titel")
-        Crossfade(targetState = expandedAnime, label = "rowInfo") { shown ->
-            if (shown == null) {
-                ScrollLazyRow(
-                    state = rowState,
-                    contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    items(items, key = { "${title}_${it.cleanSlug}" }) { anime ->
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            // Halb so breit wie die Reihe, aber nie so schmal, dass die Knöpfe nicht mehr passen
+            val panelWidth = ((maxWidth - 72.dp) / 2).coerceAtLeast(560.dp)
+            ScrollLazyRow(
+                state = rowState,
+                contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                items(items, key = { "${title}_${it.cleanSlug}" }) { anime ->
+                    if (anime.cleanSlug == expandedSlug) {
+                        TitleInfoPanel(
+                            anime = anime,
+                            isBookmarked = anime.cleanSlug in watchlistSlugs,
+                            onOpenDetail = { onOpenAnime(anime) },
+                            onToggleWatchlist = { LocalStorage.toggleWatchlist(anime) },
+                            onClose = { expandedState.key = null },
+                            modifier = Modifier
+                                .width(panelWidth)
+                                .height(TitleTileHeight)
+                        )
+                    } else {
                         TvAnimeCard(
                             anime = anime,
                             isBookmarked = anime.cleanSlug in watchlistSlugs,
@@ -1174,20 +1197,13 @@ private fun CatalogRowSection(
                         )
                     }
                 }
-            } else {
-                key(shown.cleanSlug) {
-                    TitleInfoPanel(
-                        anime = shown,
-                        isBookmarked = shown.cleanSlug in watchlistSlugs,
-                        onOpenDetail = { onOpenAnime(shown) },
-                        onToggleWatchlist = { LocalStorage.toggleWatchlist(shown) },
-                        onClose = { expandedState.key = null }
-                    )
-                }
             }
         }
     }
 }
+
+/** Höhe des Info-Felds in der Reihe = Höhe eines Karten-Covers (152 dp breit, 2:3). */
+private val TitleTileHeight = 228.dp
 
 /**
  * Kompaktes Info-Feld an der Stelle einer Kartenreihe (gleiche Höhe): Poster links, rechts
@@ -1199,7 +1215,8 @@ private fun TitleInfoPanel(
     isBookmarked: Boolean,
     onOpenDetail: () -> Unit,
     onToggleWatchlist: () -> Unit,
-    onClose: () -> Unit
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
 ) {
     val slug = anime.cleanSlug
     var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
@@ -1237,20 +1254,17 @@ private fun TitleInfoPanel(
         }
     }
 
-    val shape = RoundedCornerShape(18.dp)
+    val shape = RoundedCornerShape(14.dp)
     Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 36.dp, vertical = 10.dp)
-            .height(262.dp)
+        modifier = modifier
             .clip(shape)
             .background(BgSurface)
-            .border(1.dp, Color.White.copy(alpha = 0.10f), shape)
+            .border(1.dp, AccentCyan.copy(alpha = 0.35f), shape)
     ) {
         Row(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(18.dp),
+                .padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             AsyncImage(
@@ -1264,13 +1278,13 @@ private fun TitleInfoPanel(
                     .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
             )
 
-            Spacer(modifier = Modifier.width(28.dp))
+            Spacer(modifier = Modifier.width(18.dp))
 
             Column(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxHeight()
-                    .padding(end = 48.dp),
+                    .padding(end = 36.dp),
                 verticalArrangement = Arrangement.Center
             ) {
                 // Eckdaten als kleine Kästchen: Jahr, Bewertung, FSK
@@ -1293,13 +1307,13 @@ private fun TitleInfoPanel(
                             }
                         }
                     }
-                    Spacer(modifier = Modifier.height(10.dp))
+                    Spacer(modifier = Modifier.height(8.dp))
                 }
 
                 Text(
                     text = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title,
                     color = TextPrimary,
-                    fontSize = 28.sp,
+                    fontSize = 22.sp,
                     fontWeight = FontWeight.ExtraBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -1320,13 +1334,12 @@ private fun TitleInfoPanel(
                         fontSize = 13.sp,
                         lineHeight = 20.sp,
                         maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.widthIn(max = 900.dp)
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
 
-                Spacer(modifier = Modifier.height(14.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                     HeroButton(
                         text = when {
                             isStarting -> "Lädt …"
@@ -1334,15 +1347,20 @@ private fun TitleInfoPanel(
                             else -> "▶  Abspielen"
                         },
                         primary = true,
+                        compact = true,
                         onClick = { play() }
                     )
                     HeroButton(
                         text = if (isBookmarked) "✓  Merkliste" else "+  Merkliste",
                         primary = false,
+                        compact = true,
                         onClick = onToggleWatchlist
                     )
-                    HeroButton(text = "ⓘ  Details", primary = false, onClick = onOpenDetail)
-                    playError?.let { Text(text = it, color = AccentAmber, fontSize = 13.sp) }
+                    HeroButton(text = "ⓘ  Details", primary = false, compact = true, onClick = onOpenDetail)
+                }
+                playError?.let {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = it, color = AccentAmber, fontSize = 12.sp, maxLines = 1)
                 }
             }
         }
@@ -1350,7 +1368,7 @@ private fun TitleInfoPanel(
         Box(
             modifier = Modifier
                 .align(Alignment.TopEnd)
-                .padding(10.dp)
+                .padding(6.dp)
         ) {
             NavIconButton(icon = Icons.Filled.Close, description = "Schließen", selected = false, onClick = onClose)
         }
