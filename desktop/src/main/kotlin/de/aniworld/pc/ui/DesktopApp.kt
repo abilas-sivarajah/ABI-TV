@@ -55,6 +55,8 @@ fun DesktopApp(chromium: ChromiumStreamExtractor) {
     var reloadKey by remember { mutableIntStateOf(0) }
     var availableRelease by remember { mutableStateOf<AppRelease?>(null) }
     var playRequest by remember { mutableStateOf<PlayRequest?>(null) }
+    // "Abspielen" auf der Startseite/in den Bannern startet direkt im Vollbild
+    var playFullscreen by remember { mutableStateOf(false) }
 
     LaunchedEffect(reloadKey) {
         isLoadingHome = true
@@ -103,7 +105,14 @@ fun DesktopApp(chromium: ChromiumStreamExtractor) {
     Box(modifier = Modifier.fillMaxSize()) {
         val request = playRequest
         if (request != null) {
-            PlayerScreen(request = request, onClose = { playRequest = null })
+            PlayerScreen(
+                request = request,
+                startFullscreen = playFullscreen,
+                onClose = {
+                    playRequest = null
+                    playFullscreen = false
+                }
+            )
         } else {
             val activeDetail = detailStack.lastOrNull()
             if (activeDetail == null) {
@@ -135,7 +144,18 @@ fun DesktopApp(chromium: ChromiumStreamExtractor) {
                     onPlayLiveChannel = { channel ->
                         playRequest = PlayRequest.Live(channel.name, channel.streamUrl, channel.logoUrl, channel.headers)
                     },
-                    onUpdateFound = { release -> availableRelease = release }
+                    onUpdateFound = { release -> availableRelease = release },
+                    onPlayTitle = { detail, episode, episodeList, lang ->
+                        playFullscreen = true
+                        playRequest = PlayRequest.Episode(
+                            animeSlug = detail.slug,
+                            animeTitle = detail.title,
+                            coverUrl = detail.coverUrl,
+                            episode = episode,
+                            seasonEpisodes = episodeList,
+                            preferredLangKey = lang.langKey
+                        )
+                    }
                 )
             } else {
                 BackHandler { detailStack = detailStack.dropLast(1) }

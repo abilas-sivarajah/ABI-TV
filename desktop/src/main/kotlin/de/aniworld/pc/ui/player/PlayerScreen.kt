@@ -75,7 +75,7 @@ import javax.swing.Timer
  * des TV-Players. Im Vollbild blenden sich die Leisten nach ein paar Sekunden aus.
  */
 @Composable
-fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
+fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boolean = false) {
     val scope = rememberCoroutineScope()
     val controller = remember { PlayerController(scope) }
     val windowState = LocalWindowState.current
@@ -117,6 +117,11 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
             windowState.placement = WindowPlacement.Fullscreen
         }
         keepControlsAlive()
+    }
+
+    // Direkt aus einem Banner gestartet: gleich ins Vollbild
+    LaunchedEffect(Unit) {
+        if (startFullscreen && windowState.placement != WindowPlacement.Fullscreen) toggleFullscreen()
     }
 
     // Neuer Auftrag (auch vom Handy, während der Player schon läuft)

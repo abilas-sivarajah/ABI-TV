@@ -116,6 +116,9 @@ jobs:
       # Lädt dabei VLC (libvlc + Plugins, Prüfsumme fest im Build) und packt es in den Installer
       - name: Build MSI
         shell: bash
+        env:
+          # Optional: Bilder fürs Titelbild von TMDB (ohne Secret baut die App ohne TMDB)
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: ./gradlew :desktop:packageMsi $VERSION_ARGS --no-daemon
 
       - name: Prepare MSI for Release

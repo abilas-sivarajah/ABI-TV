@@ -69,6 +69,9 @@ fun AsyncImage(
     }
 }
 
+/** Lädt ein Bild über denselben Zwischenspeicher wie [AsyncImage] – z. B. um vorher seine Maße zu prüfen. */
+suspend fun loadCachedImage(url: String): ImageBitmap = ImageCache.load(url)
+
 private object ImageCache {
 
     private const val MAX_MEMORY_ENTRIES = 300

@@ -2,15 +2,49 @@ package de.aniworld.pc.ui.screens
 
 import de.aniworld.pc.ui.compat.ScrollLazyRow
 import de.aniworld.pc.ui.compat.BackHandler
+import androidx.compose.foundation.Image
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.key
+import androidx.compose.runtime.staticCompositionLocalOf
+import de.aniworld.tv.data.model.EpisodeItem
+import de.aniworld.pc.ui.theme.AccentAmber
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -43,12 +77,14 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -66,10 +102,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
+import de.aniworld.pc.ui.compat.loadCachedImage
+import de.aniworld.pc.platform.TmdbArtwork
 import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
+import de.aniworld.tv.data.model.AnimeDetail
 import de.aniworld.tv.data.model.CatalogSection
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.LiveTvChannel
@@ -101,18 +140,44 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class MainNavTab(val label: String) {
-    HOME("🏠 Animes"),
-    MOVIES("🎬 Filme"),
-    SERIES("🍿 Serien"),
-    LIVETV("📺 Live TV"),
-    SEARCH("🔍 Suche"),
-    GENRES("🎭 Genres"),
-    WATCHLIST("★ Merkliste"),
-    SETTINGS("⚙️ Einstellungen")
+    START("Startseite"),
+    HOME("Anime"),
+    MOVIES("Filme"),
+    SERIES("Serien"),
+    LIVETV("Live TV"),
+    SEARCH("Suche"),
+    GENRES("Genres"),
+    WATCHLIST("Merkliste"),
+    SETTINGS("Einstellungen")
 }
 
+/**
+ * Reiter der oberen Leiste in dieser Reihenfolge; Suche und Einstellungen sitzen als Symbole rechts.
+ * Genres ist vorerst ausgeblendet (gilt nur für Anime).
+ */
+private val NavBarTabs = listOf(
+    MainNavTab.START,
+    MainNavTab.MOVIES,
+    MainNavTab.SERIES,
+    MainNavTab.HOME,
+    MainNavTab.LIVETV,
+    MainNavTab.WATCHLIST
+)
+
+/** Startet einen Titel direkt im Player (Details, Folge, Folgen der Staffel, Sprache). */
+typealias PlayTitle = (AnimeDetail, EpisodeItem, List<EpisodeItem>, LanguageOption) -> Unit
+
+private val LocalPlayTitle = staticCompositionLocalOf<PlayTitle> { { _, _, _, _ -> } }
+
+/** Welcher Titel gerade unter welcher Reihe aufgeklappt ist ("Reihentitel|slug"); immer nur einer. */
+private class ExpandedTitleState {
+    var key by mutableStateOf<String?>(null)
+}
+
+private val LocalExpandedTitle = staticCompositionLocalOf { ExpandedTitleState() }
+
 class HomeUiState {
-    var activeTab by mutableStateOf(MainNavTab.HOME)
+    var activeTab by mutableStateOf(MainNavTab.START)
     var tabHistory by mutableStateOf<List<MainNavTab>>(emptyList())
     var moviesCategoryPath by mutableStateOf("OVERVIEW")
     var moviesOverviewSections by mutableStateOf<List<CatalogSection>>(emptyList())
@@ -130,6 +195,10 @@ class HomeUiState {
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
     var selectedGenreKey by mutableStateOf(AniWorldScraper.GENRE_CATEGORIES.first().first)
     var genreItems by mutableStateOf<List<AnimeCard>>(emptyList())
+    // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
+    var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startLoaded by mutableStateOf(false)
 
     fun selectTab(newTab: MainNavTab) {
         if (newTab != activeTab) {
@@ -140,6 +209,8 @@ class HomeUiState {
                     searchScope = SearchScope.SERIES
                 } else if (activeTab == MainNavTab.HOME || activeTab == MainNavTab.GENRES) {
                     searchScope = SearchScope.ANIMES
+                } else if (activeTab == MainNavTab.START) {
+                    searchScope = SearchScope.ALL
                 }
             }
             tabHistory = (tabHistory + activeTab).takeLast(10)
@@ -158,8 +229,12 @@ fun HomeScreen(
     onOpenAnime: (AnimeCard) -> Unit,
     onResumeWatch: (WatchProgressEntry) -> Unit,
     onPlayLiveChannel: (LiveTvChannel) -> Unit = {},
-    onUpdateFound: (AppRelease) -> Unit = {}
+    onUpdateFound: (AppRelease) -> Unit = {},
+    onPlayTitle: PlayTitle = { _, _, _, _ -> }
 ) {
+    val expandedTitle = remember { ExpandedTitleState() }
+    // Beim Reiterwechsel aufgeklappte Banner schließen
+    LaunchedEffect(uiState.activeTab) { expandedTitle.key = null }
     var preferredLang by remember { mutableStateOf(LocalStorage.preferredLanguage) }
     val activeTabFocusRequester = remember { FocusRequester() }
 
@@ -177,7 +252,7 @@ fun HomeScreen(
             (uiState.activeTab == MainNavTab.SERIES && uiState.seriesCategoryPath != "OVERVIEW") ||
             (uiState.activeTab == MainNavTab.SEARCH && uiState.searchQuery.isNotEmpty()) ||
             uiState.tabHistory.isNotEmpty() ||
-            uiState.activeTab != MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START
 
     BackHandler(enabled = canGoBackInHome) {
         when {
@@ -195,12 +270,13 @@ fun HomeScreen(
                 uiState.tabHistory = uiState.tabHistory.dropLast(1)
                 uiState.activeTab = prev
             }
-            uiState.activeTab != MainNavTab.HOME -> {
-                uiState.activeTab = MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START -> {
+                uiState.activeTab = MainNavTab.START
             }
         }
     }
 
+    CompositionLocalProvider(LocalPlayTitle provides onPlayTitle, LocalExpandedTitle provides expandedTitle) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -226,6 +302,15 @@ fun HomeScreen(
         // ------------------- Hauptinhalt je nach Tab -------------------
         Box(modifier = Modifier.fillMaxSize()) {
             when (uiState.activeTab) {
+                MainNavTab.START -> StartTabContent(
+                    uiState = uiState,
+                    animeSections = sections,
+                    continueWatching = progressList,
+                    watchlist = watchlist,
+                    onOpenAnime = onOpenAnime,
+                    onResumeWatch = onResumeWatch
+                )
+
                 MainNavTab.HOME -> HomeTabContent(
                     sections = sections,
                     continueWatching = progressList,
@@ -288,6 +373,7 @@ fun HomeScreen(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -310,7 +396,7 @@ private fun TopTvNavigationBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 28.dp, vertical = 12.dp),
+                .padding(start = 28.dp, end = 28.dp, top = 8.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // App Logo links
@@ -343,35 +429,53 @@ private fun TopTvNavigationBar(
                 )
             }
 
-            // Zentrierte Haupt-Tabs mit genügend Platz für Fokus-Skalierung
-            ScrollLazyRow(
+            fun focusIfActive(tab: MainNavTab): Modifier =
+                if (activeTab == tab) Modifier.focusRequester(activeTabFocusRequester) else Modifier
+
+            // Reiter direkt neben dem Logo (wie bei Streaming-Apps)
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(start = 28.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(MainNavTab.entries, key = { it.name }) { tab ->
-                    TvFocusableButton(
-                        text = tab.label,
-                        isSelected = activeTab == tab,
-                        modifier = if (activeTab == tab) {
-                            Modifier.focusRequester(activeTabFocusRequester)
-                        } else {
-                            Modifier
-                        },
+                NavBarTabs.forEach { tab ->
+                    NavTextTab(
+                        label = tab.label,
+                        selected = activeTab == tab,
+                        modifier = focusIfActive(tab),
                         onClick = { onSelectTab(tab) }
                     )
                 }
             }
 
-            // Kompakte Sprachwahl rechts
-            TvFocusableButton(
-                text = "🌐 ${preferredLanguage.shortLabel}",
-                badgeColor = Color(preferredLanguage.badgeColorHex),
-                onClick = onCycleLanguage
-            )
+            // Rechts: Sprachwahl, Suche (Lupe) und Einstellungen (Zahnrad)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NavTextTab(
+                    label = preferredLanguage.shortLabel,
+                    selected = false,
+                    badgeColor = Color(preferredLanguage.badgeColorHex),
+                    onClick = onCycleLanguage
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Search,
+                    description = "Suche",
+                    selected = activeTab == MainNavTab.SEARCH,
+                    modifier = focusIfActive(MainNavTab.SEARCH),
+                    onClick = { onSelectTab(MainNavTab.SEARCH) }
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Settings,
+                    description = "Einstellungen",
+                    selected = activeTab == MainNavTab.SETTINGS,
+                    modifier = focusIfActive(MainNavTab.SETTINGS),
+                    onClick = { onSelectTab(MainNavTab.SETTINGS) }
+                )
+            }
         }
 
         Box(
@@ -380,6 +484,199 @@ private fun TopTvNavigationBar(
                 .height(1.dp)
                 .background(Color.White.copy(alpha = 0.06f))
         )
+    }
+}
+
+/** Reiter als schlichter Text; der aktive bekommt eine helle Pille, Fokus (Tastatur) einen cyanfarbenen Rand. */
+@Composable
+private fun NavTextTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    badgeColor: Color? = null
+) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.16f)
+                    hovered || focused -> Color.White.copy(alpha = 0.07f)
+                    else -> Color.Transparent
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (badgeColor != null) {
+            Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(badgeColor))
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(
+            text = label,
+            color = if (selected || hovered || focused) TextPrimary else TextSecondary,
+            fontSize = 15.sp,
+            maxLines = 1,
+            softWrap = false,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
+    }
+}
+
+/** Rundes Symbol oben rechts (Lupe, Zahnrad). */
+@Composable
+private fun NavIconButton(
+    icon: ImageVector,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.16f)
+                    hovered || focused -> Color.White.copy(alpha = 0.07f)
+                    else -> Color.Transparent
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, CircleShape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = if (selected || hovered || focused) TextPrimary else TextSecondary,
+            modifier = Modifier.size(24.dp)
+        )
+    }
+}
+
+/**
+ * Startseite über alle Anbieter: Titelbild, Weiterschauen und je eine Reihe mit den beliebtesten
+ * Filmen (Filmpalast), Serien (S.to) und Animes (AniWorld).
+ */
+@Composable
+private fun StartTabContent(
+    uiState: HomeUiState,
+    animeSections: List<CatalogSection>,
+    continueWatching: List<WatchProgressEntry>,
+    watchlist: List<AnimeCard>,
+    onOpenAnime: (AnimeCard) -> Unit,
+    onResumeWatch: (WatchProgressEntry) -> Unit
+) {
+    var isLoading by remember { mutableStateOf(!uiState.startLoaded) }
+    LaunchedEffect(Unit) {
+        if (uiState.startLoaded) return@LaunchedEffect
+        isLoading = true
+        coroutineScope {
+            val movies = async { runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList()) }
+            val series = async { runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList()) }
+            uiState.startTopMovies = movies.await().distinctBy { it.cleanSlug }.take(24)
+            uiState.startPopularSeries = series.await().distinctBy { it.cleanSlug }.take(24)
+        }
+        uiState.startLoaded = uiState.startTopMovies.isNotEmpty() || uiState.startPopularSeries.isNotEmpty()
+        isLoading = false
+    }
+
+    // Beliebte Animes: die Reihe "Beliebt bei AniWorld" der AniWorld-Startseite
+    val popularAnime = remember(animeSections) {
+        (animeSections.firstOrNull { it.title.contains("beliebt", ignoreCase = true) } ?: animeSections.firstOrNull())
+            ?.items.orEmpty()
+    }
+    val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+
+    // Titelbild: je 2 zufällige Filme, Serien und Animes, immer abwechselnd
+    val heroItems = remember(uiState.startTopMovies, uiState.startPopularSeries, popularAnime) {
+        interleaveHeroPicks(listOf(uiState.startTopMovies, uiState.startPopularSeries, popularAnime), perSource = 2)
+    }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 48.dp),
+        verticalArrangement = Arrangement.spacedBy(26.dp)
+    ) {
+        if (heroItems.isNotEmpty()) {
+            item(key = "start_hero") {
+                HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
+            }
+        }
+
+        if (continueWatching.isNotEmpty()) {
+            item(key = "start_continue_watching") {
+                Column {
+                    SectionHeader(
+                        title = "▶️ Weiterschauen",
+                        subtitle = "${continueWatching.size} Titel im Verlauf"
+                    )
+                    ScrollLazyRow(
+                        contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(continueWatching, key = { it.animeSlug }) { entry ->
+                            TvContinueWatchingCard(
+                                entry = entry,
+                                onClick = { onResumeWatch(entry) },
+                                onDetailClick = {
+                                    onOpenAnime(AnimeCard(slug = entry.animeSlug, title = entry.animeTitle, coverUrl = entry.coverUrl))
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        val rows = listOf(
+            Triple("start_movies", "🔥 Beliebte Top-Filme auf Filmpalast", uiState.startTopMovies),
+            Triple("start_series", "🍿 Beliebte Serien auf S.to", uiState.startPopularSeries),
+            Triple("start_anime", "⭐ Beliebte Anime auf AniWorld", popularAnime)
+        )
+        rows.filter { it.third.isNotEmpty() }.forEach { (key, title, items) ->
+            item(key = key) {
+                CatalogRowSection(
+                    title = title,
+                    items = items,
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenAnime = onOpenAnime,
+                    onFocusAnime = {}
+                )
+            }
+        }
+
+        if (isLoading) {
+            item(key = "start_loading") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(color = AccentCyan, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(text = "Lade beliebte Filme und Serien...", color = TextSecondary, fontSize = 14.sp)
+                }
+            }
+        }
     }
 }
 
@@ -429,9 +726,8 @@ private fun HomeTabContent(
         return
     }
 
-    var heroAnime by remember(sections) {
-        mutableStateOf(sections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Animes zum Durchblättern
+    val heroItems = remember(sections) { randomHeroPicks(sections.flatMap { it.items }) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
     LazyColumn(
@@ -439,15 +735,10 @@ private fun HomeTabContent(
         contentPadding = PaddingValues(bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
-        // 1. Hero-Spotlight-Banner für den aktuell fokussierten Anime
-        heroAnime?.let { featured ->
+        // 1. Titelbild mit zufälligen Vorschlägen
+        if (heroItems.isNotEmpty()) {
             item(key = "hero_banner") {
-                HeroBanner(
-                    anime = featured,
-                    isBookmarked = featured.cleanSlug in watchlistSlugs,
-                    onOpenDetail = { onOpenAnime(featured) },
-                    onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                )
+                HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
             }
         }
 
@@ -491,7 +782,7 @@ private fun HomeTabContent(
                     items = watchlist,
                     watchlistSlugs = watchlistSlugs,
                     onOpenAnime = onOpenAnime,
-                    onFocusAnime = { heroAnime = it }
+                    onFocusAnime = {}
                 )
             }
         }
@@ -503,135 +794,470 @@ private fun HomeTabContent(
                 items = section.items,
                 watchlistSlugs = watchlistSlugs,
                 onOpenAnime = onOpenAnime,
-                onFocusAnime = { heroAnime = it }
+                onFocusAnime = {}
             )
         }
     }
 }
 
+/** Bereits geladene Details für das Titelbild (Hintergrundbild, Beschreibung …), damit nichts doppelt geladen wird. */
+private val heroDetailCache = java.util.concurrent.ConcurrentHashMap<String, AnimeDetail>()
+
+/** TMDB-Bilder je Titel (zusätzlich speichert [TmdbArtwork] sie auf der Platte). */
+private val heroArtworkCache = java.util.concurrent.ConcurrentHashMap<String, TmdbArtwork.Artwork>()
+
+/** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
+private fun guessTmdbKind(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Kind = when {
+    anime.isSto -> TmdbArtwork.Kind.TV
+    anime.isFilmpalast -> TmdbArtwork.Kind.MOVIE
+    anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) TmdbArtwork.Kind.TV else TmdbArtwork.Kind.MOVIE
+    else -> TmdbArtwork.Kind.TV // AniWorld: meist Serien
+}
+
+/** Dieselbe Quelle wie die Detailseite, je nach Anbieter des Titels. */
+private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
+    FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
+    HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug)
+    SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug)
+    else -> AniWorldScraper.fetchAnimeDetail(slug)
+}
+
+/** Art des Titels für Kacheln und Titelbild: "Film", "Serie" oder "Anime". */
+private fun titleKindLabel(anime: AnimeCard, detail: AnimeDetail?): String = when {
+    anime.isSto -> "Serie"
+    anime.isFilmpalast -> "Film"
+    anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
+    else -> "Anime"
+}
+
+/** Anzahl der Vorschläge im Titelbild. */
+private const val HERO_COUNT = 6
+
+/** Zufällige Titel fürs Titelbild (nur mit Cover, ohne Doppelte). */
+private fun randomHeroPicks(pool: List<AnimeCard>, count: Int = HERO_COUNT): List<AnimeCard> =
+    pool.filter { it.coverUrl.isNotBlank() }.distinctBy { it.cleanSlug }.shuffled().take(count)
+
+/** Je [perSource] zufällige Titel aus jeder Quelle, abwechselnd angeordnet (Film, Serie, Anime, Film, …). */
+private fun interleaveHeroPicks(sources: List<List<AnimeCard>>, perSource: Int): List<AnimeCard> {
+    val picks = sources.map { randomHeroPicks(it, perSource) }
+    return (0 until perSource)
+        .flatMap { round -> picks.mapNotNull { it.getOrNull(round) } }
+        .distinctBy { it.cleanSlug }
+}
+
+/**
+ * Titelbild als Karussell: zeigt die Vorschläge nacheinander (alle 9 s, Pause solange die Maus
+ * darauf ist), mit Pfeilen links/rechts und Punkten zum direkten Springen.
+ */
+@Composable
+private fun HeroCarousel(
+    items: List<AnimeCard>,
+    watchlistSlugs: Set<String>,
+    onOpenAnime: (AnimeCard) -> Unit
+) {
+    var index by remember(items) { mutableStateOf(0) }
+    val safeIndex = index.coerceIn(0, items.lastIndex)
+    val hoverSource = remember { MutableInteractionSource() }
+    val isHovered by hoverSource.collectIsHoveredAsState()
+
+    fun previous() { index = (safeIndex - 1 + items.size) % items.size }
+    fun next() { index = (safeIndex + 1) % items.size }
+
+    LaunchedEffect(items, safeIndex, isHovered) {
+        if (items.size < 2 || isHovered) return@LaunchedEffect
+        delay(9_000)
+        next()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .hoverable(hoverSource)
+    ) {
+        Crossfade(targetState = items[safeIndex], animationSpec = tween(450), label = "heroCarousel") { anime ->
+            HeroBanner(
+                anime = anime,
+                isBookmarked = anime.cleanSlug in watchlistSlugs,
+                onOpenDetail = { onOpenAnime(anime) },
+                onToggleWatchlist = { LocalStorage.toggleWatchlist(anime) },
+                loadDelayMs = 0
+            )
+        }
+
+        if (items.size > 1) {
+            HeroArrow(
+                icon = Icons.Filled.ChevronLeft,
+                description = "Vorheriger Vorschlag",
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp),
+                onClick = { previous() }
+            )
+            HeroArrow(
+                icon = Icons.Filled.ChevronRight,
+                description = "Nächster Vorschlag",
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+                onClick = { next() }
+            )
+            // Punkte: welcher Vorschlag gerade läuft, anklickbar
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 64.dp, bottom = 26.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                items.indices.forEach { i ->
+                    val active = i == safeIndex
+                    Box(
+                        modifier = Modifier
+                            .width(if (active) 22.dp else 8.dp)
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (active) Color.White else Color.White.copy(alpha = 0.35f))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { index = i }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Runder Pfeil am Rand des Titelbilds. */
+@Composable
+private fun HeroArrow(icon: ImageVector, description: String, modifier: Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        modifier = modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = if (hovered || focused) 0.75f else 0.45f))
+            .border(2.dp, if (focused) FocusBorder else Color.White.copy(alpha = 0.15f), CircleShape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(imageVector = icon, contentDescription = description, tint = Color.White, modifier = Modifier.size(30.dp))
+    }
+}
+
+/**
+ * Großes Titelbild im Stil von Streaming-Apps: breites Hintergrundbild, darüber unten links
+ * Titel, Eckdaten, Beschreibung und die Knöpfe. Fehlen die Details noch, wird das Cover gezeigt.
+ */
 @Composable
 private fun HeroBanner(
     anime: AnimeCard,
     isBookmarked: Boolean,
     onOpenDetail: () -> Unit,
-    onToggleWatchlist: () -> Unit
+    onToggleWatchlist: () -> Unit,
+    modifier: Modifier = Modifier,
+    /** Gesetzt = aufgeklappter Banner unter einer Reihe, mit X zum Schließen. */
+    onClose: (() -> Unit)? = null,
+    loadDelayMs: Long = 350
 ) {
-    Box(
-        modifier = Modifier
+    val slug = anime.cleanSlug
+    var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
+    var artwork by remember(slug) { mutableStateOf(heroArtworkCache[slug]) }
+    LaunchedEffect(slug) {
+        if (detail == null) {
+            // Kurz warten: beim Überfahren vieler Karten nur den Titel laden, auf dem man stehen bleibt
+            delay(loadDelayMs)
+            detail = runCatching { fetchHeroDetail(slug) }.getOrNull()?.also { heroDetailCache[slug] = it }
+        }
+        if (artwork == null && TmdbArtwork.isConfigured) {
+            val current = detail
+            val title = current?.title?.takeIf { it.isNotBlank() } ?: anime.title
+            val year = current?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
+            artwork = TmdbArtwork.find(title, year, guessTmdbKind(anime, current))?.also { heroArtworkCache[slug] = it }
+        }
+    }
+
+    // Hintergrund: TMDB, sonst das Bild der Seite – aber nur, wenn es wirklich querformatig ist.
+    // Ein gestrecktes Hochformat-Poster wäre unscharf.
+    val candidate = artwork?.backdropUrl
+        ?: detail?.backdropUrl?.takeIf { it.isNotBlank() && it != anime.coverUrl }
+    var backdropBitmap by remember(candidate) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(candidate) {
+        val url = candidate ?: return@LaunchedEffect
+        val bitmap = runCatching { loadCachedImage(url) }.getOrNull() ?: return@LaunchedEffect
+        if (bitmap.width >= bitmap.height * 1.4f) backdropBitmap = bitmap
+    }
+    val logoUrl = artwork?.logoUrl
+    var logoBitmap by remember(logoUrl) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(logoUrl) {
+        val url = logoUrl ?: return@LaunchedEffect
+        logoBitmap = runCatching { loadCachedImage(url) }.getOrNull()
+    }
+
+    // "Abspielen": Film bzw. zuletzt geschaute Folge (sonst Folge 1) direkt im Vollbild starten
+    val playTitle = LocalPlayTitle.current
+    val scope = rememberCoroutineScope()
+    val progressList by LocalStorage.progressFlow.collectAsState()
+    val savedProgress = remember(progressList, slug) { LocalStorage.getProgressForAnime(slug) }
+    var isStarting by remember(slug) { mutableStateOf(false) }
+    var playError by remember(slug) { mutableStateOf<String?>(null) }
+    fun play() {
+        if (isStarting) return
+        scope.launch {
+            isStarting = true
+            playError = null
+            val loaded = detail ?: runCatching { fetchHeroDetail(slug) }.getOrNull()
+                ?.also { heroDetailCache[slug] = it; detail = it }
+            isStarting = false
+            if (loaded == null) {
+                playError = "Titel konnte nicht geladen werden."
+                return@launch
+            }
+            val language = LocalStorage.preferredLanguage
+            val episode = pickEpisodeToPlay(slug, loaded, language)
+            if (episode == null) {
+                playError = "Keine Folge gefunden – bitte über „Details“ auswählen."
+                return@launch
+            }
+            playTitle(loaded, episode, loaded.episodes, language)
+        }
+    }
+
+    val shape = RoundedCornerShape(18.dp)
+
+    BoxWithConstraints(
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 36.dp, vertical = 6.dp)
-            .height(226.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(BgSurface)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
     ) {
-        // Hintergrundbild rechtsbündig mit sanftem Verlauf nach links
-        if (anime.coverUrl.isNotBlank()) {
-            AsyncImage(
-                model = anime.coverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-            )
-        }
-
+        val heroHeight = (maxWidth * 0.40f).coerceIn(340.dp, 560.dp)
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF0B0E14),
-                            Color(0xFF0B0E14).copy(alpha = 0.94f),
-                            Color(0xFF0B0E14).copy(alpha = 0.55f),
-                            Color.Transparent
-                        )
-                    )
-                )
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxWidth()
+                .height(heroHeight)
+                .clip(shape)
+                .background(BgSurface)
+                .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(AccentCyan.copy(alpha = 0.18f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = when {
-                            anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
-                            anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
-                            anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
-                            else -> "ANIWORLD EMPFEHLUNG"
-                        },
-                        color = AccentCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = anime.title,
-                    color = TextPrimary,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            val wideBackdrop = backdropBitmap
+            if (wideBackdrop != null) {
+                Image(
+                    bitmap = wideBackdrop,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
+                    modifier = Modifier.fillMaxSize()
                 )
-
-                if (anime.genreOrSubtitle.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = anime.genreOrSubtitle,
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TvFocusableButton(
-                        text = "▶ Jetzt ansehen",
-                        isPrimary = true,
-                        onClick = onOpenDetail
-                    )
-                    TvFocusableButton(
-                        text = if (isBookmarked) "★ Auf der Merkliste" else "+ Zur Merkliste",
-                        isSelected = isBookmarked,
-                        onClick = onToggleWatchlist
-                    )
-                }
+            } else if (anime.coverUrl.isNotBlank()) {
+                // Nur ein kleines Hochformat-Cover: weichgezeichnet als Stimmung, rechts scharf als Poster
+                AsyncImage(
+                    model = anime.coverUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.75f,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(48.dp)
+                )
             }
 
-            if (anime.coverUrl.isNotBlank()) {
-                Spacer(modifier = Modifier.width(24.dp))
+            // Abdunkeln links (Text) und unten (Übergang zur Seite)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to BgPrimary.copy(alpha = 0.92f),
+                            0.35f to BgPrimary.copy(alpha = 0.70f),
+                            0.65f to Color.Transparent
+                        )
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.55f to Color.Transparent,
+                            1f to BgPrimary.copy(alpha = 0.85f)
+                        )
+                    )
+            )
+
+            if (wideBackdrop == null && anime.coverUrl.isNotBlank()) {
                 AsyncImage(
                     model = anime.coverUrl,
                     contentDescription = anime.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .width(112.dp)
-                        .height(166.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 56.dp)
+                        .fillMaxHeight(0.78f)
+                        .aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
                 )
             }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .widthIn(max = 680.dp)
+                    .padding(start = 40.dp, end = 24.dp, bottom = 36.dp)
+            ) {
+                Text(
+                    text = titleKindLabel(anime, detail).uppercase() + "  ·  " + when {
+                        anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
+                        anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
+                        anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
+                        else -> "ANIWORLD EMPFEHLUNG"
+                    },
+                    color = AccentCyan,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                val heroTitle = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
+                val logo = logoBitmap
+                if (logo != null) {
+                    // Titel-Logo von TMDB statt Schrift (wie bei Streaming-Apps)
+                    Image(
+                        bitmap = logo,
+                        contentDescription = heroTitle,
+                        contentScale = ContentScale.Fit,
+                        alignment = Alignment.CenterStart,
+                        modifier = Modifier
+                            .widthIn(max = 460.dp)
+                            .heightIn(max = 130.dp)
+                            .aspectRatio(logo.width.toFloat() / logo.height.coerceAtLeast(1))
+                    )
+                } else {
+                    Text(
+                        text = heroTitle,
+                        color = TextPrimary,
+                        fontSize = 44.sp,
+                        lineHeight = 48.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                // Eckdaten wie "Action • Fantasy • 2023 • FSK 12"
+                val meta = buildList {
+                    val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(2)
+                    if (genres.isNotEmpty()) addAll(genres) else anime.genreOrSubtitle.takeIf { it.isNotBlank() }?.let { add(it) }
+                    detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
+                }
+                if (meta.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = meta.joinToString("  •  "),
+                        color = TextPrimary.copy(alpha = 0.9f),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = description,
+                        color = TextPrimary.copy(alpha = 0.85f),
+                        fontSize = 16.sp,
+                        lineHeight = 23.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HeroButton(
+                        text = when {
+                            isStarting -> "Lädt …"
+                            savedProgress != null -> "▶  Weiterschauen"
+                            else -> "▶  Abspielen"
+                        },
+                        primary = true,
+                        onClick = { play() }
+                    )
+                    HeroButton(
+                        text = "ⓘ  Details",
+                        primary = false,
+                        onClick = onOpenDetail
+                    )
+                    HeroButton(
+                        text = if (isBookmarked) "✓  Auf der Merkliste" else "+  Merkliste",
+                        primary = false,
+                        onClick = onToggleWatchlist
+                    )
+                }
+                playError?.let {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = it, color = AccentAmber, fontSize = 13.sp)
+                }
+            }
+
+            if (onClose != null) {
+                Box(
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                        .clip(CircleShape)
+                        .background(Color.Black.copy(alpha = 0.55f))
+                ) {
+                    NavIconButton(
+                        icon = Icons.Filled.Close,
+                        description = "Schließen",
+                        selected = false,
+                        onClick = onClose
+                    )
+                }
+            }
         }
+    }
+}
+
+/** Knöpfe im Titelbild: weiß gefüllt (Hauptaktion) bzw. halbtransparent. */
+@Composable
+private fun HeroButton(text: String, primary: Boolean, onClick: () -> Unit, compact: Boolean = false) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val active = focused || hovered
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                when {
+                    primary && active -> Color.White.copy(alpha = 0.80f)
+                    primary -> Color.White
+                    active -> Color.White.copy(alpha = 0.30f)
+                    else -> Color.White.copy(alpha = 0.18f)
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = if (compact) 16.dp else 26.dp, vertical = if (compact) 8.dp else 12.dp)
+    ) {
+        Text(
+            text = text,
+            color = if (primary) Color(0xFF0B0E14) else TextPrimary,
+            fontSize = if (compact) 14.sp else 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 
@@ -643,22 +1269,268 @@ private fun CatalogRowSection(
     onOpenAnime: (AnimeCard) -> Unit,
     onFocusAnime: (AnimeCard) -> Unit
 ) {
+    // Klick auf eine Karte: an ihrer Stelle in der Reihe erscheint ein breites Info-Feld,
+    // die übrigen Titel reihen sich dahinter an und bleiben auswählbar
+    val expandedState = LocalExpandedTitle.current
+    val expandedSlug = expandedState.key?.takeIf { it.startsWith("$title|") }?.removePrefix("$title|")
+    val rowState = rememberLazyListState()
+
+    // Info-Feld ins Bild holen, falls es am Rand steht
+    LaunchedEffect(expandedSlug) {
+        val index = items.indexOfFirst { it.cleanSlug == expandedSlug }
+        if (index < 0) return@LaunchedEffect
+        delay(60)
+        val visible = rowState.layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+        val viewportEnd = rowState.layoutInfo.viewportEndOffset
+        if (visible == null || visible.offset < 0 || visible.offset + visible.size > viewportEnd) {
+            rowState.animateScrollToItem(index)
+        }
+    }
+
     Column {
         SectionHeader(title = title, subtitle = "${items.size} Titel")
-        ScrollLazyRow(
-            contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
-            items(items, key = { "${title}_${it.cleanSlug}" }) { anime ->
-                TvAnimeCard(
-                    anime = anime,
-                    isBookmarked = anime.cleanSlug in watchlistSlugs,
-                    onClick = { onOpenAnime(anime) },
-                    onFocused = { onFocusAnime(anime) }
-                )
+        BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+            // Ein Viertel der Reihenbreite, aber nie so schmal, dass Text und Knöpfe nicht mehr passen
+            val panelWidth = ((maxWidth - 72.dp) / 4).coerceAtLeast(520.dp)
+            ScrollLazyRow(
+                state = rowState,
+                contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.spacedBy(18.dp)
+            ) {
+                items(items, key = { "${title}_${it.cleanSlug}" }) { anime ->
+                    if (anime.cleanSlug == expandedSlug) {
+                        TitleInfoPanel(
+                            anime = anime,
+                            isBookmarked = anime.cleanSlug in watchlistSlugs,
+                            onOpenDetail = { onOpenAnime(anime) },
+                            onToggleWatchlist = { LocalStorage.toggleWatchlist(anime) },
+                            onClose = { expandedState.key = null },
+                            modifier = Modifier
+                                .width(panelWidth)
+                                .height(TitleTileHeight)
+                        )
+                    } else {
+                        TvAnimeCard(
+                            anime = anime,
+                            isBookmarked = anime.cleanSlug in watchlistSlugs,
+                            onClick = { expandedState.key = "$title|${anime.cleanSlug}" },
+                            onFocused = { onFocusAnime(anime) }
+                        )
+                    }
+                }
             }
         }
     }
+}
+
+/** Höhe des Info-Felds in der Reihe = Höhe eines Karten-Covers (152 dp breit, 2:3). */
+private val TitleTileHeight = 228.dp
+
+/**
+ * Kompaktes Info-Feld an der Stelle einer Kartenreihe (gleiche Höhe): Poster links, rechts
+ * Jahr/Bewertung, Titel, Genres, Beschreibung und Knöpfe – "Abspielen" startet direkt im Vollbild.
+ */
+@Composable
+private fun TitleInfoPanel(
+    anime: AnimeCard,
+    isBookmarked: Boolean,
+    onOpenDetail: () -> Unit,
+    onToggleWatchlist: () -> Unit,
+    onClose: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    val slug = anime.cleanSlug
+    var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
+    LaunchedEffect(slug) {
+        if (detail == null) {
+            detail = runCatching { fetchHeroDetail(slug) }.getOrNull()?.also { heroDetailCache[slug] = it }
+        }
+    }
+
+    val playTitle = LocalPlayTitle.current
+    val scope = rememberCoroutineScope()
+    val progressList by LocalStorage.progressFlow.collectAsState()
+    val savedProgress = remember(progressList, slug) { LocalStorage.getProgressForAnime(slug) }
+    var isStarting by remember(slug) { mutableStateOf(false) }
+    var playError by remember(slug) { mutableStateOf<String?>(null) }
+    fun play() {
+        if (isStarting) return
+        scope.launch {
+            isStarting = true
+            playError = null
+            val loaded = detail ?: runCatching { fetchHeroDetail(slug) }.getOrNull()
+                ?.also { heroDetailCache[slug] = it; detail = it }
+            isStarting = false
+            if (loaded == null) {
+                playError = "Titel konnte nicht geladen werden."
+                return@launch
+            }
+            val language = LocalStorage.preferredLanguage
+            val episode = pickEpisodeToPlay(slug, loaded, language)
+            if (episode == null) {
+                playError = "Keine Folge gefunden – bitte über „Details“ auswählen."
+                return@launch
+            }
+            playTitle(loaded, episode, loaded.episodes, language)
+        }
+    }
+
+    val shape = RoundedCornerShape(14.dp)
+    Box(
+        modifier = modifier
+            .clip(shape)
+            .background(BgSurface)
+            .border(1.dp, AccentCyan.copy(alpha = 0.35f), shape)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(12.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AsyncImage(
+                model = detail?.coverUrl?.takeIf { it.isNotBlank() } ?: anime.coverUrl,
+                contentDescription = anime.title,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .aspectRatio(2f / 3f)
+                    .clip(RoundedCornerShape(12.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(12.dp))
+            )
+
+            Spacer(modifier = Modifier.width(18.dp))
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .padding(end = 36.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                // Eckdaten als kleine Kästchen: Art (Film/Serie/Anime), Jahr, Bewertung, FSK
+                val chips = buildList {
+                    add(titleKindLabel(anime, detail))
+                    detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    detail?.rating?.takeIf { it.isNotBlank() }?.let { add("★ $it") }
+                    detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
+                }
+                if (chips.isNotEmpty()) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        chips.forEach { chip ->
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .background(BgElevated)
+                                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+                                    .padding(horizontal = 10.dp, vertical = 4.dp)
+                            ) {
+                                Text(text = chip, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                            }
+                        }
+                    }
+                    Spacer(modifier = Modifier.height(8.dp))
+                }
+
+                Text(
+                    text = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title,
+                    color = TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(3)
+                val genreLine = if (genres.isNotEmpty()) genres.joinToString(", ") else anime.genreOrSubtitle
+                if (genreLine.isNotBlank()) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    // "Genre:" ausdrücklich davor, die Genres selbst in Cyan
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = TextSecondary, fontWeight = FontWeight.Medium)) { append("Genre: ") }
+                            withStyle(SpanStyle(color = AccentCyan, fontWeight = FontWeight.SemiBold)) { append(genreLine) }
+                        },
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = description,
+                        color = TextSecondary,
+                        fontSize = 13.sp,
+                        lineHeight = 20.sp,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(12.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    HeroButton(
+                        text = when {
+                            isStarting -> "Lädt …"
+                            savedProgress != null -> "▶  Weiterschauen"
+                            else -> "▶  Abspielen"
+                        },
+                        primary = true,
+                        compact = true,
+                        onClick = { play() }
+                    )
+                    // In der schmalen Kachel nur als runde Symbole
+                    TileIconButton(
+                        icon = if (isBookmarked) Icons.Filled.Check else Icons.Filled.Add,
+                        description = if (isBookmarked) "Auf der Merkliste" else "Zur Merkliste",
+                        onClick = onToggleWatchlist
+                    )
+                    TileIconButton(icon = Icons.Outlined.Info, description = "Details", onClick = onOpenDetail)
+                }
+                playError?.let {
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Text(text = it, color = AccentAmber, fontSize = 12.sp, maxLines = 1)
+                }
+            }
+        }
+
+        Box(
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(6.dp)
+        ) {
+            NavIconButton(icon = Icons.Filled.Close, description = "Schließen", selected = false, onClick = onClose)
+        }
+    }
+}
+
+/** Rundes Symbol in der Info-Kachel (Merkliste, Details). */
+@Composable
+private fun TileIconButton(icon: ImageVector, description: String, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(CircleShape)
+            .background(Color.White.copy(alpha = 0.14f)),
+        contentAlignment = Alignment.Center
+    ) {
+        NavIconButton(icon = icon, description = description, selected = false, onClick = onClick, modifier = Modifier.size(36.dp))
+    }
+}
+
+/** Film bzw. zuletzt geschaute Folge (sonst Folge 1) – das, was "Abspielen" startet. */
+private fun pickEpisodeToPlay(slug: String, detail: AnimeDetail, language: LanguageOption): EpisodeItem? {
+    val progress = LocalStorage.getProgressForAnime(slug) ?: return detail.episodes.firstOrNull()
+    return detail.episodes.firstOrNull { it.path == progress.episodePath } ?: EpisodeItem(
+        number = progress.episodeNumber,
+        seasonLabel = progress.seasonLabel,
+        path = progress.episodePath,
+        titleDe = progress.episodeTitle,
+        titleEn = "",
+        languages = listOf(language)
+    )
 }
 
 @Composable
@@ -883,9 +1755,8 @@ private fun CatalogBrowser(
     val isOverview = selectedCategoryPath == "OVERVIEW"
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
-    var heroItem by remember(overviewSections) {
-        mutableStateOf(overviewSections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
+    val heroItems = remember(overviewSections) { randomHeroPicks(overviewSections.flatMap { it.items }) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Horizontale Kategorie-Leiste (Suche, Übersicht, Genres...)
@@ -956,14 +1827,9 @@ private fun CatalogBrowser(
                     contentPadding = PaddingValues(bottom = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    heroItem?.let { featured ->
+                    if (heroItems.isNotEmpty()) {
                         item(key = "catalog_hero") {
-                            HeroBanner(
-                                anime = featured,
-                                isBookmarked = featured.cleanSlug in watchlistSlugs,
-                                onOpenDetail = { onOpenAnime(featured) },
-                                onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                            )
+                            HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
                         }
                     }
 
@@ -973,7 +1839,7 @@ private fun CatalogBrowser(
                             items = section.items,
                             watchlistSlugs = watchlistSlugs,
                             onOpenAnime = onOpenAnime,
-                            onFocusAnime = { heroItem = it }
+                            onFocusAnime = {}
                         )
                     }
                 }
@@ -1753,6 +2619,20 @@ private fun SettingsTabContent(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+        Text(
+            text = if (TmdbArtwork.isConfigured) {
+                "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
+                    "ist aber nicht von TMDB unterstützt oder zertifiziert."
+            } else {
+                "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
+            },
+            color = TextMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.fillMaxWidth(0.92f)
+        )
     }
 }
 

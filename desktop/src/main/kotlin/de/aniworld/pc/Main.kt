@@ -1,8 +1,12 @@
 package de.aniworld.pc
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -21,13 +25,16 @@ import de.aniworld.pc.platform.AppDirs
 import de.aniworld.pc.platform.ChromiumStreamExtractor
 import de.aniworld.pc.platform.JsonFileStore
 import de.aniworld.pc.platform.VlcSupport
+import de.aniworld.pc.platform.WindowChrome
 import de.aniworld.pc.ui.DesktopApp
 import de.aniworld.pc.ui.compat.BackDispatcher
 import de.aniworld.pc.ui.compat.KeyDispatcher
 import de.aniworld.pc.ui.compat.LocalComposeWindow
 import de.aniworld.pc.ui.compat.LocalWindowState
+import de.aniworld.pc.ui.components.AppTitleBar
 import de.aniworld.pc.ui.components.IntroAnimation
 import de.aniworld.pc.ui.theme.AniWorldTvTheme
+import de.aniworld.pc.ui.theme.BgPrimary
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.platform.AppLog
@@ -79,26 +86,40 @@ fun main() {
 
     application {
         val windowState = rememberWindowState(placement = WindowPlacement.Maximized, size = DpSize(1440.dp, 900.dp))
+        val closeApp = {
+            chromium.dispose()
+            VlcSupport.release()
+            exitApplication()
+        }
         Window(
-            onCloseRequest = {
-                chromium.dispose()
-                VlcSupport.release()
-                exitApplication()
-            },
+            onCloseRequest = closeApp,
             title = "ABI TV",
             icon = icon,
             state = windowState,
+            // Keine weiße Windows-Titelleiste – die App zeichnet ihre eigene (AppTitleBar)
+            undecorated = true,
+            // Größe ändern (Ränder ziehen) nur im normalen Fenster, nicht maximiert oder im Vollbild
+            resizable = windowState.placement == WindowPlacement.Floating,
             onPreviewKeyEvent = { KeyDispatcher.dispatch(it) }
         ) {
-            window.minimumSize = java.awt.Dimension(1024, 640)
+            LaunchedEffect(Unit) {
+                window.minimumSize = java.awt.Dimension(1024, 640)
+                WindowChrome.install(window)
+            }
             CompositionLocalProvider(LocalWindowState provides windowState, LocalComposeWindow provides window) {
                 AniWorldTvTheme {
                     var showIntro by remember { mutableStateOf(true) }
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        DesktopApp(chromium)
-                        // Start-Animation; die Startseite lädt dahinter schon
-                        if (showIntro) {
-                            IntroAnimation(onFinished = { showIntro = false })
+                    Column(modifier = Modifier.fillMaxSize().background(BgPrimary)) {
+                        // Im Vollbild (Player) ohne Titelleiste
+                        if (windowState.placement != WindowPlacement.Fullscreen) {
+                            AppTitleBar(icon = icon, onClose = closeApp)
+                        }
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                            DesktopApp(chromium)
+                            // Start-Animation; die Startseite lädt dahinter schon
+                            if (showIntro) {
+                                IntroAnimation(onFinished = { showIntro = false })
+                            }
                         }
                     }
                 }
