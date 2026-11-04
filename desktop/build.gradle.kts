@@ -2,6 +2,7 @@ import org.jetbrains.compose.desktop.application.dsl.TargetFormat
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 import java.net.URI
 import java.security.MessageDigest
+import java.util.Properties
 
 plugins {
     id("org.jetbrains.kotlin.jvm")
@@ -39,16 +40,29 @@ dependencies {
     implementation("org.jmdns:jmdns:3.6.4")
 }
 
+// TMDB-Schlüssel (Bilder fürs Titelbild) – nie im Quellcode: lokal aus local.properties ("tmdb.apiKey=…"),
+// im Release-Workflow aus dem GitHub-Secret TMDB_API_KEY. Ohne Schlüssel läuft die App ohne TMDB-Bilder.
+val tmdbApiKey: String = providers.environmentVariable("TMDB_API_KEY").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.gradleProperty("tmdbApiKey").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: rootProject.file("local.properties").takeIf { it.isFile }?.let { file ->
+        Properties().apply { file.inputStream().use { load(it) } }.getProperty("tmdb.apiKey")?.trim()
+    }
+    ?: ""
+
 // Version als Ressource, damit der Updater weiß, was installiert ist
 val generateVersionResource by tasks.registering {
     val outDir = layout.buildDirectory.dir("generated/version")
     val version = appVersionName
+    val tmdbKey = tmdbApiKey
     inputs.property("version", version)
+    inputs.property("tmdbKey", tmdbKey)
     outputs.dir(outDir)
     doLast {
         val file = outDir.get().file("abi-version.properties").asFile
         file.parentFile.mkdirs()
         file.writeText("version=$version" + System.lineSeparator())
+        val tmdbFile = outDir.get().file("abi-tmdb.properties").asFile
+        if (tmdbKey.isNotEmpty()) tmdbFile.writeText("apiKey=$tmdbKey" + System.lineSeparator()) else tmdbFile.delete()
     }
 }
 sourceSets["main"].resources.srcDir(generateVersionResource)

@@ -2,6 +2,7 @@ package de.aniworld.pc.ui.screens
 
 import de.aniworld.pc.ui.compat.ScrollLazyRow
 import de.aniworld.pc.ui.compat.BackHandler
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -65,6 +67,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -82,6 +85,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
+import de.aniworld.pc.ui.compat.loadCachedImage
+import de.aniworld.pc.platform.TmdbArtwork
 import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage
@@ -644,6 +649,17 @@ private fun HomeTabContent(
 /** Bereits geladene Details für das Titelbild (Hintergrundbild, Beschreibung …), damit nichts doppelt geladen wird. */
 private val heroDetailCache = java.util.concurrent.ConcurrentHashMap<String, AnimeDetail>()
 
+/** TMDB-Bilder je Titel (zusätzlich speichert [TmdbArtwork] sie auf der Platte). */
+private val heroArtworkCache = java.util.concurrent.ConcurrentHashMap<String, TmdbArtwork.Artwork>()
+
+/** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
+private fun guessTmdbKind(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Kind = when {
+    anime.isSto -> TmdbArtwork.Kind.TV
+    anime.isFilmpalast -> TmdbArtwork.Kind.MOVIE
+    anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) TmdbArtwork.Kind.TV else TmdbArtwork.Kind.MOVIE
+    else -> TmdbArtwork.Kind.TV // AniWorld: meist Serien
+}
+
 /** Dieselbe Quelle wie die Detailseite, je nach Anbieter des Titels. */
 private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
     FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
@@ -665,18 +681,38 @@ private fun HeroBanner(
 ) {
     val slug = anime.cleanSlug
     var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
+    var artwork by remember(slug) { mutableStateOf(heroArtworkCache[slug]) }
     LaunchedEffect(slug) {
-        if (detail != null) return@LaunchedEffect
-        // Kurz warten: beim Überfahren vieler Karten nur den Titel laden, auf dem man stehen bleibt
-        delay(350)
-        runCatching { fetchHeroDetail(slug) }
-            .onSuccess {
-                heroDetailCache[slug] = it
-                detail = it
-            }
+        if (detail == null) {
+            // Kurz warten: beim Überfahren vieler Karten nur den Titel laden, auf dem man stehen bleibt
+            delay(350)
+            detail = runCatching { fetchHeroDetail(slug) }.getOrNull()?.also { heroDetailCache[slug] = it }
+        }
+        if (artwork == null && TmdbArtwork.isConfigured) {
+            val current = detail
+            val title = current?.title?.takeIf { it.isNotBlank() } ?: anime.title
+            val year = current?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
+            artwork = TmdbArtwork.find(title, year, guessTmdbKind(anime, current))?.also { heroArtworkCache[slug] = it }
+        }
     }
 
-    val backdrop = detail?.backdropUrl?.takeIf { it.isNotBlank() && it != anime.coverUrl }
+    // Hintergrund: TMDB, sonst das Bild der Seite – aber nur, wenn es wirklich querformatig ist.
+    // Ein gestrecktes Hochformat-Poster wäre unscharf.
+    val candidate = artwork?.backdropUrl
+        ?: detail?.backdropUrl?.takeIf { it.isNotBlank() && it != anime.coverUrl }
+    var backdropBitmap by remember(candidate) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(candidate) {
+        val url = candidate ?: return@LaunchedEffect
+        val bitmap = runCatching { loadCachedImage(url) }.getOrNull() ?: return@LaunchedEffect
+        if (bitmap.width >= bitmap.height * 1.4f) backdropBitmap = bitmap
+    }
+    val logoUrl = artwork?.logoUrl
+    var logoBitmap by remember(logoUrl) { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(logoUrl) {
+        val url = logoUrl ?: return@LaunchedEffect
+        logoBitmap = runCatching { loadCachedImage(url) }.getOrNull()
+    }
+
     val shape = RoundedCornerShape(18.dp)
 
     BoxWithConstraints(
@@ -693,16 +729,17 @@ private fun HeroBanner(
                 .background(BgSurface)
                 .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
         ) {
-            // Hintergrund: breites Bild, falls vorhanden. Sonst gibt es nur ein kleines Hochformat-Cover –
-            // das wird stark weichgezeichnet als Stimmung genutzt und rechts scharf als Poster gezeigt.
-            if (backdrop != null) {
-                AsyncImage(
-                    model = backdrop,
+            val wideBackdrop = backdropBitmap
+            if (wideBackdrop != null) {
+                Image(
+                    bitmap = wideBackdrop,
                     contentDescription = null,
                     contentScale = ContentScale.Crop,
+                    alignment = Alignment.TopCenter,
                     modifier = Modifier.fillMaxSize()
                 )
             } else if (anime.coverUrl.isNotBlank()) {
+                // Nur ein kleines Hochformat-Cover: weichgezeichnet als Stimmung, rechts scharf als Poster
                 AsyncImage(
                     model = anime.coverUrl,
                     contentDescription = null,
@@ -737,8 +774,7 @@ private fun HeroBanner(
                     )
             )
 
-            // Ohne breites Bild: das Cover scharf als Poster rechts
-            if (backdrop == null && anime.coverUrl.isNotBlank()) {
+            if (wideBackdrop == null && anime.coverUrl.isNotBlank()) {
                 AsyncImage(
                     model = anime.coverUrl,
                     contentDescription = anime.title,
@@ -774,15 +810,31 @@ private fun HeroBanner(
 
                 Spacer(modifier = Modifier.height(8.dp))
 
-                Text(
-                    text = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title,
-                    color = TextPrimary,
-                    fontSize = 44.sp,
-                    lineHeight = 48.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
-                )
+                val heroTitle = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
+                val logo = logoBitmap
+                if (logo != null) {
+                    // Titel-Logo von TMDB statt Schrift (wie bei Streaming-Apps)
+                    Image(
+                        bitmap = logo,
+                        contentDescription = heroTitle,
+                        contentScale = ContentScale.Fit,
+                        alignment = Alignment.CenterStart,
+                        modifier = Modifier
+                            .widthIn(max = 460.dp)
+                            .heightIn(max = 130.dp)
+                            .aspectRatio(logo.width.toFloat() / logo.height.coerceAtLeast(1))
+                    )
+                } else {
+                    Text(
+                        text = heroTitle,
+                        color = TextPrimary,
+                        fontSize = 44.sp,
+                        lineHeight = 48.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
 
                 // Eckdaten wie "Action • Fantasy • 2023 • FSK 12"
                 val meta = buildList {
@@ -1988,6 +2040,20 @@ private fun SettingsTabContent(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+        Text(
+            text = if (TmdbArtwork.isConfigured) {
+                "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
+                    "ist aber nicht von TMDB unterstützt oder zertifiziert."
+            } else {
+                "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
+            },
+            color = TextMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.fillMaxWidth(0.92f)
+        )
     }
 }
 
