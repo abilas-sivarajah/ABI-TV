@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.WindowPlacement
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.pc.ui.compat.BackHandler
+import de.aniworld.pc.ui.compat.LocalComposeWindow
 import de.aniworld.pc.ui.compat.LocalWindowState
 import de.aniworld.pc.ui.compat.WindowKeyHandler
 import de.aniworld.pc.ui.components.LanguageBadge
@@ -78,6 +79,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
     val scope = rememberCoroutineScope()
     val controller = remember { PlayerController(scope) }
     val windowState = LocalWindowState.current
+    val composeWindow = LocalComposeWindow.current
     val isFullscreen = windowState.placement == WindowPlacement.Fullscreen
     var placementBeforeFullscreen by remember { mutableStateOf(WindowPlacement.Maximized) }
 
@@ -90,9 +92,26 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
         lastInteraction = System.currentTimeMillis()
     }
 
+    /**
+     * Compose Desktop beendet das Vollbild nur beim Wechsel auf "Floating": "Maximized" setzt
+     * lediglich das Maximiert-Flag – das ist bei unserem Fenster aber schon gesetzt, also blieb
+     * das Vollbild bestehen. Darum am Fenster selbst erst auf Floating, dann aufs Ziel wechseln.
+     */
+    fun exitFullscreen() {
+        val target = placementBeforeFullscreen.takeIf { it != WindowPlacement.Fullscreen } ?: WindowPlacement.Maximized
+        val window = composeWindow
+        if (window == null) {
+            windowState.placement = WindowPlacement.Floating
+            return
+        }
+        window.placement = WindowPlacement.Floating
+        if (target == WindowPlacement.Maximized) window.placement = WindowPlacement.Maximized
+        windowState.placement = target
+    }
+
     fun toggleFullscreen() {
         if (windowState.placement == WindowPlacement.Fullscreen) {
-            windowState.placement = placementBeforeFullscreen
+            exitFullscreen()
         } else {
             placementBeforeFullscreen = windowState.placement
             windowState.placement = WindowPlacement.Fullscreen
@@ -122,7 +141,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit) {
             PcCastManager.activePlayerControl = null
             controller.release()
             if (windowState.placement == WindowPlacement.Fullscreen) {
-                windowState.placement = placementBeforeFullscreen
+                exitFullscreen()
             }
         }
     }
