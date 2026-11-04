@@ -18,10 +18,14 @@ import androidx.compose.ui.input.pointer.PointerIcon
 import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -54,6 +58,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -81,6 +86,7 @@ import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
+import de.aniworld.tv.data.model.AnimeDetail
 import de.aniworld.tv.data.model.CatalogSection
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.LiveTvChannel
@@ -635,6 +641,21 @@ private fun HomeTabContent(
     }
 }
 
+/** Bereits geladene Details für das Titelbild (Hintergrundbild, Beschreibung …), damit nichts doppelt geladen wird. */
+private val heroDetailCache = java.util.concurrent.ConcurrentHashMap<String, AnimeDetail>()
+
+/** Dieselbe Quelle wie die Detailseite, je nach Anbieter des Titels. */
+private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
+    FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
+    HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug)
+    SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug)
+    else -> AniWorldScraper.fetchAnimeDetail(slug)
+}
+
+/**
+ * Großes Titelbild im Stil von Streaming-Apps: breites Hintergrundbild, darüber unten links
+ * Titel, Eckdaten, Beschreibung und die Knöpfe. Fehlen die Details noch, wird das Cover gezeigt.
+ */
 @Composable
 private fun HeroBanner(
     anime: AnimeCard,
@@ -642,122 +663,210 @@ private fun HeroBanner(
     onOpenDetail: () -> Unit,
     onToggleWatchlist: () -> Unit
 ) {
-    Box(
+    val slug = anime.cleanSlug
+    var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
+    LaunchedEffect(slug) {
+        if (detail != null) return@LaunchedEffect
+        // Kurz warten: beim Überfahren vieler Karten nur den Titel laden, auf dem man stehen bleibt
+        delay(350)
+        runCatching { fetchHeroDetail(slug) }
+            .onSuccess {
+                heroDetailCache[slug] = it
+                detail = it
+            }
+    }
+
+    val backdrop = detail?.backdropUrl?.takeIf { it.isNotBlank() && it != anime.coverUrl }
+    val shape = RoundedCornerShape(18.dp)
+
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxWidth()
             .padding(horizontal = 36.dp, vertical = 6.dp)
-            .height(226.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(BgSurface)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
     ) {
-        // Hintergrundbild rechtsbündig mit sanftem Verlauf nach links
-        if (anime.coverUrl.isNotBlank()) {
-            AsyncImage(
-                model = anime.coverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-            )
-        }
-
+        val heroHeight = (maxWidth * 0.40f).coerceIn(340.dp, 560.dp)
         Box(
             modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF0B0E14),
-                            Color(0xFF0B0E14).copy(alpha = 0.94f),
-                            Color(0xFF0B0E14).copy(alpha = 0.55f),
-                            Color.Transparent
-                        )
-                    )
-                )
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
+                .fillMaxWidth()
+                .height(heroHeight)
+                .clip(shape)
+                .background(BgSurface)
+                .border(1.dp, Color.White.copy(alpha = 0.08f), shape)
         ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(AccentCyan.copy(alpha = 0.18f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = when {
-                            anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
-                            anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
-                            anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
-                            else -> "ANIWORLD EMPFEHLUNG"
-                        },
-                        color = AccentCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = anime.title,
-                    color = TextPrimary,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
+            // Hintergrund: breites Bild, falls vorhanden. Sonst gibt es nur ein kleines Hochformat-Cover –
+            // das wird stark weichgezeichnet als Stimmung genutzt und rechts scharf als Poster gezeigt.
+            if (backdrop != null) {
+                AsyncImage(
+                    model = backdrop,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
-
-                if (anime.genreOrSubtitle.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = anime.genreOrSubtitle,
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TvFocusableButton(
-                        text = "▶ Jetzt ansehen",
-                        isPrimary = true,
-                        onClick = onOpenDetail
-                    )
-                    TvFocusableButton(
-                        text = if (isBookmarked) "★ Auf der Merkliste" else "+ Zur Merkliste",
-                        isSelected = isBookmarked,
-                        onClick = onToggleWatchlist
-                    )
-                }
+            } else if (anime.coverUrl.isNotBlank()) {
+                AsyncImage(
+                    model = anime.coverUrl,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    alpha = 0.75f,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .blur(48.dp)
+                )
             }
 
-            if (anime.coverUrl.isNotBlank()) {
-                Spacer(modifier = Modifier.width(24.dp))
+            // Abdunkeln links (Text) und unten (Übergang zur Seite)
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.horizontalGradient(
+                            0f to BgPrimary.copy(alpha = 0.92f),
+                            0.35f to BgPrimary.copy(alpha = 0.70f),
+                            0.65f to Color.Transparent
+                        )
+                    )
+            )
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.55f to Color.Transparent,
+                            1f to BgPrimary.copy(alpha = 0.85f)
+                        )
+                    )
+            )
+
+            // Ohne breites Bild: das Cover scharf als Poster rechts
+            if (backdrop == null && anime.coverUrl.isNotBlank()) {
                 AsyncImage(
                     model = anime.coverUrl,
                     contentDescription = anime.title,
                     contentScale = ContentScale.Crop,
                     modifier = Modifier
-                        .width(112.dp)
-                        .height(166.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
+                        .align(Alignment.CenterEnd)
+                        .padding(end = 56.dp)
+                        .fillMaxHeight(0.78f)
+                        .aspectRatio(2f / 3f)
+                        .clip(RoundedCornerShape(14.dp))
+                        .border(1.dp, Color.White.copy(alpha = 0.18f), RoundedCornerShape(14.dp))
                 )
             }
+
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .widthIn(max = 680.dp)
+                    .padding(start = 40.dp, end = 24.dp, bottom = 36.dp)
+            ) {
+                Text(
+                    text = when {
+                        anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
+                        anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
+                        anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
+                        else -> "ANIWORLD EMPFEHLUNG"
+                    },
+                    color = AccentCyan,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold,
+                    letterSpacing = 1.5.sp
+                )
+
+                Spacer(modifier = Modifier.height(8.dp))
+
+                Text(
+                    text = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title,
+                    color = TextPrimary,
+                    fontSize = 44.sp,
+                    lineHeight = 48.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+
+                // Eckdaten wie "Action • Fantasy • 2023 • FSK 12"
+                val meta = buildList {
+                    val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(2)
+                    if (genres.isNotEmpty()) addAll(genres) else anime.genreOrSubtitle.takeIf { it.isNotBlank() }?.let { add(it) }
+                    detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
+                    detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
+                }
+                if (meta.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = meta.joinToString("  •  "),
+                        color = TextPrimary.copy(alpha = 0.9f),
+                        fontSize = 15.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = description,
+                        color = TextPrimary.copy(alpha = 0.85f),
+                        fontSize = 16.sp,
+                        lineHeight = 23.sp,
+                        maxLines = 3,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    HeroButton(
+                        text = "▶  Jetzt ansehen",
+                        primary = true,
+                        onClick = onOpenDetail
+                    )
+                    HeroButton(
+                        text = if (isBookmarked) "✓  Auf der Merkliste" else "+  Merkliste",
+                        primary = false,
+                        onClick = onToggleWatchlist
+                    )
+                }
+            }
         }
+    }
+}
+
+/** Knöpfe im Titelbild: weiß gefüllt (Hauptaktion) bzw. halbtransparent. */
+@Composable
+private fun HeroButton(text: String, primary: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val active = focused || hovered
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                when {
+                    primary && active -> Color.White.copy(alpha = 0.80f)
+                    primary -> Color.White
+                    active -> Color.White.copy(alpha = 0.30f)
+                    else -> Color.White.copy(alpha = 0.18f)
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 26.dp, vertical = 12.dp)
+    ) {
+        Text(
+            text = text,
+            color = if (primary) Color(0xFF0B0E14) else TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 
