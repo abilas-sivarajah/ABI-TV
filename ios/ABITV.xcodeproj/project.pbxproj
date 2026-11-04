@@ -1,0 +1,376 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A10000010000000000000001 /* ABITVApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000010000000000000001 /* ABITVApp.swift */; };
+		A10000020000000000000001 /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000020000000000000001 /* Models.swift */; };
+		A10000030000000000000001 /* LocalStorage.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000030000000000000001 /* LocalStorage.swift */; };
+		A10000040000000000000001 /* HtmlParser.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000040000000000000001 /* HtmlParser.swift */; };
+		A10000050000000000000001 /* HttpClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000050000000000000001 /* HttpClient.swift */; };
+		A10000060000000000000001 /* AniWorldScraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000060000000000000001 /* AniWorldScraper.swift */; };
+		A10000070000000000000001 /* SerienStreamScraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000070000000000000001 /* SerienStreamScraper.swift */; };
+		A10000080000000000000001 /* FilmpalastScraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000080000000000000001 /* FilmpalastScraper.swift */; };
+		A10000090000000000000001 /* HdFilmeScraper.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000090000000000000001 /* HdFilmeScraper.swift */; };
+		A10000100000000000000001 /* LiveTvRepository.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000100000000000000001 /* LiveTvRepository.swift */; };
+		A10000110000000000000001 /* StreamResolver.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000110000000000000001 /* StreamResolver.swift */; };
+		A10000120000000000000001 /* UpdateManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000120000000000000001 /* UpdateManager.swift */; };
+		A10000130000000000000001 /* WebKitStreamExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000130000000000000001 /* WebKitStreamExtractor.swift */; };
+		A10000140000000000000001 /* IosCastManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000140000000000000001 /* IosCastManager.swift */; };
+		A10000150000000000000001 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000150000000000000001 /* Theme.swift */; };
+		A10000160000000000000001 /* IntroAnimationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000160000000000000001 /* IntroAnimationView.swift */; };
+		A10000170000000000000001 /* Components.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000170000000000000001 /* Components.swift */; };
+		A10000180000000000000001 /* LiveTvView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000180000000000000001 /* LiveTvView.swift */; };
+		A10000190000000000000001 /* DetailView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000190000000000000001 /* DetailView.swift */; };
+		A10000200000000000000001 /* PlayerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000200000000000000001 /* PlayerView.swift */; };
+		A10000210000000000000001 /* HomeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A20000210000000000000001 /* HomeView.swift */; };
+		A10000220000000000000001 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A20000220000000000000001 /* Assets.xcassets */; };
+		A10000230000000000000001 /* intro_sound.wav in Resources */ = {isa = PBXBuildFile; fileRef = A20000230000000000000001 /* intro_sound.wav */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A20000000000000000000001 /* ABITV.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = ABITV.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A20000010000000000000001 /* ABITVApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ABITVApp.swift; sourceTree = "<group>"; };
+		A20000020000000000000001 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A20000030000000000000001 /* LocalStorage.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LocalStorage.swift; sourceTree = "<group>"; };
+		A20000040000000000000001 /* HtmlParser.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HtmlParser.swift; sourceTree = "<group>"; };
+		A20000050000000000000001 /* HttpClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HttpClient.swift; sourceTree = "<group>"; };
+		A20000060000000000000001 /* AniWorldScraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AniWorldScraper.swift; sourceTree = "<group>"; };
+		A20000070000000000000001 /* SerienStreamScraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SerienStreamScraper.swift; sourceTree = "<group>"; };
+		A20000080000000000000001 /* FilmpalastScraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FilmpalastScraper.swift; sourceTree = "<group>"; };
+		A20000090000000000000001 /* HdFilmeScraper.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HdFilmeScraper.swift; sourceTree = "<group>"; };
+		A20000100000000000000001 /* LiveTvRepository.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTvRepository.swift; sourceTree = "<group>"; };
+		A20000110000000000000001 /* StreamResolver.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamResolver.swift; sourceTree = "<group>"; };
+		A20000120000000000000001 /* UpdateManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpdateManager.swift; sourceTree = "<group>"; };
+		A20000130000000000000001 /* WebKitStreamExtractor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebKitStreamExtractor.swift; sourceTree = "<group>"; };
+		A20000140000000000000001 /* IosCastManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IosCastManager.swift; sourceTree = "<group>"; };
+		A20000150000000000000001 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A20000160000000000000001 /* IntroAnimationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntroAnimationView.swift; sourceTree = "<group>"; };
+		A20000170000000000000001 /* Components.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Components.swift; sourceTree = "<group>"; };
+		A20000180000000000000001 /* LiveTvView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiveTvView.swift; sourceTree = "<group>"; };
+		A20000190000000000000001 /* DetailView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailView.swift; sourceTree = "<group>"; };
+		A20000200000000000000001 /* PlayerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlayerView.swift; sourceTree = "<group>"; };
+		A20000210000000000000001 /* HomeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HomeView.swift; sourceTree = "<group>"; };
+		A20000220000000000000001 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		A20000230000000000000001 /* intro_sound.wav */ = {isa = PBXFileReference; lastKnownFileType = audio.wav; path = intro_sound.wav; sourceTree = "<group>"; };
+		A20000240000000000000001 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A30000010000000000000001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A40000000000000000000001 = {
+			isa = PBXGroup;
+			children = (
+				A40000010000000000000001 /* ABITV */,
+				A40000070000000000000001 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A40000010000000000000001 /* ABITV */ = {
+			isa = PBXGroup;
+			children = (
+				A20000010000000000000001 /* ABITVApp.swift */,
+				A20000240000000000000001 /* Info.plist */,
+				A40000020000000000000001 /* Core */,
+				A40000030000000000000001 /* Platform */,
+				A40000040000000000000001 /* Cast */,
+				A40000050000000000000001 /* UI */,
+				A40000060000000000000001 /* Resources */,
+			);
+			path = ABITV;
+			sourceTree = "<group>";
+		};
+		A40000020000000000000001 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A20000020000000000000001 /* Models.swift */,
+				A20000030000000000000001 /* LocalStorage.swift */,
+				A20000040000000000000001 /* HtmlParser.swift */,
+				A20000050000000000000001 /* HttpClient.swift */,
+				A20000060000000000000001 /* AniWorldScraper.swift */,
+				A20000070000000000000001 /* SerienStreamScraper.swift */,
+				A20000080000000000000001 /* FilmpalastScraper.swift */,
+				A20000090000000000000001 /* HdFilmeScraper.swift */,
+				A20000100000000000000001 /* LiveTvRepository.swift */,
+				A20000110000000000000001 /* StreamResolver.swift */,
+				A20000120000000000000001 /* UpdateManager.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		A40000030000000000000001 /* Platform */ = {
+			isa = PBXGroup;
+			children = (
+				A20000130000000000000001 /* WebKitStreamExtractor.swift */,
+			);
+			path = Platform;
+			sourceTree = "<group>";
+		};
+		A40000040000000000000001 /* Cast */ = {
+			isa = PBXGroup;
+			children = (
+				A20000140000000000000001 /* IosCastManager.swift */,
+			);
+			path = Cast;
+			sourceTree = "<group>";
+		};
+		A40000050000000000000001 /* UI */ = {
+			isa = PBXGroup;
+			children = (
+				A20000150000000000000001 /* Theme.swift */,
+				A20000160000000000000001 /* IntroAnimationView.swift */,
+				A20000170000000000000001 /* Components.swift */,
+				A20000180000000000000001 /* LiveTvView.swift */,
+				A20000190000000000000001 /* DetailView.swift */,
+				A20000200000000000000001 /* PlayerView.swift */,
+				A20000210000000000000001 /* HomeView.swift */,
+			);
+			path = UI;
+			sourceTree = "<group>";
+		};
+		A40000060000000000000001 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				A20000220000000000000001 /* Assets.xcassets */,
+				A20000230000000000000001 /* intro_sound.wav */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		A40000070000000000000001 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A20000000000000000000001 /* ABITV.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A50000010000000000000001 /* ABITV */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A60000020000000000000001 /* Build configuration list for PBXNativeTarget "ABITV" */;
+			buildPhases = (
+				A70000010000000000000001 /* Sources */,
+				A30000010000000000000001 /* Frameworks */,
+				A80000010000000000000001 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = ABITV;
+			productName = ABITV;
+			productReference = A20000000000000000000001 /* ABITV.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A90000010000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1500;
+				LastUpgradeCheck = 1500;
+			};
+			buildConfigurationList = A60000010000000000000001 /* Build configuration list for PBXProject "ABITV" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = de;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				de,
+				en,
+				Base,
+			);
+			mainGroup = A40000000000000000000001;
+			productRefGroup = A40000070000000000000001 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A50000010000000000000001 /* ABITV */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A80000010000000000000001 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000220000000000000001 /* Assets.xcassets in Resources */,
+				A10000230000000000000001 /* intro_sound.wav in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A70000010000000000000001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A10000010000000000000001 /* ABITVApp.swift in Sources */,
+				A10000020000000000000001 /* Models.swift in Sources */,
+				A10000030000000000000001 /* LocalStorage.swift in Sources */,
+				A10000040000000000000001 /* HtmlParser.swift in Sources */,
+				A10000050000000000000001 /* HttpClient.swift in Sources */,
+				A10000060000000000000001 /* AniWorldScraper.swift in Sources */,
+				A10000070000000000000001 /* SerienStreamScraper.swift in Sources */,
+				A10000080000000000000001 /* FilmpalastScraper.swift in Sources */,
+				A10000090000000000000001 /* HdFilmeScraper.swift in Sources */,
+				A10000100000000000000001 /* LiveTvRepository.swift in Sources */,
+				A10000110000000000000001 /* StreamResolver.swift in Sources */,
+				A10000120000000000000001 /* UpdateManager.swift in Sources */,
+				A10000130000000000000001 /* WebKitStreamExtractor.swift in Sources */,
+				A10000140000000000000001 /* IosCastManager.swift in Sources */,
+				A10000150000000000000001 /* Theme.swift in Sources */,
+				A10000160000000000000001 /* IntroAnimationView.swift in Sources */,
+				A10000170000000000000001 /* Components.swift in Sources */,
+				A10000180000000000000001 /* LiveTvView.swift in Sources */,
+				A10000190000000000000001 /* DetailView.swift in Sources */,
+				A10000200000000000000001 /* PlayerView.swift in Sources */,
+				A10000210000000000000001 /* HomeView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		AA0000010000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000020000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA0000030000000000000001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CURRENT_PROJECT_VERSION = 10014;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ABITV/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.14;
+				PRODUCT_BUNDLE_IDENTIFIER = de.aniworld.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA0000040000000000000001 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "";
+				CODE_SIGN_STYLE = Automatic;
+				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_REQUIRED = NO;
+				CURRENT_PROJECT_VERSION = 24;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = ABITV/Info.plist;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.22.0;
+				PRODUCT_BUNDLE_IDENTIFIER = de.aniworld.ios;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.9;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A60000010000000000000001 /* Build configuration list for PBXProject "ABITV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000010000000000000001 /* Debug */,
+				AA0000020000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A60000020000000000000001 /* Build configuration list for PBXNativeTarget "ABITV" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA0000030000000000000001 /* Debug */,
+				AA0000040000000000000001 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A90000010000000000000001 /* Project object */;
+}

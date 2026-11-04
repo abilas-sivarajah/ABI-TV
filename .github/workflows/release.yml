@@ -131,10 +131,79 @@ jobs:
           name: ABI-TV-pc
           path: release-artifacts/ABI_PC.msi
 
+  ios:
+    name: Build iOS App (IPA)
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Determine version from tag
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+            if ! [[ "$VERSION" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+              echo "::error::Tag '$GITHUB_REF_NAME' muss das Format vMAJOR.MINOR.PATCH haben (z. B. v1.0.2)."
+              exit 1
+            fi
+            CODE=$(( BASH_REMATCH[1] * 10000 + BASH_REMATCH[2] * 100 + BASH_REMATCH[3] ))
+            echo "IOS_VERSION=$VERSION" >> "$GITHUB_ENV"
+            echo "IOS_BUILD_NUMBER=$CODE" >> "$GITHUB_ENV"
+          else
+            VERSION=$(grep '^appVersionName=' gradle.properties | cut -d'=' -f2)
+            CODE=$(grep '^appVersionCode=' gradle.properties | cut -d'=' -f2)
+            echo "IOS_VERSION=${VERSION:-1.22.0}" >> "$GITHUB_ENV"
+            echo "IOS_BUILD_NUMBER=${CODE:-24}" >> "$GITHUB_ENV"
+          fi
+
+      - name: Run Swift Core Unit Tests
+        working-directory: ios
+        run: swift test
+
+      - name: Generate Xcode Project with XcodeGen
+        working-directory: ios
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+
+      - name: Build Unsigned iOS App
+        working-directory: ios
+        run: |
+          xcodebuild clean build \
+            -project ABITV.xcodeproj \
+            -scheme ABITV \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            MARKETING_VERSION="$IOS_VERSION" \
+            CURRENT_PROJECT_VERSION="$IOS_BUILD_NUMBER" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO
+
+      - name: Package IPA for Sideloading (AltStore / SideStore / TrollStore)
+        run: |
+          mkdir -p ios/build/Payload release-artifacts
+          cp -R ios/build/Build/Products/Release-iphoneos/ABITV.app ios/build/Payload/ABITV.app
+          cd ios/build
+          zip -qry ../../release-artifacts/ABI_iOS.ipa Payload
+          cd ../..
+          ls -lh release-artifacts/ABI_iOS.ipa
+
+      - name: Upload iOS IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ABI-TV-ios
+          path: release-artifacts/ABI_iOS.ipa
+
   publish:
     name: Publish GitHub Release
-    needs: [build, desktop]
-    # Ein Fehler beim PC-Installer soll das Android-Release nicht aufhalten
+    needs: [build, desktop, ios]
+    # Ein Fehler beim PC-Installer oder iOS-Build soll das Android-Release nicht aufhalten
     if: ${{ always() && startsWith(github.ref, 'refs/tags/v') && needs.build.result == 'success' }}
     runs-on: ubuntu-latest
 
@@ -153,6 +222,7 @@ jobs:
             release-artifacts/ABI_TV.apk
             release-artifacts/ABI_Mobile.apk
             release-artifacts/ABI_PC.msi
+            release-artifacts/ABI_iOS.ipa
           generate_release_notes: true
           draft: false
           prerelease: false
