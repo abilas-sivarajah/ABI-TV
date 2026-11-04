@@ -13,6 +13,9 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.outlined.Info
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -1331,10 +1334,19 @@ private fun TitleInfoPanel(
                 )
 
                 val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(3)
-                val genreLine = if (genres.isNotEmpty()) genres.joinToString(" • ") else anime.genreOrSubtitle
+                val genreLine = if (genres.isNotEmpty()) genres.joinToString(", ") else anime.genreOrSubtitle
                 if (genreLine.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
-                    Text(text = genreLine, color = AccentCyan, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+                    // "Genre:" ausdrücklich davor, die Genres selbst in Cyan
+                    Text(
+                        text = buildAnnotatedString {
+                            withStyle(SpanStyle(color = TextSecondary, fontWeight = FontWeight.Medium)) { append("Genre: ") }
+                            withStyle(SpanStyle(color = AccentCyan, fontWeight = FontWeight.SemiBold)) { append(genreLine) }
+                        },
+                        fontSize = 14.sp,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
                 }
 
                 detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
