@@ -123,6 +123,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class MainNavTab(val label: String) {
+    START("Startseite"),
     HOME("Anime"),
     MOVIES("Filme"),
     SERIES("Serien"),
@@ -138,6 +139,7 @@ enum class MainNavTab(val label: String) {
  * Genres ist vorerst ausgeblendet (gilt nur für Anime).
  */
 private val NavBarTabs = listOf(
+    MainNavTab.START,
     MainNavTab.MOVIES,
     MainNavTab.SERIES,
     MainNavTab.HOME,
@@ -146,7 +148,7 @@ private val NavBarTabs = listOf(
 )
 
 class HomeUiState {
-    var activeTab by mutableStateOf(MainNavTab.HOME)
+    var activeTab by mutableStateOf(MainNavTab.START)
     var tabHistory by mutableStateOf<List<MainNavTab>>(emptyList())
     var moviesCategoryPath by mutableStateOf("OVERVIEW")
     var moviesOverviewSections by mutableStateOf<List<CatalogSection>>(emptyList())
@@ -164,6 +166,10 @@ class HomeUiState {
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
     var selectedGenreKey by mutableStateOf(AniWorldScraper.GENRE_CATEGORIES.first().first)
     var genreItems by mutableStateOf<List<AnimeCard>>(emptyList())
+    // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
+    var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startLoaded by mutableStateOf(false)
 
     fun selectTab(newTab: MainNavTab) {
         if (newTab != activeTab) {
@@ -174,6 +180,8 @@ class HomeUiState {
                     searchScope = SearchScope.SERIES
                 } else if (activeTab == MainNavTab.HOME || activeTab == MainNavTab.GENRES) {
                     searchScope = SearchScope.ANIMES
+                } else if (activeTab == MainNavTab.START) {
+                    searchScope = SearchScope.ALL
                 }
             }
             tabHistory = (tabHistory + activeTab).takeLast(10)
@@ -211,7 +219,7 @@ fun HomeScreen(
             (uiState.activeTab == MainNavTab.SERIES && uiState.seriesCategoryPath != "OVERVIEW") ||
             (uiState.activeTab == MainNavTab.SEARCH && uiState.searchQuery.isNotEmpty()) ||
             uiState.tabHistory.isNotEmpty() ||
-            uiState.activeTab != MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START
 
     BackHandler(enabled = canGoBackInHome) {
         when {
@@ -229,8 +237,8 @@ fun HomeScreen(
                 uiState.tabHistory = uiState.tabHistory.dropLast(1)
                 uiState.activeTab = prev
             }
-            uiState.activeTab != MainNavTab.HOME -> {
-                uiState.activeTab = MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START -> {
+                uiState.activeTab = MainNavTab.START
             }
         }
     }
@@ -260,6 +268,15 @@ fun HomeScreen(
         // ------------------- Hauptinhalt je nach Tab -------------------
         Box(modifier = Modifier.fillMaxSize()) {
             when (uiState.activeTab) {
+                MainNavTab.START -> StartTabContent(
+                    uiState = uiState,
+                    animeSections = sections,
+                    continueWatching = progressList,
+                    watchlist = watchlist,
+                    onOpenAnime = onOpenAnime,
+                    onResumeWatch = onResumeWatch
+                )
+
                 MainNavTab.HOME -> HomeTabContent(
                     sections = sections,
                     continueWatching = progressList,
@@ -517,6 +534,119 @@ private fun NavIconButton(
             tint = if (selected || hovered || focused) TextPrimary else TextSecondary,
             modifier = Modifier.size(24.dp)
         )
+    }
+}
+
+/**
+ * Startseite über alle Anbieter: Titelbild, Weiterschauen und je eine Reihe mit den beliebtesten
+ * Filmen (Filmpalast), Serien (S.to) und Animes (AniWorld).
+ */
+@Composable
+private fun StartTabContent(
+    uiState: HomeUiState,
+    animeSections: List<CatalogSection>,
+    continueWatching: List<WatchProgressEntry>,
+    watchlist: List<AnimeCard>,
+    onOpenAnime: (AnimeCard) -> Unit,
+    onResumeWatch: (WatchProgressEntry) -> Unit
+) {
+    var isLoading by remember { mutableStateOf(!uiState.startLoaded) }
+    LaunchedEffect(Unit) {
+        if (uiState.startLoaded) return@LaunchedEffect
+        isLoading = true
+        coroutineScope {
+            val movies = async { runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList()) }
+            val series = async { runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList()) }
+            uiState.startTopMovies = movies.await().distinctBy { it.cleanSlug }.take(24)
+            uiState.startPopularSeries = series.await().distinctBy { it.cleanSlug }.take(24)
+        }
+        uiState.startLoaded = uiState.startTopMovies.isNotEmpty() || uiState.startPopularSeries.isNotEmpty()
+        isLoading = false
+    }
+
+    // Beliebte Animes: die Reihe "Beliebt bei AniWorld" der AniWorld-Startseite
+    val popularAnime = remember(animeSections) {
+        (animeSections.firstOrNull { it.title.contains("beliebt", ignoreCase = true) } ?: animeSections.firstOrNull())
+            ?.items.orEmpty()
+    }
+    val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+
+    val firstTitle = uiState.startTopMovies.firstOrNull()
+        ?: uiState.startPopularSeries.firstOrNull()
+        ?: popularAnime.firstOrNull()
+    var heroItem by remember(firstTitle) { mutableStateOf(firstTitle) }
+
+    LazyColumn(
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 48.dp),
+        verticalArrangement = Arrangement.spacedBy(26.dp)
+    ) {
+        heroItem?.let { featured ->
+            item(key = "start_hero") {
+                HeroBanner(
+                    anime = featured,
+                    isBookmarked = featured.cleanSlug in watchlistSlugs,
+                    onOpenDetail = { onOpenAnime(featured) },
+                    onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
+                )
+            }
+        }
+
+        if (continueWatching.isNotEmpty()) {
+            item(key = "start_continue_watching") {
+                Column {
+                    SectionHeader(
+                        title = "▶️ Weiterschauen",
+                        subtitle = "${continueWatching.size} Titel im Verlauf"
+                    )
+                    ScrollLazyRow(
+                        contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(16.dp)
+                    ) {
+                        items(continueWatching, key = { it.animeSlug }) { entry ->
+                            TvContinueWatchingCard(
+                                entry = entry,
+                                onClick = { onResumeWatch(entry) },
+                                onDetailClick = {
+                                    onOpenAnime(AnimeCard(slug = entry.animeSlug, title = entry.animeTitle, coverUrl = entry.coverUrl))
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        val rows = listOf(
+            Triple("start_movies", "🔥 Beliebte Top-Filme auf Filmpalast", uiState.startTopMovies),
+            Triple("start_series", "🍿 Beliebte Serien auf S.to", uiState.startPopularSeries),
+            Triple("start_anime", "⭐ Beliebte Anime auf AniWorld", popularAnime)
+        )
+        rows.filter { it.third.isNotEmpty() }.forEach { (key, title, items) ->
+            item(key = key) {
+                CatalogRowSection(
+                    title = title,
+                    items = items,
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenAnime = onOpenAnime,
+                    onFocusAnime = { heroItem = it }
+                )
+            }
+        }
+
+        if (isLoading) {
+            item(key = "start_loading") {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(24.dp),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    CircularProgressIndicator(color = AccentCyan, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(text = "Lade beliebte Filme und Serien...", color = TextSecondary, fontSize = 14.sp)
+                }
+            }
+        }
     }
 }
 
