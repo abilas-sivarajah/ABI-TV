@@ -16,6 +16,10 @@ import androidx.compose.material.icons.outlined.Info
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -602,24 +606,19 @@ private fun StartTabContent(
     }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
-    val firstTitle = uiState.startTopMovies.firstOrNull()
-        ?: uiState.startPopularSeries.firstOrNull()
-        ?: popularAnime.firstOrNull()
-    var heroItem by remember(firstTitle) { mutableStateOf(firstTitle) }
+    // Titelbild: je 2 zufällige Filme, Serien und Animes, immer abwechselnd
+    val heroItems = remember(uiState.startTopMovies, uiState.startPopularSeries, popularAnime) {
+        interleaveHeroPicks(listOf(uiState.startTopMovies, uiState.startPopularSeries, popularAnime), perSource = 2)
+    }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
-        heroItem?.let { featured ->
+        if (heroItems.isNotEmpty()) {
             item(key = "start_hero") {
-                HeroBanner(
-                    anime = featured,
-                    isBookmarked = featured.cleanSlug in watchlistSlugs,
-                    onOpenDetail = { onOpenAnime(featured) },
-                    onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                )
+                HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
             }
         }
 
@@ -660,7 +659,7 @@ private fun StartTabContent(
                     items = items,
                     watchlistSlugs = watchlistSlugs,
                     onOpenAnime = onOpenAnime,
-                    onFocusAnime = { heroItem = it }
+                    onFocusAnime = {}
                 )
             }
         }
@@ -727,9 +726,8 @@ private fun HomeTabContent(
         return
     }
 
-    var heroAnime by remember(sections) {
-        mutableStateOf(sections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Animes zum Durchblättern
+    val heroItems = remember(sections) { randomHeroPicks(sections.flatMap { it.items }) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
     LazyColumn(
@@ -737,15 +735,10 @@ private fun HomeTabContent(
         contentPadding = PaddingValues(bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
-        // 1. Hero-Spotlight-Banner für den aktuell fokussierten Anime
-        heroAnime?.let { featured ->
+        // 1. Titelbild mit zufälligen Vorschlägen
+        if (heroItems.isNotEmpty()) {
             item(key = "hero_banner") {
-                HeroBanner(
-                    anime = featured,
-                    isBookmarked = featured.cleanSlug in watchlistSlugs,
-                    onOpenDetail = { onOpenAnime(featured) },
-                    onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                )
+                HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
             }
         }
 
@@ -789,7 +782,7 @@ private fun HomeTabContent(
                     items = watchlist,
                     watchlistSlugs = watchlistSlugs,
                     onOpenAnime = onOpenAnime,
-                    onFocusAnime = { heroAnime = it }
+                    onFocusAnime = {}
                 )
             }
         }
@@ -801,7 +794,7 @@ private fun HomeTabContent(
                 items = section.items,
                 watchlistSlugs = watchlistSlugs,
                 onOpenAnime = onOpenAnime,
-                onFocusAnime = { heroAnime = it }
+                onFocusAnime = {}
             )
         }
     }
@@ -827,6 +820,120 @@ private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
     HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug)
     SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug)
     else -> AniWorldScraper.fetchAnimeDetail(slug)
+}
+
+/** Anzahl der Vorschläge im Titelbild. */
+private const val HERO_COUNT = 6
+
+/** Zufällige Titel fürs Titelbild (nur mit Cover, ohne Doppelte). */
+private fun randomHeroPicks(pool: List<AnimeCard>, count: Int = HERO_COUNT): List<AnimeCard> =
+    pool.filter { it.coverUrl.isNotBlank() }.distinctBy { it.cleanSlug }.shuffled().take(count)
+
+/** Je [perSource] zufällige Titel aus jeder Quelle, abwechselnd angeordnet (Film, Serie, Anime, Film, …). */
+private fun interleaveHeroPicks(sources: List<List<AnimeCard>>, perSource: Int): List<AnimeCard> {
+    val picks = sources.map { randomHeroPicks(it, perSource) }
+    return (0 until perSource)
+        .flatMap { round -> picks.mapNotNull { it.getOrNull(round) } }
+        .distinctBy { it.cleanSlug }
+}
+
+/**
+ * Titelbild als Karussell: zeigt die Vorschläge nacheinander (alle 9 s, Pause solange die Maus
+ * darauf ist), mit Pfeilen links/rechts und Punkten zum direkten Springen.
+ */
+@Composable
+private fun HeroCarousel(
+    items: List<AnimeCard>,
+    watchlistSlugs: Set<String>,
+    onOpenAnime: (AnimeCard) -> Unit
+) {
+    var index by remember(items) { mutableStateOf(0) }
+    val safeIndex = index.coerceIn(0, items.lastIndex)
+    val hoverSource = remember { MutableInteractionSource() }
+    val isHovered by hoverSource.collectIsHoveredAsState()
+
+    fun previous() { index = (safeIndex - 1 + items.size) % items.size }
+    fun next() { index = (safeIndex + 1) % items.size }
+
+    LaunchedEffect(items, safeIndex, isHovered) {
+        if (items.size < 2 || isHovered) return@LaunchedEffect
+        delay(9_000)
+        next()
+    }
+
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .hoverable(hoverSource)
+    ) {
+        Crossfade(targetState = items[safeIndex], animationSpec = tween(450), label = "heroCarousel") { anime ->
+            HeroBanner(
+                anime = anime,
+                isBookmarked = anime.cleanSlug in watchlistSlugs,
+                onOpenDetail = { onOpenAnime(anime) },
+                onToggleWatchlist = { LocalStorage.toggleWatchlist(anime) },
+                loadDelayMs = 0
+            )
+        }
+
+        if (items.size > 1) {
+            HeroArrow(
+                icon = Icons.Filled.ChevronLeft,
+                description = "Vorheriger Vorschlag",
+                modifier = Modifier.align(Alignment.CenterStart).padding(start = 14.dp),
+                onClick = { previous() }
+            )
+            HeroArrow(
+                icon = Icons.Filled.ChevronRight,
+                description = "Nächster Vorschlag",
+                modifier = Modifier.align(Alignment.CenterEnd).padding(end = 14.dp),
+                onClick = { next() }
+            )
+            // Punkte: welcher Vorschlag gerade läuft, anklickbar
+            Row(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 64.dp, bottom = 26.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                items.indices.forEach { i ->
+                    val active = i == safeIndex
+                    Box(
+                        modifier = Modifier
+                            .width(if (active) 22.dp else 8.dp)
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .background(if (active) Color.White else Color.White.copy(alpha = 0.35f))
+                            .pointerHoverIcon(PointerIcon.Hand)
+                            .clickable { index = i }
+                    )
+                }
+            }
+        }
+    }
+}
+
+/** Runder Pfeil am Rand des Titelbilds. */
+@Composable
+private fun HeroArrow(icon: ImageVector, description: String, modifier: Modifier, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        modifier = modifier
+            .size(46.dp)
+            .clip(CircleShape)
+            .background(Color.Black.copy(alpha = if (hovered || focused) 0.75f else 0.45f))
+            .border(2.dp, if (focused) FocusBorder else Color.White.copy(alpha = 0.15f), CircleShape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(imageVector = icon, contentDescription = description, tint = Color.White, modifier = Modifier.size(30.dp))
+    }
 }
 
 /**
@@ -1647,9 +1754,8 @@ private fun CatalogBrowser(
     val isOverview = selectedCategoryPath == "OVERVIEW"
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
-    var heroItem by remember(overviewSections) {
-        mutableStateOf(overviewSections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
+    val heroItems = remember(overviewSections) { randomHeroPicks(overviewSections.flatMap { it.items }) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Horizontale Kategorie-Leiste (Suche, Übersicht, Genres...)
@@ -1720,14 +1826,9 @@ private fun CatalogBrowser(
                     contentPadding = PaddingValues(bottom = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    heroItem?.let { featured ->
+                    if (heroItems.isNotEmpty()) {
                         item(key = "catalog_hero") {
-                            HeroBanner(
-                                anime = featured,
-                                isBookmarked = featured.cleanSlug in watchlistSlugs,
-                                onOpenDetail = { onOpenAnime(featured) },
-                                onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                            )
+                            HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
                         }
                     }
 
@@ -1737,7 +1838,7 @@ private fun CatalogBrowser(
                             items = section.items,
                             watchlistSlugs = watchlistSlugs,
                             onOpenAnime = onOpenAnime,
-                            onFocusAnime = { heroItem = it }
+                            onFocusAnime = {}
                         )
                     }
                 }
