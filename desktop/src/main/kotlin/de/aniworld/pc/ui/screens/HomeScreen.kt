@@ -1290,8 +1290,16 @@ private fun TitleInfoPanel(
                     .padding(end = 36.dp),
                 verticalArrangement = Arrangement.Center
             ) {
-                // Eckdaten als kleine Kästchen: Jahr, Bewertung, FSK
+                // Eckdaten als kleine Kästchen: Art (Film/Serie/Anime), Jahr, Bewertung, FSK
                 val chips = buildList {
+                    add(
+                        when {
+                            anime.isSto -> "Serie"
+                            anime.isFilmpalast -> "Film"
+                            anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
+                            else -> "Anime"
+                        }
+                    )
                     detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
                     detail?.rating?.takeIf { it.isNotBlank() }?.let { add("★ $it") }
                     detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
