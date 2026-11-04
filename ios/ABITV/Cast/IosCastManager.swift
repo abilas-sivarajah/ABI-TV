@@ -399,8 +399,9 @@ public final class IosCastManager: ObservableObject {
     public func controlTv(_ action: String, arg: Int64 = 0) {
         guard let device = connectedDevice else { return }
         Task {
+            let payload: [String: Any] = ["action": action, "arg": arg]
             guard var req = authorizedRequest(device: device, path: "/control"),
-                  let body = try? JSONSerialization.data(withJSONObject: ["action": action, "arg": arg]) else {
+                  let body = try? JSONSerialization.data(withJSONObject: payload) else {
                 return
             }
             req.httpMethod = "POST"
@@ -506,7 +507,7 @@ public final class IosCastManager: ObservableObject {
         let targets = Array(broadcastIps)
 
         let discoveredPongs = await Task.detached(priority: .utility) { () -> [(ip: String, port: Int, name: String, model: String)] in
-            var results: [(String, Int, String, String)] = []
+            var results: [(ip: String, port: Int, name: String, model: String)] = []
             let fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)
             guard fd >= 0 else { return results }
             defer { close(fd) }
@@ -557,7 +558,7 @@ public final class IosCastManager: ObservableObject {
                     let name = parts.count > 2 ? parts[2] : "Fire TV Stick"
                     let model = parts.count > 3 ? parts[3] : ""
                     if !ip.isEmpty {
-                        results.append((ip, port, name, model))
+                        results.append((ip: ip, port: port, name: name, model: model))
                     }
                 }
             }
@@ -662,8 +663,10 @@ public final class IosCastManager: ObservableObject {
             let flags = Int32(interface.ifa_flags)
             let isUp = (flags & IFF_UP) != 0
             let isLoopback = (flags & IFF_LOOPBACK) != 0
+            // Mobilfunk: Dort steht kein Fernseher, und der Subnetz-Scan träfe fremde Geräte beim Netzbetreiber
+            let isCellular = String(cString: interface.ifa_name).hasPrefix("pdp_ip")
 
-            if isUp && !isLoopback, let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
+            if isUp && !isLoopback && !isCellular, let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET) {
                 var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
                 if getnameinfo(
                     addr,

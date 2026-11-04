@@ -253,6 +253,15 @@ public struct EpisodeItem: Codable, Hashable, Identifiable, Sendable {
         }
         return ""
     }
+
+    /// Kurzform für Karten und Buttons ("S2 E5"); Filme haben keine Staffel, also kein "SFilm E1".
+    public static func shortLabel(season: String, number: Int) -> String {
+        let lower = season.lowercased()
+        if lower == "film" || lower == "filme" {
+            return "Film"
+        }
+        return "S\(season) E\(number)"
+    }
 }
 
 public struct AnimeDetail: Codable, Hashable, Sendable {

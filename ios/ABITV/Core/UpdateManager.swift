@@ -136,7 +136,7 @@ public enum UpdateManager {
         let data: Data
         let httpResponse: HTTPURLResponse
         do {
-            let (d, resp) = try await HttpClient.shared.session.data(for: req)
+            let (d, resp) = try await HttpClient.perform(req)
             guard let http = resp as? HTTPURLResponse else {
                 return .failed("Ungültige Antwort von GitHub.")
             }

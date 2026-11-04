@@ -8,7 +8,7 @@ options:
 
 settings:
   base:
-    SWIFT_VERSION: "5.9"
+    SWIFT_VERSION: "5.0"
     IPHONEOS_DEPLOYMENT_TARGET: "16.0"
     TARGETED_DEVICE_FAMILY: "1,2"
 
@@ -21,8 +21,8 @@ targets:
       - path: ABITV
         excludes:
           - "Info.plist"
-    info:
-      path: ABITV/Info.plist
+    # Bewusst kein "info:"-Block: XcodeGen würde die Info.plist damit bei jedem Generieren überschreiben
+    # (ATS, Bonjour, Version und Anzeigename gingen verloren). INFOPLIST_FILE reicht.
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: de.aniworld.ios
@@ -37,3 +37,10 @@ targets:
         ENABLE_PREVIEWS: YES
         SUPPORTED_PLATFORMS: "iphoneos iphonesimulator"
         SUPPORTS_MACCATALYST: NO
+
+# Geteiltes Schema, damit "xcodebuild -scheme ABITV" auf dem Build-Server immer eines findet
+schemes:
+  ABITV:
+    build:
+      targets:
+        ABITV: all

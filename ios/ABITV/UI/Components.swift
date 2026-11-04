@@ -10,7 +10,7 @@ public struct CastActionButton: View {
 
     public var body: some View {
         Button(action: onClick) {
-            Image(systemName: castManager.connectedDevice != nil ? "tv.badge.wifi.fill" : "tv.badge.wifi")
+            Image(systemName: castManager.connectedDevice != nil ? "tv.fill" : "tv")
                 .font(.system(size: 18, weight: .semibold))
                 .foregroundColor(castManager.connectedDevice != nil ? AbiTheme.accentCyan : AbiTheme.textPrimary)
                 .frame(width: 36, height: 36)
@@ -134,9 +134,7 @@ public struct MobileContinueCard: View {
                         .foregroundColor(AbiTheme.textPrimary)
                         .lineLimit(1)
 
-                    let sText = entry.seasonLabel.caseInsensitiveCompare("Filme") == .orderedSame
-                        ? "Film"
-                        : "S\(entry.seasonLabel) E\(entry.episodeNumber)"
+                    let sText = EpisodeItem.shortLabel(season: entry.seasonLabel, number: entry.episodeNumber)
                     Text("\(sText) • \(entry.episodeTitle)")
                         .font(.system(size: 11))
                         .foregroundColor(AbiTheme.textSecondary)
@@ -199,7 +197,7 @@ public struct MiniRemoteBar: View {
                             if isLive {
                                 return "🔴 Live auf \(connected.name)"
                             } else if !s.episodeTitle.isEmpty {
-                                return "S\(s.seasonLabel) E\(s.episodeNumber): \(s.episodeTitle)"
+                                return "\(EpisodeItem.shortLabel(season: s.seasonLabel, number: s.episodeNumber)): \(s.episodeTitle)"
                             } else {
                                 return "Läuft auf \(connected.name)"
                             }
@@ -367,7 +365,8 @@ public struct CastBottomSheet: View {
                                         .fill(AbiTheme.accentEmerald)
                                         .frame(width: 8, height: 8)
                                 }
-                                Text("\(dev.hostAddress):\(dev.port)")
+                                // verbatim: Sonst setzt SwiftUI Tausenderpunkte in die Portnummer ("8.765")
+                                Text(verbatim: "\(dev.hostAddress):\(dev.port)")
                                     .font(.system(size: 12))
                                     .foregroundColor(AbiTheme.textSecondary)
                             }

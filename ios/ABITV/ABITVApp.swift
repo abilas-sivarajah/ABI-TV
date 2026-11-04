@@ -132,6 +132,8 @@ struct RootContainerView: View {
                     Spacer()
                 }
                 .transition(.move(edge: .top).combined(with: .opacity))
+                // Über Detailseite (1) und Player (2), sonst sind Cast-Meldungen dort unsichtbar
+                .zIndex(5)
             }
 
             if showIntro {
@@ -165,6 +167,8 @@ struct RootContainerView: View {
         }
         .task {
             castManager.initialize()
+            // Erst nach der Start-Animation prüfen, damit der Update-Dialog nicht über dem Intro aufgeht
+            try? await Task.sleep(nanoseconds: 3_200_000_000)
             if case .available(let release) = await UpdateManager.checkForUpdate(forceCheck: false) {
                 await MainActor.run {
                     self.availableRelease = release

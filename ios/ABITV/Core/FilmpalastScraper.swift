@@ -108,7 +108,11 @@ public enum FilmpalastScraper {
     }
 
     public static func parseArticles(_ html: String) -> [AnimeCard] {
-        HtmlParser.blocks(in: html, tag: "article").compactMap { parseArticle($0) }
+        // Doppelte Filme würden in den SwiftUI-Listen mit derselben ID kollidieren
+        var seen = Set<String>()
+        return HtmlParser.blocks(in: html, tag: "article")
+            .compactMap { parseArticle($0) }
+            .filter { seen.insert($0.slug).inserted }
     }
 
     private static func parseArticle(_ article: String) -> AnimeCard? {
@@ -211,17 +215,25 @@ public enum FilmpalastScraper {
             cover = "\(baseUrl)\(cover)"
         }
 
-        let descHtml = HtmlParser.firstMatch(in: html, pattern: #"<span\b[^>]*itemprop=["']description["'][^>]*>(.*?)</span>"#) ?? ""
+        let descHtml = HtmlParser.firstMatch(in: html, pattern: #"<span\b[^>]*itemprop=["']description["'][^>]*>(.*?)</span>"#)
+            ?? HtmlParser.firstMatch(in: html, pattern: #"<em\b[^>]*itemprop=["']name["'][^>]*>.*?</p>\s*<p\b[^>]*>(.*?)</p>"#)
+            ?? ""
         let desc = HtmlParser.stripTagsAndDecode(descHtml)
         let yearText = parseYear(html)
         let imdbRating = HtmlParser.firstMatch(in: html, pattern: #"Imdb:\s*([0-9.]+(?:/10)?)"#) ?? ""
 
+        // Nur der Block "Kategorien, Genre" des Films, sonst kämen alle Genres aus dem Seitenmenü mit
         var genres: [String] = []
         var seenGenres = Set<String>()
-        for m in HtmlParser.allMatches(in: html, pattern: #"<a\b[^>]*href=["'][^"']*/movies/genre/[^"']+["'][^>]*>(.*?)</a>"#) {
+        let genreBlock = HtmlParser.firstMatch(
+            in: html,
+            pattern: #"<li\b[^>]*>(?:(?!</li>).)*?<p\b[^>]*>[^<]*Genre(?:(?!</li>).)*</li>"#,
+            group: 0
+        ) ?? ""
+        for m in HtmlParser.allMatches(in: genreBlock, pattern: #"<a\b[^>]*href=["'][^"']*/search/genre/[^"']+["'][^>]*>(.*?)</a>"#) {
             guard m.count > 1 else { continue }
             let g = HtmlParser.stripTagsAndDecode(m[1])
-            if !g.isEmpty && seenGenres.insert(g).inserted {
+            if !g.isEmpty && g.caseInsensitiveCompare("Englisch") != .orderedSame && seenGenres.insert(g).inserted {
                 genres.append(g)
             }
         }
@@ -270,7 +282,8 @@ public enum FilmpalastScraper {
     }
 
     private static func parseYear(_ html: String) -> String {
-        HtmlParser.firstMatch(in: html, pattern: #"Veröffentlicht:\s*(\d{4})"#) ?? ""
+        // Auf dem sichtbaren Text suchen: Im Quelltext stehen oft Tags oder &ouml; dazwischen
+        HtmlParser.firstMatch(in: HtmlParser.stripTagsAndDecode(html), pattern: #"Veröffentlicht:\s*(\d{4})"#) ?? ""
     }
 
     public static func fetchHostersForFilm(_ streamPath: String) async -> [HosterLink] {
@@ -401,7 +414,8 @@ public enum FilmpalastScraper {
     public static func searchMovies(_ query: String) async -> [AnimeCard] {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 2 else { return [] }
-        let encoded = trimmed.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? trimmed
+        // Steht als ein Pfadsegment in der Adresse: Auch "/" und "&" im Suchbegriff müssen kodiert werden
+        let encoded = HttpClient.percentEncodeStrict(trimmed)
         let url = "\(baseUrl)/search/title/\(encoded)"
         guard let (_, html) = try? await HttpClient.getHtml(url, referer: "\(baseUrl)/") else {
             return []

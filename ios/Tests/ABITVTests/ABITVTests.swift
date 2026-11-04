@@ -386,4 +386,151 @@ final class ABITVTests: XCTestCase {
         XCTAssertEqual(season2.episodes[0].titleEn, "Beschreibung S2E1")
         XCTAssertEqual(season2.episodes[0].path, "hdfilme_tv:tt1234567:2:1")
     }
+
+    func testHdFilmeEpisodeWithExtraClassesAndNestedMarkup() {
+        let serialHtml = """
+        <style>._grp{display:none} ._ep{color:red} ._ept{font-weight:bold}</style>
+        <div class="_stab active" data-season="1">Staffel 1</div>
+        <div class="box _grp" data-season="1">
+            <div class="_ep is-new" data-episode="7">
+                <div><div class="_ept"><span>Mit</span> Span</div></div>
+                <div class="_epd">Text</div>
+            </div>
+        </div>
+        """
+        let detail = HdFilmeScraper.parseDeVideoSrcSeriesHtml(
+            slug: "hdfilme:/serien/x.html",
+            title: "X",
+            desc: "",
+            coverUrl: "",
+            backdropUrl: "",
+            imdbId: "tt1",
+            fallbackEmbed: nil,
+            selectedSeasonStr: nil,
+            serialHtml: serialHtml,
+            genres: ["Drama"]
+        )
+        XCTAssertEqual(detail.genres, ["Drama"])
+        XCTAssertEqual(detail.currentSeasonPath, "1")
+        XCTAssertEqual(detail.episodes.count, 1)
+        XCTAssertEqual(detail.episodes.first?.number, 7)
+        XCTAssertEqual(detail.episodes.first?.titleDe, "Mit Span")
+        XCTAssertEqual(detail.episodes.first?.titleEn, "Text")
+    }
+
+    func testHdFilmeCategoryUrlKeepsLeadingSlashOnLaterPages() {
+        XCTAssertEqual(HdFilmeScraper.categoryUrl("/action", page: 1), "https://hd-filme.one/action/")
+        XCTAssertEqual(HdFilmeScraper.categoryUrl("/action", page: 2), "https://hd-filme.one/action/page/2/")
+        XCTAssertEqual(HdFilmeScraper.categoryUrl("action/", page: 3), "https://hd-filme.one/action/page/3/")
+    }
+
+    func testHdFilmeParseMovieCardsFindsLinkInsideAndBesidePoster() {
+        let html = """
+        <div class="card"><a href="https://hd-filme.one/filme/interstellar-1.html" title="Interstellar"><img data-src="/uploads/thumb/300x450/a.jpg"></a></div>
+        <div class="card"><div class="poster"><img data-src="/uploads/thumb/300x450/b.jpg" alt="Dune hdfilme stream online poster"></div><a href="/serien/dune-2.html">Dune</a></div>
+        <a href="/filme/platzhalter.html"><img src="/templates/default-poster.svg" class="default-poster"></a>
+        <a href="/filme/logo.html"><img src="/templates/logo.png"></a>
+        <img data-src="/uploads/thumb/300x450/ohne-link.jpg">
+        """
+        let cards = HdFilmeScraper.parseMovieCards(html)
+        XCTAssertEqual(cards.map(\.slug), ["hdfilme:/filme/interstellar-1.html", "hdfilme:/serien/dune-2.html"])
+        XCTAssertEqual(cards.map(\.title), ["Interstellar", "Dune"])
+        XCTAssertEqual(cards.first?.coverUrl, "https://hd-filme.one/uploads/thumb/300x450/a.jpg")
+    }
+
+    // MARK: - Regressionen HTML-Parser
+
+    func testHtmlParserAttrDoesNotMatchPrefixedAttributes() {
+        let tag = #"<img data-src="/lazy.jpg" src="/real.jpg" data-title="falsch" title="richtig">"#
+        XCTAssertEqual(HtmlParser.attr(tag, "src"), "/real.jpg")
+        XCTAssertEqual(HtmlParser.attr(tag, "title"), "richtig")
+        XCTAssertEqual(HtmlParser.attr(#"<img data-src="/lazy.jpg">"#, "src"), "")
+        XCTAssertEqual(HtmlParser.attr("<div data-season=3 class=x>", "data-season"), "3")
+    }
+
+    func testHtmlParserDecodesAmpersandOnlyOnce() {
+        XCTAssertEqual(HtmlParser.decodeEntities("&amp;lt;b&amp;gt;"), "&lt;b&gt;")
+        XCTAssertEqual(HtmlParser.decodeEntities("Tom &amp; Jerry &#39;s"), "Tom & Jerry 's")
+    }
+
+    func testHtmlParserElementsMatchExactClassWithNestedTags() {
+        let html = """
+        <div class="row"><div class="_ep"><div><div class="_ept">Titel</div></div></div><div class='a _ep b'>Zwei</div></div>
+        <img class="_ep" src="/x.png"><p class="_epd">Nein</p>
+        """
+        let found = HtmlParser.elements(in: html, withClass: "_ep")
+        XCTAssertEqual(found.count, 3)
+        XCTAssertEqual(found[0].text, "Titel")
+        XCTAssertEqual(found[1].text, "Zwei")
+        XCTAssertEqual(found[2].html, #"<img class="_ep" src="/x.png">"#)
+    }
+
+    // MARK: - Regressionen Scraper
+
+    func testAniWorldHomeSectionsStayInsideTheirElements() {
+        let html = """
+        <div class="carousel animeCarousel"><h2>Neu</h2><div><a href="/anime/stream/a"><img data-src="/a.jpg"><h3>A</h3></a></div></div>
+        <div class="carousel"><h2>Beliebt</h2><a href="/anime/stream/b"><img data-src="/b.jpg"><h3>B</h3></a></div>
+        <div class="seriesListContainer"><a href="/anime/stream/c"><img data-src="/c.jpg"><h3>C</h3></a></div>
+        <footer><a href="/anime/stream/d"><img data-src="/d.jpg"><h3>D</h3></a></footer>
+        """
+        let sections = AniWorldScraper.parseHomeSections(html)
+        XCTAssertEqual(sections.map(\.title), ["Neu", "Beliebt", "👀 Das sehen andere Nutzer gerade"])
+        XCTAssertEqual(sections.map { $0.items.map(\.slug) }, [["a"], ["b"], ["c"]])
+    }
+
+    func testSerienStreamRowsKeepTheirOwnPathWhenOnclickPrecedesClass() {
+        let html = """
+        <h1>X</h1>
+        <table>
+        <tr onclick="window.location='/serie/x/staffel-1/episode-1'" class="episode-row"><td class="episode-number-cell">1</td></tr>
+        <tr onclick="window.location='/serie/x/staffel-1/episode-2'" class="episode-row aktiv"><td class="episode-number-cell">2</td></tr>
+        </table>
+        """
+        let detail = SerienStreamScraper.parseDetail(
+            cleanSlug: "x",
+            currentUrl: "https://serienstream.to/serie/x/staffel-1",
+            html: html
+        )
+        XCTAssertEqual(detail.episodes.map(\.path), [
+            "sto_x_s1_e1_/serie/x/staffel-1/episode-1",
+            "sto_x_s1_e2_/serie/x/staffel-1/episode-2"
+        ])
+    }
+
+    func testFilmpalastDetailReadsOnlyTheMoviesGenresAndYear() {
+        let html = """
+        <ul class="menu"><li><a href="/search/genre/Horror">Horror</a></li></ul>
+        <em itemprop="name">Dune</em>
+        <ul>
+            <li><p>Kategorien, Genre</p><a href="/search/genre/Action">Action</a><a href="/search/genre/Englisch">Englisch</a><a href="/search/genre/Sci-Fi">Sci-Fi</a></li>
+            <li><p>Ver&ouml;ffentlicht: <b>2021</b></p></li>
+        </ul>
+        """
+        let detail = FilmpalastScraper.parseDetail(path: "/stream/dune", html: html)
+        XCTAssertEqual(detail.title, "Dune")
+        XCTAssertEqual(detail.genres, ["Action", "Sci-Fi"])
+        XCTAssertEqual(detail.years, "2021")
+    }
+
+    func testFilmpalastArticlesAreDeduplicated() {
+        let article = #"<article><a href="/stream/x" title="X"><img src="/files/movies/x.jpg"></a></article>"#
+        XCTAssertEqual(FilmpalastScraper.parseArticles(article + article).count, 1)
+    }
+
+    // MARK: - Regressionen Hilfsfunktionen
+
+    func testEpisodeShortLabelHasNoSeasonForMovies() {
+        XCTAssertEqual(EpisodeItem.shortLabel(season: "2", number: 5), "S2 E5")
+        XCTAssertEqual(EpisodeItem.shortLabel(season: "Film", number: 1), "Film")
+        XCTAssertEqual(EpisodeItem.shortLabel(season: "Filme", number: 3), "Film")
+    }
+
+    func testPercentEncodeStrictEncodesUmlautsAndPathSeparators() {
+        XCTAssertEqual(HttpClient.percentEncodeStrict("AC/DC & Köln"), "AC%2FDC%20%26%20K%C3%B6ln")
+    }
+
+    func testHttpClientRewriteUrlAcceptsUnencodedAddresses() {
+        XCTAssertNotNil(HttpClient.rewriteUrl("https://example.com/Köln Film.html"))
+    }
 }

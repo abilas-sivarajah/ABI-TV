@@ -135,21 +135,26 @@ public struct DetailView: View {
 
     private var heroHeaderSection: some View {
         ZStack(alignment: .bottomLeading) {
-            AsyncImage(url: URL(string: currentBackdrop)) { phase in
-                switch phase {
-                case .success(let image):
-                    image
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .blur(radius: 12)
-                        .opacity(0.38)
-                default:
-                    AbiTheme.bgSurface
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .frame(height: 290)
-            .clipped()
+            // Als Overlay auf einer leeren Fläche: Ein direkt eingesetztes Fill-Bild wäre breiter als der
+            // Bildschirm und würde die ganze Detailseite mit aufziehen, sodass Inhalte seitlich abgeschnitten sind.
+            Color.clear
+                .frame(maxWidth: .infinity)
+                .frame(height: 290)
+                .overlay(
+                    AsyncImage(url: URL(string: currentBackdrop)) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image
+                                .resizable()
+                                .aspectRatio(contentMode: .fill)
+                                .blur(radius: 12)
+                                .opacity(0.38)
+                        default:
+                            AbiTheme.bgSurface
+                        }
+                    }
+                )
+                .clipped()
 
             LinearGradient(
                 colors: [
@@ -221,22 +226,20 @@ public struct DetailView: View {
 
         return VStack(alignment: .leading, spacing: 14) {
             HStack(spacing: 8) {
+                // Dieselbe Nummer in einer anderen Staffel ist eine andere Folge, deshalb Staffel mitprüfen
                 let targetEpisode: EpisodeItem? = {
-                    if let prog = savedProgress,
-                       let found = episodes.first(where: { $0.path == prog.episodePath || $0.number == prog.episodeNumber }) {
-                        return found
-                    }
-                    return episodes.first
+                    guard let prog = savedProgress else { return episodes.first }
+                    return episodes.first(where: { $0.path == prog.episodePath })
+                        ?? episodes.first(where: { $0.seasonLabel == prog.seasonLabel && $0.number == prog.episodeNumber })
+                        ?? episodes.first
                 }()
 
+                // Die Beschriftung nennt immer die Folge, die der Button wirklich startet
                 let playLabel: String = {
-                    if isSingleMovieItem {
-                        return "▶ Auf iPhone"
-                    } else if let prog = savedProgress {
-                        return "▶ S\(prog.seasonLabel) E\(prog.episodeNumber)"
-                    } else {
-                        return "▶ S1 E1"
+                    if !isSingleMovieItem, let ep = targetEpisode {
+                        return "▶ \(EpisodeItem.shortLabel(season: ep.seasonLabel, number: ep.number))"
                     }
+                    return "▶ Abspielen"
                 }()
 
                 Button {
@@ -480,7 +483,7 @@ public struct DetailView: View {
                 await MainActor.run {
                     self.detail = det
                     self.episodes = det.episodes
-                    self.selectedSeasonPath = det.seasons.first?.path ?? det.currentSeasonPath
+                    self.selectedSeasonPath = initialSeasonPath(for: det)
                     self.isLoading = false
                 }
             } catch {
@@ -492,8 +495,24 @@ public struct DetailView: View {
         }
     }
 
+    /// Die wirklich geladene Staffel markieren: Bei vielen Serien steht "Filme" zuerst in der Liste,
+    /// angezeigt werden aber die Folgen der ersten echten Staffel.
+    private func initialSeasonPath(for det: AnimeDetail) -> String {
+        if let current = det.seasons.first(where: { $0.path == det.currentSeasonPath }) {
+            return current.path
+        }
+        if let label = det.episodes.first?.seasonLabel,
+           let active = det.seasons.first(where: { $0.label == label }) {
+            return active.path
+        }
+        return det.seasons.first(where: { !$0.isMovies })?.path
+            ?? det.seasons.first?.path
+            ?? det.currentSeasonPath
+    }
+
     private func loadSeasonEpisodes(season: SeasonLink) {
         isLoadingEpisodes = true
+        errorMessage = nil
         Task {
             do {
                 let det: AnimeDetail
@@ -505,11 +524,16 @@ public struct DetailView: View {
                     det = try await AniWorldScraper.fetchAnimeDetail(animeSlug, seasonPathOverride: season.path)
                 }
                 await MainActor.run {
+                    // Inzwischen eine andere Staffel gewählt: Diese Antwort ist veraltet
+                    guard self.selectedSeasonPath == season.path else { return }
                     self.episodes = det.episodes
                     self.isLoadingEpisodes = false
                 }
             } catch {
                 await MainActor.run {
+                    guard self.selectedSeasonPath == season.path else { return }
+                    // Sonst stünden unter der neu gewählten Staffel weiter die Folgen der alten
+                    self.errorMessage = error.localizedDescription
                     self.isLoadingEpisodes = false
                 }
             }
@@ -569,7 +593,7 @@ private struct EpisodeRowView: View {
                         .fill(isWatched ? AbiTheme.accentBlue.opacity(0.28) : AbiTheme.bgElevated)
                         .frame(width: 40, height: 40)
 
-                    Text(isWatched ? "✓" : (isMovie ? "▶" : "\(episode.number)"))
+                    Text(verbatim: isWatched ? "✓" : (isMovie ? "▶" : String(episode.number)))
                         .font(.system(size: 13, weight: .bold))
                         .foregroundColor(isWatched ? AbiTheme.accentCyan : AbiTheme.textPrimary)
                 }

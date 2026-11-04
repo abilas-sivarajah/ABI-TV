@@ -71,12 +71,17 @@ public enum HdFilmeScraper {
     }
 
     public static func fetchCategory(_ categoryPath: String, page: Int = 1) async throws -> [AnimeCard] {
-        let rel = categoryPath.hasPrefix("/") ? categoryPath : "/\(categoryPath)"
-        let url = page <= 1
-            ? "\(baseUrl)\(rel)/"
-            : "\(baseUrl)\(rel.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/page/\(page)/"
+        let url = categoryUrl(categoryPath, page: page)
         let (_, html) = try await HttpClient.getHtml(url, referer: "\(baseUrl)/")
         return parseMovieCards(html)
+    }
+
+    public static func categoryUrl(_ categoryPath: String, page: Int) -> String {
+        var rel = categoryPath.hasPrefix("/") ? categoryPath : "/\(categoryPath)"
+        while rel.hasSuffix("/") {
+            rel.removeLast()
+        }
+        return page <= 1 ? "\(baseUrl)\(rel)/" : "\(baseUrl)\(rel)/page/\(page)/"
     }
 
     public static func searchMovies(_ query: String) async -> [AnimeCard] {
@@ -99,36 +104,33 @@ public enum HdFilmeScraper {
     public static func parseMovieCards(_ html: String) -> [AnimeCard] {
         var cards: [AnimeCard] = []
         var seen = Set<String>()
+        let tags = HtmlParser.allTags(in: html)
 
-        let aMatches = HtmlParser.allMatches(
-            in: html,
-            pattern: #"(<a\b[^>]*href=["'][^"']*\.html["'][^>]*>.*?</a>)"#
-        )
-        for m in aMatches {
-            guard let aHtml = m.first else { continue }
-            let href = HtmlParser.attr(aHtml, "href")
-            if href.isEmpty || (!href.contains("/filme") && !href.contains("/serien")) { continue }
+        // Vom Poster ausgehen wie HdFilmeScraper.kt: Der Link umschließt es nicht auf jeder Seite
+        for (index, img) in tags.enumerated() where img.name == "img" {
+            let dataSrc = HtmlParser.attr(img.text, "data-src")
+            guard dataSrc.contains("/uploads/thumb/") || HtmlParser.hasClass(img.text, "default-poster") else { continue }
 
-            guard let imgTag = HtmlParser.firstMatch(in: aHtml, pattern: #"(<img\b[^>]*>)"#) else { continue }
-            let rawImg = !HtmlParser.attr(imgTag, "data-src").isEmpty
-                ? HtmlParser.attr(imgTag, "data-src")
-                : HtmlParser.attr(imgTag, "src")
+            let rawImg = dataSrc.isEmpty ? HtmlParser.attr(img.text, "src") : dataSrc
             if rawImg.isEmpty || rawImg.contains("default-poster.svg") { continue }
+
+            guard let linkTag = movieLink(forImageAt: index, in: tags) else { continue }
+            let href = HtmlParser.attr(linkTag, "href")
+            if !href.contains("/filme") && !href.contains("/serien") { continue }
 
             let relPath = href.replacingOccurrences(of: baseUrl, with: "")
             let slug = "\(prefix)\(relPath)"
             guard seen.insert(slug).inserted else { continue }
 
-            var rawTitle = HtmlParser.attr(aHtml, "title")
+            var rawTitle = HtmlParser.attr(linkTag, "title")
             if rawTitle.isEmpty {
-                rawTitle = HtmlParser.attr(imgTag, "alt")
-                    .replacingOccurrences(of: "poster", with: "")
-                    .replacingOccurrences(of: "hdfilme stream online", with: "")
-                    .replacingOccurrences(of: "hdfilme", with: "")
+                rawTitle = HtmlParser.attr(img.text, "alt")
+                    .replacingOccurrences(
+                        of: #"(?:\s*(?:hdfilme stream online|hdfilme|poster))+\s*$"#,
+                        with: "",
+                        options: [.regularExpression, .caseInsensitive]
+                    )
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-            }
-            if rawTitle.isEmpty {
-                rawTitle = HtmlParser.stripTagsAndDecode(aHtml)
             }
             guard !rawTitle.isEmpty else { continue }
 
@@ -142,6 +144,19 @@ public enum HdFilmeScraper {
             )
         }
         return cards
+    }
+
+    /// Der Film-Link zu einem Poster: ein umschließendes `<a>`, sonst der erste Link im übernächsten Elternelement.
+    private static func movieLink(forImageAt index: Int, in tags: [HtmlTag]) -> String? {
+        func isMovieLink(_ tag: HtmlTag) -> Bool {
+            tag.name == "a" && !tag.isClosing && HtmlParser.attr(tag.text, "href").contains(".html")
+        }
+        let ancestors = HtmlParser.ancestorIndices(ofTagAt: index, in: tags)
+        if let enclosing = ancestors.first(where: { isMovieLink(tags[$0]) }) {
+            return tags[enclosing].text
+        }
+        guard ancestors.count >= 2 else { return nil }
+        return HtmlParser.descendants(ofTagAt: ancestors[1], in: tags).first(where: isMovieLink)?.text
     }
 
     public static func fetchDetail(
@@ -175,7 +190,7 @@ public enum HdFilmeScraper {
             .compactMap { m -> String? in
                 guard m.count > 1 else { return nil }
                 let text = HtmlParser.stripTagsAndDecode(m[1])
-                return text.count > 60 ? text : nil
+                return text.count > 80 ? text : nil
             }
             .first
         let desc = pDesc ?? metaDesc
@@ -185,14 +200,13 @@ public enum HdFilmeScraper {
 
         var genres: [String] = []
         var seenGenres = Set<String>()
-        for m in HtmlParser.allMatches(in: html, pattern: #"<span[^>]*>\s*Genre\s*:\s*</span>(.*?)</div"#) {
-            guard m.count > 1 else { continue }
-            for aMatch in HtmlParser.allMatches(in: m[1], pattern: #"<a[^>]*>(.*?)</a>"#) {
-                guard aMatch.count > 1 else { continue }
-                let g = HtmlParser.stripTagsAndDecode(aMatch[1])
-                if !g.isEmpty && seenGenres.insert(g).inserted {
-                    genres.append(g)
-                }
+        let notGenres: Set<String> = ["Home", "Alle Filme", "Serien", "Filme im Kino", "Jahres"]
+        for m in HtmlParser.allMatches(in: html, pattern: #"(<a\b[^>]*href=["']https://hd-filme\.one/[^"']*["'][^>]*>)(.*?)</a>"#) {
+            guard m.count > 2, !HtmlParser.attr(m[1], "title").isEmpty else { continue }
+            let g = HtmlParser.stripTagsAndDecode(m[2])
+            if (3...18).contains(g.count) && !notGenres.contains(g) && seenGenres.insert(g).inserted {
+                genres.append(g)
+                if genres.count == 5 { break }
             }
         }
 
@@ -233,6 +247,7 @@ public enum HdFilmeScraper {
                 desc: desc,
                 coverUrl: coverUrl,
                 backdropUrl: backdropUrl,
+                genres: genres,
                 imdbId: imdbId,
                 fallbackEmbed: fallbackEmbed,
                 selectedSeasonStr: seasonPathOverride
@@ -274,6 +289,7 @@ public enum HdFilmeScraper {
         desc: String,
         coverUrl: String,
         backdropUrl: String,
+        genres: [String],
         imdbId: String,
         fallbackEmbed: String?,
         selectedSeasonStr: String?
@@ -294,7 +310,8 @@ public enum HdFilmeScraper {
             imdbId: imdbId,
             fallbackEmbed: fallbackEmbed,
             selectedSeasonStr: selectedSeasonStr,
-            serialHtml: serialHtml
+            serialHtml: serialHtml,
+            genres: genres
         )
     }
 
@@ -307,7 +324,8 @@ public enum HdFilmeScraper {
         imdbId: String,
         fallbackEmbed: String?,
         selectedSeasonStr: String?,
-        serialHtml: String
+        serialHtml: String,
+        genres: [String] = []
     ) -> AnimeDetail {
         var seasons: [SeasonLink] = []
         var seenSeasons = Set<String>()
@@ -323,68 +341,45 @@ public enum HdFilmeScraper {
             ?? seasons.first?.label
             ?? "1"
 
-        // Isoliere die Episoden-Gruppe `_grp[data-season="<activeSeason>"]`, damit Episoden anderer
-        // Staffeln nicht vermischt werden und verschachtelte `_ept` / `_epd` Divs erhalten bleiben.
-        let grpParts = serialHtml.components(separatedBy: "_grp")
-        var activeGroupChunk: String?
-        if grpParts.count > 1 {
-            for part in grpParts.dropFirst() {
-                let openTagHeader = String(part.prefix(240))
-                let grpSeason = HtmlParser.attr(openTagHeader, "data-season")
-                if grpSeason == activeSeason {
-                    activeGroupChunk = part
-                    break
-                }
-            }
-        }
-        let targetChunk = activeGroupChunk ?? serialHtml
+        // Nur die Gruppe `._grp[data-season="<activeSeason>"]`, damit sich Staffeln nicht vermischen.
+        // `elements` trifft die Klasse exakt: `_ep` passt nicht auf `_ept`/`_epd`, die im Element erhalten bleiben.
+        let activeGroup = HtmlParser.elements(in: serialHtml, withClass: "_grp")
+            .first { HtmlParser.attr($0.openTag, "data-season") == activeSeason }
+        let targetChunk = activeGroup?.html ?? serialHtml
 
         var episodes: [EpisodeItem] = []
-        let epRawParts = targetChunk.components(separatedBy: "_ep")
-        if epRawParts.count > 1 {
-            for part in epRawParts.dropFirst() {
-                let trimmed = part.trimmingCharacters(in: .whitespacesAndNewlines)
-                // Überspringe Unterklassen wie `_ept` oder `_epd`
-                if let firstChar = trimmed.first,
-                   firstChar.isLetter || firstChar.isNumber || firstChar == "-" || firstChar == "_" {
-                    continue
-                }
-                let epChunk = String(part.prefix(2000))
-                let sNumAttr = HtmlParser.attr(epChunk, "data-season")
-                let sNum = sNumAttr.isEmpty ? activeSeason : sNumAttr
-                guard sNum == activeSeason else { continue }
+        for ep in HtmlParser.elements(in: targetChunk, withClass: "_ep") {
+            let sNumAttr = HtmlParser.attr(ep.openTag, "data-season")
+            let sNum = sNumAttr.isEmpty ? activeSeason : sNumAttr
+            guard sNum == activeSeason else { continue }
 
-                let eNumAttr = HtmlParser.attr(epChunk, "data-episode")
-                guard !eNumAttr.isEmpty || epChunk.contains("_ept") else { continue }
-                let eNum = Int(eNumAttr) ?? (episodes.count + 1)
+            let eNumAttr = HtmlParser.attr(ep.openTag, "data-episode")
+            let eNum = Int(eNumAttr) ?? (episodes.count + 1)
 
-                let epTitle = HtmlParser.firstMatch(in: epChunk, pattern: #"class=["'][^"']*_ept[^"']*["'][^>]*>(.*?)</"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
-                let epDesc = HtmlParser.firstMatch(in: epChunk, pattern: #"class=["'][^"']*_epd[^"']*["'][^>]*>(.*?)</"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
-                let epKey = "hdfilme_tv:\(imdbId):\(sNum):\(eNum)"
+            let epTitle = HtmlParser.elements(in: ep.html, withClass: "_ept").first?.text ?? ""
+            let epDesc = HtmlParser.elements(in: ep.html, withClass: "_epd").first?.text ?? ""
+            let epKey = "hdfilme_tv:\(imdbId):\(sNum):\(eNum)"
 
-                if let fb = fallbackEmbed, !fb.isEmpty {
-                    lock.withLock {
-                        if episodeSourcesCache[epKey] == nil {
-                            episodeSourcesCache[epKey] = [
-                                HosterLink(hosterName: "Stream", langKey: LanguageOption.gerDub.langKey, language: .gerDub, redirectPath: fb)
-                            ]
-                        }
+            if let fb = fallbackEmbed, !fb.isEmpty {
+                lock.withLock {
+                    if episodeSourcesCache[epKey] == nil {
+                        episodeSourcesCache[epKey] = [
+                            HosterLink(hosterName: "Stream", langKey: LanguageOption.gerDub.langKey, language: .gerDub, redirectPath: fb)
+                        ]
                     }
                 }
-
-                episodes.append(
-                    EpisodeItem(
-                        number: eNum,
-                        seasonLabel: sNum,
-                        path: epKey,
-                        titleDe: epTitle.isEmpty ? "Folge \(eNum)" : epTitle,
-                        titleEn: String(epDesc.prefix(90)),
-                        languages: [.gerDub]
-                    )
-                )
             }
+
+            episodes.append(
+                EpisodeItem(
+                    number: eNum,
+                    seasonLabel: sNum,
+                    path: epKey,
+                    titleDe: epTitle.isEmpty ? "Folge \(eNum)" : epTitle,
+                    titleEn: String(epDesc.prefix(90)),
+                    languages: [.gerDub]
+                )
+            )
         }
 
         return AnimeDetail(
@@ -396,7 +391,7 @@ public enum HdFilmeScraper {
             years: "",
             ageRating: "Serie • HD",
             rating: "",
-            genres: [],
+            genres: genres,
             seasons: seasons,
             currentSeasonPath: activeSeason,
             episodes: episodes

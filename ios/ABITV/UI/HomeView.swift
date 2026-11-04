@@ -23,9 +23,10 @@ public enum MobileTab: Int, CaseIterable, Identifiable {
 
     public var iconName: String {
         switch self {
-        case .home: return "sparkles.tv"
+        // Nur Symbole, die es schon unter iOS 16 gibt: Ein unbekanntes Symbol bleibt einfach unsichtbar
+        case .home: return "sparkles"
         case .movies: return "film"
-        case .series: return "tv.inset.filled"
+        case .series: return "tv"
         case .liveTv: return "antenna.radiowaves.left.and.right"
         case .search: return "magnifyingglass"
         case .watchlist: return "bookmark.fill"
@@ -78,6 +79,7 @@ public struct HomeView: View {
     @State private var showSettingsSheet: Bool = false
     @State private var isCheckingUpdate: Bool = false
     @State private var updateStatusMessage: String? = nil
+    @State private var pendingUpdateRelease: AppRelease? = nil
 
     public init(
         onSelectItem: @escaping (AnimeCard) -> Void,
@@ -136,7 +138,14 @@ public struct HomeView: View {
                 break
             }
         }
-        .sheet(isPresented: $showSettingsSheet) {
+        .sheet(isPresented: $showSettingsSheet, onDismiss: {
+            // Der Update-Dialog darf erst erscheinen, wenn dieses Sheet ganz geschlossen ist,
+            // sonst verwirft iOS die zweite Präsentation
+            if let release = pendingUpdateRelease {
+                pendingUpdateRelease = nil
+                onTriggerUpdate(release)
+            }
+        }) {
             settingsSheetContent
                 .presentationDetents([.medium, .large])
         }
@@ -237,7 +246,7 @@ public struct HomeView: View {
             if isLoadingHome {
                 loadingStateView(text: "Lade Animes von AniWorld...")
             } else if let error = homeError {
-                errorStateView(message: error, onRetry: loadAnimeCatalog)
+                errorStateView(message: error, onRetry: { loadAnimeCatalog() })
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 20) {
@@ -250,7 +259,7 @@ public struct HomeView: View {
                             continueWatchingSection(entries: animeContinue)
                         }
 
-                        let animeChips = [("OVERVIEW", "🔥 Highlights")] + AniWorldScraper.genreCategories.map { ($0.path, $0.label) }
+                        let animeChips = [("OVERVIEW", "🔥 Highlights")] + AniWorldScraper.genreCategories
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(animeChips, id: \.0) { path, label in
@@ -306,7 +315,7 @@ public struct HomeView: View {
                     .padding(.vertical, 12)
                 }
                 .refreshable {
-                    loadAnimeCatalog()
+                    await MainActor.run { loadAnimeCatalog() }
                 }
             }
         }
@@ -412,7 +421,7 @@ public struct HomeView: View {
                     .padding(.vertical, 12)
                 }
                 .refreshable {
-                    loadMoviesCatalog()
+                    await MainActor.run { loadMoviesCatalog() }
                 }
             }
         }
@@ -425,7 +434,7 @@ public struct HomeView: View {
             if isLoadingSeries && seriesSections.isEmpty {
                 loadingStateView(text: "Lade Serien von S.to...")
             } else if let error = seriesError {
-                errorStateView(message: error, onRetry: loadSeriesCatalog)
+                errorStateView(message: error, onRetry: { loadSeriesCatalog() })
             } else {
                 ScrollView(.vertical, showsIndicators: false) {
                     LazyVStack(alignment: .leading, spacing: 20) {
@@ -437,7 +446,7 @@ public struct HomeView: View {
                             continueWatchingSection(entries: seriesContinue)
                         }
 
-                        let seriesChips = [("OVERVIEW", "🔥 Highlights")] + SerienStreamScraper.categories.map { ($0.path, $0.label) }
+                        let seriesChips = [("OVERVIEW", "🔥 Highlights")] + SerienStreamScraper.categories
                         ScrollView(.horizontal, showsIndicators: false) {
                             HStack(spacing: 8) {
                                 ForEach(seriesChips, id: \.0) { path, label in
@@ -493,7 +502,7 @@ public struct HomeView: View {
                     .padding(.vertical, 12)
                 }
                 .refreshable {
-                    loadSeriesCatalog()
+                    await MainActor.run { loadSeriesCatalog() }
                 }
             }
         }
@@ -566,7 +575,7 @@ public struct HomeView: View {
             } else if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
                 VStack(spacing: 8) {
                     Spacer()
-                    Image(systemName: "sparkle.magnifyingglass")
+                    Image(systemName: "magnifyingglass")
                         .font(.system(size: 38))
                         .foregroundColor(AbiTheme.textMuted)
                     Text("Gib mindestens 2 Zeichen ein, um AniWorld, S.to, Filmpalast & HD-Filme zu durchsuchen.")
@@ -804,8 +813,8 @@ public struct HomeView: View {
                             isCheckingUpdate = false
                             switch result {
                             case .available(let release):
+                                pendingUpdateRelease = release
                                 showSettingsSheet = false
-                                onTriggerUpdate(release)
                             case .upToDate:
                                 updateStatusMessage = "Du nutzt bereits die aktuellste Version (v\(UpdateManager.getCurrentVersionName()))."
                             case .failed(let msg):
@@ -854,6 +863,10 @@ public struct HomeView: View {
                 let sections = try await AniWorldScraper.fetchHomeCatalog()
                 await MainActor.run {
                     self.animeSections = sections
+                    // Eine Sperrseite statt des Katalogs liefert keinen Netzwerkfehler, aber auch keine Inhalte
+                    if sections.isEmpty {
+                        self.homeError = "AniWorld hat keine Inhalte geliefert. Die Seite ist vielleicht gerade nicht erreichbar."
+                    }
                     self.isLoadingHome = false
                 }
             } catch {
@@ -868,8 +881,10 @@ public struct HomeView: View {
     private func loadAnimeCategory(path: String) {
         isLoadingAnimeCategory = true
         Task {
-            let items = (try? await AniWorldScraper.fetchGenrePage(path)) ?? []
+            let items = (try? await AniWorldScraper.fetchCategoryOrGenre(path)) ?? []
             await MainActor.run {
+                // Inzwischen eine andere Kategorie gewählt: Diese Antwort ist veraltet
+                guard self.selectedAnimeCategory == path else { return }
                 self.animeCategoryItems = items
                 self.isLoadingAnimeCategory = false
             }
@@ -904,6 +919,16 @@ public struct HomeView: View {
         Task {
             let items = await FilmpalastScraper.fetchCategory(path, page: page)
             await MainActor.run {
+                if page > 1 {
+                    self.isLoadingMoreMovies = false
+                }
+                // Inzwischen eine andere Kategorie gewählt: Diese Antwort ist veraltet
+                guard self.selectedMovieCategory == path else {
+                    if self.selectedMovieCategory == "OVERVIEW" {
+                        self.isLoadingMovies = false
+                    }
+                    return
+                }
                 if page == 1 {
                     self.movieCategoryItems = items
                     self.moviePage = 1
@@ -913,7 +938,6 @@ public struct HomeView: View {
                     let fresh = items.filter { seen.insert($0.cleanSlug).inserted }
                     self.movieCategoryItems.append(contentsOf: fresh)
                     self.moviePage = page
-                    self.isLoadingMoreMovies = false
                 }
             }
         }
@@ -940,6 +964,8 @@ public struct HomeView: View {
         Task {
             let items = (try? await SerienStreamScraper.fetchCategory(path)) ?? []
             await MainActor.run {
+                // Inzwischen eine andere Kategorie gewählt: Diese Antwort ist veraltet
+                guard self.selectedSeriesCategory == path else { return }
                 self.seriesCategoryItems = items
                 self.isLoadingSeriesCategory = false
             }

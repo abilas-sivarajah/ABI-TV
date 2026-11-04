@@ -41,28 +41,24 @@ public enum AniWorldScraper {
         var sections: [CatalogSection] = []
 
         // 1. Carousels auf der Startseite ("Beliebt bei AniWorld", "Neue Animes", "Derzeit beliebt")
-        let carouselParts = html.components(separatedBy: "class=\"carousel\"")
-        if carouselParts.count > 1 {
-            for (idx, part) in carouselParts.dropFirst().enumerated() {
-                let heading = HtmlParser.firstMatch(in: part, pattern: #"<h2[^>]*>(.*?)</h2>"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
-                let cards = parseCoverListItems(part)
-                if !heading.isEmpty && !cards.isEmpty {
-                    sections.append(
-                        CatalogSection(
-                            id: "home_carousel_\(idx)",
-                            title: heading,
-                            items: cards
-                        )
+        for (idx, carousel) in HtmlParser.elements(in: html, withClass: "carousel").enumerated() {
+            let heading = HtmlParser.firstMatch(in: carousel.html, pattern: #"<h2[^>]*>(.*?)</h2>"#)
+                .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
+            let cards = parseCoverListItems(carousel.html)
+            if !heading.isEmpty && !cards.isEmpty {
+                sections.append(
+                    CatalogSection(
+                        id: "home_carousel_\(idx)",
+                        title: heading,
+                        items: cards
                     )
-                }
+                )
             }
         }
 
         // 2. "Das sehen andere AniWorld Nutzer"
-        let containerParts = html.components(separatedBy: "seriesListContainer")
-        if let lastContainer = containerParts.last, containerParts.count > 1 {
-            let watchingNow = parseCoverListItems(lastContainer)
+        if let lastContainer = HtmlParser.elements(in: html, withClass: "seriesListContainer").last {
+            let watchingNow = parseCoverListItems(lastContainer.html)
             if !watchingNow.isEmpty {
                 sections.append(
                     CatalogSection(
@@ -353,8 +349,8 @@ public enum AniWorldScraper {
             let epPath = HtmlParser.attr(aTag, "href")
             guard !epPath.isEmpty else { continue }
 
-            let metaEpNum = HtmlParser.firstMatch(in: tr, pattern: #"itemprop=["']episodeNumber["'][^>]*content=["'](\d+)["']"#)
-                .flatMap { Int($0) }
+            let metaEpNum = HtmlParser.firstMatch(in: tr, pattern: #"(<meta\b[^>]*itemprop=["']episodeNumber["'][^>]*>)"#)
+                .flatMap { Int(HtmlParser.attr($0, "content")) }
             let dataEpNum = Int(HtmlParser.attr(tr, "data-episode-season-id"))
             let epNum = metaEpNum ?? dataEpNum ?? (idx + 1)
 

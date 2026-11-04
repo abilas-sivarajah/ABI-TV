@@ -29,7 +29,7 @@
 	</dict>
 	<key>NSBonjourServices</key>
 	<array>
-		<string>_aniworldcast._tcp</string>
+		<string>_aniworldtv._tcp</string>
 	</array>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>ABI TV sucht im lokalen WLAN nach deinem Fernseher oder PC, um Streams direkt auf dem großen Bildschirm abzuspielen.</string>
@@ -38,11 +38,12 @@
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
 	</dict>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<key>UILaunchScreen</key>
-	<dict>
-		<key>UIColorName</key>
-		<string></string>
-	</dict>
+	<dict/>
 	<key>UIStatusBarStyle</key>
 	<string>UIStatusBarStyleLightContent</string>
 	<key>UISupportedInterfaceOrientations</key>

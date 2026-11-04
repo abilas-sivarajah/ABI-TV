@@ -1,6 +1,9 @@
 import Foundation
 #if canImport(WebKit)
 import WebKit
+#if canImport(UIKit)
+import UIKit
+#endif
 
 /// Unsichtbare `WKWebView` für Hoster, die ihren Stream erst nach JavaScript-Ausführung preisgeben
 /// (entspricht `WebViewStreamExtractor.kt` auf Android).
@@ -64,6 +67,7 @@ private final class ExtractionSession: NSObject, WKNavigationDelegate, WKScriptM
         wv.customUserAgent = HttpClient.userAgent
         wv.navigationDelegate = self
         self.webView = wv
+        attachToWindow(wv)
 
         var req = URLRequest(url: url)
         req.setValue(referer, forHTTPHeaderField: "Referer")
@@ -73,6 +77,20 @@ private final class ExtractionSession: NSObject, WKNavigationDelegate, WKScriptM
             try? await Task.sleep(nanoseconds: BrowserStreamHooks.timeoutMs * 1_000_000)
             self?.complete(with: nil)
         }
+    }
+
+    /// Ohne Fenster bremst iOS JavaScript-Timer und Player der WebView aus, der Stream käme nie zustande.
+    /// Deshalb unsichtbar hinter die App-Oberfläche legen statt frei schweben zu lassen.
+    private func attachToWindow(_ webView: WKWebView) {
+        #if canImport(UIKit)
+        let windows = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+        guard let window = windows.first(where: { $0.isKeyWindow }) ?? windows.first else { return }
+        webView.isUserInteractionEnabled = false
+        webView.alpha = 0.01
+        window.insertSubview(webView, at: 0)
+        #endif
     }
 
     func userContentController(
@@ -131,6 +149,9 @@ private final class ExtractionSession: NSObject, WKNavigationDelegate, WKScriptM
         webView?.stopLoading()
         webView?.configuration.userContentController.removeScriptMessageHandler(forName: BrowserStreamHooks.bridgeName)
         webView?.navigationDelegate = nil
+        #if canImport(UIKit)
+        webView?.removeFromSuperview()
+        #endif
         webView = nil
         continuation?.resume(returning: result)
         continuation = nil

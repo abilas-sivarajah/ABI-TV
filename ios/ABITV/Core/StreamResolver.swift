@@ -49,12 +49,46 @@ public enum BrowserStreamHooks {
             return fn;
         }
         if (origJw) { window.jwplayer = wrapJw(origJw); }
+        // WKWebView meldet nur Seitenaufrufe an die App, keine Netzwerk-Anfragen aus JavaScript
+        // (anders als shouldInterceptRequest auf Android). Darum XHR und fetch hier mitlesen.
+        function checkRequestUrl(url) {
+            try {
+                if (!url) return;
+                var text = String(url);
+                var lower = text.toLowerCase();
+                if (lower.indexOf('.m3u8') === -1 && lower.indexOf('/hls2/') === -1 && lower.indexOf('.mp4') === -1) return;
+                reportStream(new URL(text, location.href).href, location.href);
+            } catch (e) {}
+        }
+        try {
+            var origOpen = XMLHttpRequest.prototype.open;
+            XMLHttpRequest.prototype.open = function(method, url) {
+                checkRequestUrl(url);
+                return origOpen.apply(this, arguments);
+            };
+        } catch (e) {}
+        try {
+            if (window.fetch) {
+                var origFetch = window.fetch;
+                window.fetch = function(input) {
+                    checkRequestUrl(typeof input === 'string' ? input : (input && input.url));
+                    return origFetch.apply(this, arguments);
+                };
+            }
+        } catch (e) {}
         setInterval(function() {
             try {
                 var vids = document.getElementsByTagName('video');
                 for (var i = 0; i < vids.length; i++) {
-                    if (vids[i].src && vids[i].src.indexOf('http') === 0) {
-                        reportStream(vids[i].src, location.href);
+                    var vidSrc = vids[i].currentSrc || vids[i].src;
+                    if (vidSrc && vidSrc.indexOf('http') === 0) {
+                        reportStream(vidSrc, location.href);
+                    }
+                }
+                var sources = document.querySelectorAll('video source');
+                for (var s = 0; s < sources.length; s++) {
+                    if (sources[s].src && sources[s].src.indexOf('http') === 0) {
+                        reportStream(sources[s].src, location.href);
                     }
                 }
             } catch (e) {}

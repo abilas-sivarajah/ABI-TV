@@ -16,6 +16,8 @@ public final class HttpClient: @unchecked Sendable {
 
     public let session: URLSession
     private let redirectHandler = RedirectHandler()
+    private let dnsLock = NSLock()
+    private var encryptedDnsActive = false
 
     private final class RedirectHandler: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
         func urlSession(
@@ -37,24 +39,10 @@ public final class HttpClient: @unchecked Sendable {
     }
 
     private init() {
-        // DNS-over-HTTPS (Cloudflare 1.1.1.1 / 1.0.0.1) als primären Resolver konfigurieren, damit
-        // CUII-DNS-Sperren im Mobilfunk und WLAN automatisch umgangen werden (wie UnblockedDns in HttpClient.kt),
-        // aber bei blockiertem DoH-Port sauber auf System-DNS zurückgefallen werden kann.
-        #if canImport(Network)
-        if let dohUrl = URL(string: "https://cloudflare-dns.com/dns-query") {
-            NWParameters.PrivacyContext.default.requireEncryptedNameResolution(
-                false,
-                fallbackResolver: .https(
-                    dohUrl,
-                    serverAddresses: [
-                        .hostPort(host: "1.1.1.1", port: 443),
-                        .hostPort(host: "1.0.0.1", port: 443),
-                        .hostPort(host: "2606:4700:4700::1111", port: 443)
-                    ]
-                )
-            )
-        }
-        #endif
+        // DNS-over-HTTPS (Cloudflare 1.1.1.1 / 1.0.0.1) als Resolver der App, damit CUII-DNS-Sperren im
+        // Mobilfunk und WLAN automatisch umgangen werden (wie UnblockedDns in HttpClient.kt).
+        // Ist DoH im Netz gesperrt, schaltet `perform` einmalig auf System-DNS zurück.
+        encryptedDnsActive = Self.applyEncryptedDns(required: true)
 
         let config = URLSessionConfiguration.default
         config.timeoutIntervalForRequest = 15
@@ -69,9 +57,66 @@ public final class HttpClient: @unchecked Sendable {
         self.session = URLSession(configuration: config, delegate: redirectHandler, delegateQueue: nil)
     }
 
+    /// Mit `required == true` muss jede Namensauflösung der App verschlüsselt laufen: über den DNS des
+    /// Systems, falls der verschlüsselt ist, sonst über Cloudflare. `false` hebt das wieder auf.
+    @discardableResult
+    private static func applyEncryptedDns(required: Bool) -> Bool {
+        #if canImport(Network)
+        guard let dohUrl = URL(string: "https://cloudflare-dns.com/dns-query") else { return false }
+        NWParameters.PrivacyContext.default.requireEncryptedNameResolution(
+            required,
+            fallbackResolver: .https(
+                dohUrl,
+                serverAddresses: [
+                    .hostPort(host: "1.1.1.1", port: 443),
+                    .hostPort(host: "1.0.0.1", port: 443),
+                    .hostPort(host: "2606:4700:4700::1111", port: 443)
+                ]
+            )
+        )
+        return required
+        #else
+        return false
+        #endif
+    }
+
+    /// Führt eine Anfrage aus. Scheitert sie an der verschlüsselten Namensauflösung (DoH im Netz gesperrt,
+    /// Captive Portal), fällt die App bis zum nächsten Start auf das System-DNS zurück.
+    public static func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await shared.session.data(for: request)
+        } catch let error as URLError where isPossibleDnsFailure(error) && shared.disableEncryptedDns() {
+            return try await shared.session.data(for: request)
+        }
+    }
+
+    private static func isPossibleDnsFailure(_ error: URLError) -> Bool {
+        switch error.code {
+        case .cannotFindHost, .dnsLookupFailed, .timedOut:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Liefert nur beim ersten Aufruf `true`, damit jede Anfrage höchstens einmal wiederholt wird.
+    private func disableEncryptedDns() -> Bool {
+        let wasActive = dnsLock.withLock { () -> Bool in
+            let active = encryptedDnsActive
+            encryptedDnsActive = false
+            return active
+        }
+        guard wasActive else { return false }
+        Self.applyEncryptedDns(required: false)
+        return true
+    }
+
     /// Schreibt `dropload.io` auf `dr0pstream.com` um (wie der OkHttp-Interceptor auf Android/PC).
     public static func rewriteUrl(_ rawUrl: String) -> URL? {
-        guard var components = URLComponents(string: rawUrl) else { return nil }
+        // iOS 16 lehnt Adressen mit Leerzeichen oder Umlauten ab, neuere Versionen kodieren sie selbst
+        let parsed = URLComponents(string: rawUrl)
+            ?? rawUrl.addingPercentEncoding(withAllowedCharacters: .urlFragmentAllowed).flatMap { URLComponents(string: $0) }
+        guard var components = parsed else { return nil }
         if let host = components.host?.lowercased(),
            host == "dropload.io" || host == "www.dropload.io" {
             components.host = "dr0pstream.com"
@@ -104,7 +149,7 @@ public final class HttpClient: @unchecked Sendable {
             req.setValue(v, forHTTPHeaderField: k)
         }
 
-        let (data, response) = try await shared.session.data(for: req)
+        let (data, response) = try await perform(req)
         let finalUrl = response.url?.absoluteString ?? fullUrl
         let body = String(data: data, encoding: .utf8)
             ?? String(data: data, encoding: .isoLatin1)
@@ -135,7 +180,7 @@ public final class HttpClient: @unchecked Sendable {
         }.joined(separator: "&")
         req.httpBody = formString.data(using: .utf8)
 
-        let (data, _) = try await shared.session.data(for: req)
+        let (data, _) = try await perform(req)
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -155,7 +200,7 @@ public final class HttpClient: @unchecked Sendable {
         req.setValue(referer, forHTTPHeaderField: "Referer")
         req.httpBody = jsonBody.data(using: .utf8)
 
-        let (data, _) = try await shared.session.data(for: req)
+        let (data, _) = try await perform(req)
         return String(data: data, encoding: .utf8) ?? ""
     }
 
@@ -175,10 +220,14 @@ public final class HttpClient: @unchecked Sendable {
         }
     }
 
+    /// Kodiert wie Javas `URLEncoder` alles außer ASCII-Buchstaben, Ziffern und `-._*`.
+    /// `CharacterSet.alphanumerics` taugt dafür nicht: Es enthält auch Umlaute und ließe sie unkodiert.
+    public static func percentEncodeStrict(_ value: String) -> String {
+        let allowed = CharacterSet(charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._*")
+        return value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+    }
+
     private static func urlEncodeFormComponent(_ value: String) -> String {
-        var allowed = CharacterSet.alphanumerics
-        allowed.insert(charactersIn: "-._*")
-        return value.addingPercentEncoding(withAllowedCharacters: allowed)?
-            .replacingOccurrences(of: "%20", with: "+") ?? value
+        percentEncodeStrict(value).replacingOccurrences(of: "%20", with: "+")
     }
 }

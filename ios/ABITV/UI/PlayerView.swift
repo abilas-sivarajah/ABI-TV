@@ -290,6 +290,9 @@ public struct PlayerView: View {
                 hosters = try await AniWorldScraper.fetchEpisodeHosters(item.episodePath)
             }
 
+            // Player inzwischen geschlossen oder neu gestartet: nichts mehr anfassen
+            if Task.isCancelled { return }
+
             if hosters.isEmpty {
                 await MainActor.run {
                     errorMessage = "Keine Streams für diese Episode gefunden."
@@ -314,10 +317,16 @@ public struct PlayerView: View {
             }
 
             for candidate in sortedCandidates {
+                if Task.isCancelled { return }
                 await MainActor.run {
                     statusText = "Extrahiere Stream von \(candidate.hosterName)..."
                 }
-                if let stream = try? await StreamResolver.resolveHoster(candidate) {
+                let resolved = try? await StreamResolver.resolveHoster(candidate)
+                // Beim Schließen des Players schlagen laufende Anfragen fehl (kein Hoster-Fehler),
+                // und ein spät aufgelöster Stream darf nicht mehr ohne sichtbaren Player losspielen.
+                if Task.isCancelled { return }
+
+                if let stream = resolved {
                     await MainActor.run {
                         self.resolvedStream = stream
                         self.activeRedirectPath = candidate.redirectPath
@@ -336,6 +345,7 @@ public struct PlayerView: View {
                 isLoading = false
             }
         } catch {
+            if Task.isCancelled { return }
             await MainActor.run {
                 errorMessage = "Fehler: \(error.localizedDescription)"
                 isLoading = false
@@ -397,21 +407,24 @@ public struct PlayerView: View {
 
         if !item.isLiveStream {
             let interval = CMTime(seconds: 5.0, preferredTimescale: 600)
+            // Lokale Kopien: Der Block ist @Sendable und darf nicht auf den MainActor-gebundenen View zugreifen
+            let progressStore = storage
+            let playback = item
             timeObserverToken = avPlayer.addPeriodicTimeObserver(forInterval: interval, queue: .main) { time in
                 let posSec = CMTimeGetSeconds(time)
                 let durSec = CMTimeGetSeconds(avPlayer.currentItem?.duration ?? .zero)
                 if posSec.isFinite && durSec.isFinite && posSec > 0 && durSec > 0 {
                     let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-                    storage.saveWatchProgress(
+                    progressStore.saveWatchProgress(
                         WatchProgressEntry(
-                            animeSlug: item.animeSlug,
-                            animeTitle: item.title,
-                            coverUrl: item.coverUrl,
-                            seasonLabel: item.seasonLabel,
-                            episodeNumber: item.episodeNumber,
-                            episodeTitle: item.episodeTitle,
-                            episodePath: item.episodePath,
-                            preferredLangKey: item.language.langKey,
+                            animeSlug: playback.animeSlug,
+                            animeTitle: playback.title,
+                            coverUrl: playback.coverUrl,
+                            seasonLabel: playback.seasonLabel,
+                            episodeNumber: playback.episodeNumber,
+                            episodeTitle: playback.episodeTitle,
+                            episodePath: playback.episodePath,
+                            preferredLangKey: playback.language.langKey,
                             positionMs: Int64(posSec * 1000),
                             durationMs: Int64(durSec * 1000),
                             updatedAt: nowMs

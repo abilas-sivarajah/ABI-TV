@@ -201,34 +201,32 @@ public enum SerienStreamScraper {
         let seasonLabel = seasonNumber == "0" ? "Filme" : seasonNumber
 
         var episodes: [EpisodeItem] = []
-        let rowParts = html.components(separatedBy: "episode-row")
-        if rowParts.count > 1 {
-            for rowHtml in rowParts.dropFirst() {
-                let rowChunk = String(rowHtml.prefix(2500))
-                let numText = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-number-cell[^>]*>(.*?)</"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
-                let number = Int(numText) ?? (episodes.count + 1)
+        // Komplette Zeile samt öffnendem Tag: Das onclick mit dem Folgenpfad steht oft vor dem class-Attribut
+        for row in HtmlParser.elements(in: html, withClass: "episode-row") {
+            let rowChunk = row.html
+            let numText = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-number-cell[^>]*>(.*?)</"#)
+                .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
+            let number = Int(numText) ?? (episodes.count + 1)
 
-                let titleDe = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-title-ger[^>]*>(.*?)</"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
-                let titleEn = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-title-eng[^>]*>(.*?)</"#)
-                    .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
+            let titleDe = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-title-ger[^>]*>(.*?)</"#)
+                .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
+            let titleEn = HtmlParser.firstMatch(in: rowChunk, pattern: #"episode-title-eng[^>]*>(.*?)</"#)
+                .map { HtmlParser.stripTagsAndDecode($0) } ?? ""
 
-                let epPath = HtmlParser.firstMatch(in: rowChunk, pattern: #"['"](/serie/[^'"]+/episode-[0-9]+)['"]"#)
-                    ?? "/serie/\(cleanSlug)/staffel-\(seasonNumber)/episode-\(number)"
+            let epPath = HtmlParser.firstMatch(in: rowChunk, pattern: #"['"](/serie/[^'"]+/episode-[0-9]+)['"]"#)
+                ?? "/serie/\(cleanSlug)/staffel-\(seasonNumber)/episode-\(number)"
 
-                let finalPath = "sto_\(cleanSlug)_s\(seasonLabel)_e\(number)_\(epPath)"
-                episodes.append(
-                    EpisodeItem(
-                        number: number,
-                        seasonLabel: seasonLabel,
-                        path: finalPath,
-                        titleDe: titleDe,
-                        titleEn: titleEn,
-                        languages: []
-                    )
+            let finalPath = "sto_\(cleanSlug)_s\(seasonLabel)_e\(number)_\(epPath)"
+            episodes.append(
+                EpisodeItem(
+                    number: number,
+                    seasonLabel: seasonLabel,
+                    path: finalPath,
+                    titleDe: titleDe,
+                    titleEn: titleEn,
+                    languages: []
                 )
-            }
+            )
         }
 
         let currentSeasonPath = currentUrl.replacingOccurrences(of: baseUrl, with: "")
