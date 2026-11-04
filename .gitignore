@@ -18,3 +18,8 @@ keystore.properties
 
 # Kotlin-Compiler-Sitzungsdaten
 .kotlin/
+
+# iOS / Swift
+.build/
+.swiftpm/
+xcuserdata/
