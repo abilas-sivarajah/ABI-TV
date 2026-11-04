@@ -822,6 +822,14 @@ private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
     else -> AniWorldScraper.fetchAnimeDetail(slug)
 }
 
+/** Art des Titels für Kacheln und Titelbild: "Film", "Serie" oder "Anime". */
+private fun titleKindLabel(anime: AnimeCard, detail: AnimeDetail?): String = when {
+    anime.isSto -> "Serie"
+    anime.isFilmpalast -> "Film"
+    anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
+    else -> "Anime"
+}
+
 /** Anzahl der Vorschläge im Titelbild. */
 private const val HERO_COUNT = 6
 
@@ -1097,7 +1105,7 @@ private fun HeroBanner(
                     .padding(start = 40.dp, end = 24.dp, bottom = 36.dp)
             ) {
                 Text(
-                    text = when {
+                    text = titleKindLabel(anime, detail).uppercase() + "  ·  " + when {
                         anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
                         anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
                         anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
@@ -1402,14 +1410,7 @@ private fun TitleInfoPanel(
             ) {
                 // Eckdaten als kleine Kästchen: Art (Film/Serie/Anime), Jahr, Bewertung, FSK
                 val chips = buildList {
-                    add(
-                        when {
-                            anime.isSto -> "Serie"
-                            anime.isFilmpalast -> "Film"
-                            anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
-                            else -> "Anime"
-                        }
-                    )
+                    add(titleKindLabel(anime, detail))
                     detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
                     detail?.rating?.takeIf { it.isNotBlank() }?.let { add("★ $it") }
                     detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
