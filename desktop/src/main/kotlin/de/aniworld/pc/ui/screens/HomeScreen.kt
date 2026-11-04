@@ -5,6 +5,17 @@ import de.aniworld.pc.ui.compat.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -101,15 +112,27 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class MainNavTab(val label: String) {
-    HOME("🏠 Animes"),
-    MOVIES("🎬 Filme"),
-    SERIES("🍿 Serien"),
-    LIVETV("📺 Live TV"),
-    SEARCH("🔍 Suche"),
-    GENRES("🎭 Genres"),
-    WATCHLIST("★ Merkliste"),
-    SETTINGS("⚙️ Einstellungen")
+    HOME("Anime"),
+    MOVIES("Filme"),
+    SERIES("Serien"),
+    LIVETV("Live TV"),
+    SEARCH("Suche"),
+    GENRES("Genres"),
+    WATCHLIST("Merkliste"),
+    SETTINGS("Einstellungen")
 }
+
+/**
+ * Reiter der oberen Leiste in dieser Reihenfolge; Suche und Einstellungen sitzen als Symbole rechts.
+ * Genres ist vorerst ausgeblendet (gilt nur für Anime).
+ */
+private val NavBarTabs = listOf(
+    MainNavTab.MOVIES,
+    MainNavTab.SERIES,
+    MainNavTab.HOME,
+    MainNavTab.LIVETV,
+    MainNavTab.WATCHLIST
+)
 
 class HomeUiState {
     var activeTab by mutableStateOf(MainNavTab.HOME)
@@ -310,7 +333,7 @@ private fun TopTvNavigationBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 28.dp, vertical = 12.dp),
+                .padding(start = 28.dp, end = 28.dp, top = 8.dp, bottom = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             // App Logo links
@@ -343,35 +366,53 @@ private fun TopTvNavigationBar(
                 )
             }
 
-            // Zentrierte Haupt-Tabs mit genügend Platz für Fokus-Skalierung
-            ScrollLazyRow(
+            fun focusIfActive(tab: MainNavTab): Modifier =
+                if (activeTab == tab) Modifier.focusRequester(activeTabFocusRequester) else Modifier
+
+            // Reiter direkt neben dem Logo (wie bei Streaming-Apps)
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(start = 28.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(MainNavTab.entries, key = { it.name }) { tab ->
-                    TvFocusableButton(
-                        text = tab.label,
-                        isSelected = activeTab == tab,
-                        modifier = if (activeTab == tab) {
-                            Modifier.focusRequester(activeTabFocusRequester)
-                        } else {
-                            Modifier
-                        },
+                NavBarTabs.forEach { tab ->
+                    NavTextTab(
+                        label = tab.label,
+                        selected = activeTab == tab,
+                        modifier = focusIfActive(tab),
                         onClick = { onSelectTab(tab) }
                     )
                 }
             }
 
-            // Kompakte Sprachwahl rechts
-            TvFocusableButton(
-                text = "🌐 ${preferredLanguage.shortLabel}",
-                badgeColor = Color(preferredLanguage.badgeColorHex),
-                onClick = onCycleLanguage
-            )
+            // Rechts: Sprachwahl, Suche (Lupe) und Einstellungen (Zahnrad)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NavTextTab(
+                    label = preferredLanguage.shortLabel,
+                    selected = false,
+                    badgeColor = Color(preferredLanguage.badgeColorHex),
+                    onClick = onCycleLanguage
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Search,
+                    description = "Suche",
+                    selected = activeTab == MainNavTab.SEARCH,
+                    modifier = focusIfActive(MainNavTab.SEARCH),
+                    onClick = { onSelectTab(MainNavTab.SEARCH) }
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Settings,
+                    description = "Einstellungen",
+                    selected = activeTab == MainNavTab.SETTINGS,
+                    modifier = focusIfActive(MainNavTab.SETTINGS),
+                    onClick = { onSelectTab(MainNavTab.SETTINGS) }
+                )
+            }
         }
 
         Box(
@@ -379,6 +420,91 @@ private fun TopTvNavigationBar(
                 .fillMaxWidth()
                 .height(1.dp)
                 .background(Color.White.copy(alpha = 0.06f))
+        )
+    }
+}
+
+/** Reiter als schlichter Text; der aktive bekommt eine helle Pille, Fokus (Tastatur) einen cyanfarbenen Rand. */
+@Composable
+private fun NavTextTab(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    badgeColor: Color? = null
+) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(50)
+    Row(
+        modifier = modifier
+            .clip(shape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.16f)
+                    hovered || focused -> Color.White.copy(alpha = 0.07f)
+                    else -> Color.Transparent
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        if (badgeColor != null) {
+            Box(modifier = Modifier.size(8.dp).clip(RoundedCornerShape(4.dp)).background(badgeColor))
+            Spacer(modifier = Modifier.width(8.dp))
+        }
+        Text(
+            text = label,
+            color = if (selected || hovered || focused) TextPrimary else TextSecondary,
+            fontSize = 15.sp,
+            maxLines = 1,
+            softWrap = false,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium
+        )
+    }
+}
+
+/** Rundes Symbol oben rechts (Lupe, Zahnrad). */
+@Composable
+private fun NavIconButton(
+    icon: ImageVector,
+    description: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    Box(
+        modifier = modifier
+            .size(40.dp)
+            .clip(CircleShape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.16f)
+                    hovered || focused -> Color.White.copy(alpha = 0.07f)
+                    else -> Color.Transparent
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, CircleShape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+        contentAlignment = Alignment.Center
+    ) {
+        Icon(
+            imageVector = icon,
+            contentDescription = description,
+            tint = if (selected || hovered || focused) TextPrimary else TextSecondary,
+            modifier = Modifier.size(24.dp)
         )
     }
 }
