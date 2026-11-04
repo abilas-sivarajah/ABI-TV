@@ -1,27 +1,23 @@
-package de.aniworld.pc.platform
+package de.aniworld.tv.data.remote
 
 import com.google.gson.Gson
 import com.google.gson.JsonArray
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.reflect.TypeToken
-import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.Request
 import java.io.File
-import java.util.Properties
 import java.util.concurrent.ConcurrentHashMap
 
 /**
  * Hochauflösende Bilder von TMDB (themoviedb.org) fürs Titelbild: breites Hintergrundbild und
  * Titel-Logo. Die Streaming-Seiten liefern nur kleine Hochformat-Cover.
  *
- * Der Schlüssel kommt aus der Umgebungsvariable TMDB_API_KEY oder wird beim Bauen aus
- * local.properties bzw. dem GitHub-Secret eingebaut (abi-tmdb.properties). Ohne Schlüssel
- * liefert [find] einfach nichts.
+ * Jede App ruft beim Start [configure] auf. Ohne Schlüssel liefert [find] einfach nichts.
  */
 object TmdbArtwork {
 
@@ -35,14 +31,24 @@ object TmdbArtwork {
     /** Nicht gefundene Titel erst nach einer Woche erneut suchen. */
     private const val MISS_RETRY_MS = 7L * 24 * 60 * 60 * 1000
 
-    private val apiKey: String by lazy {
-        System.getenv("TMDB_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }
-            ?: runCatching {
-                javaClass.classLoader.getResourceAsStream("abi-tmdb.properties")?.use { input ->
-                    Properties().apply { load(input) }.getProperty("apiKey")?.trim()
-                }
-            }.getOrNull()
-            ?: ""
+    @Volatile
+    private var apiKey: String = ""
+
+    @Volatile
+    private var cacheFile: File? = null
+
+    @Volatile
+    private var backdropSize: String = "original"
+
+    /**
+     * @param apiKey v3-Schlüssel oder v4-Lesetoken; leer = TMDB ausgeschaltet
+     * @param cacheDir Ordner für den Zwischenspeicher der gefundenen Bild-Adressen
+     * @param backdropSize TMDB-Bildgröße des Hintergrunds; auf Handy und TV reicht "w1280"
+     */
+    fun configure(apiKey: String, cacheDir: File, backdropSize: String = "original") {
+        this.apiKey = apiKey.trim()
+        this.cacheFile = File(cacheDir, "tmdb-artwork.json")
+        this.backdropSize = backdropSize
     }
 
     val isConfigured: Boolean get() = apiKey.isNotEmpty()
@@ -52,12 +58,12 @@ object TmdbArtwork {
     private data class Entry(val backdrop: String?, val logo: String?, val time: Long)
 
     private val gson = Gson()
-    private val cacheFile by lazy { File(AppDirs.cacheDir, "tmdb-artwork.json") }
     private val cache: ConcurrentHashMap<String, Entry> by lazy {
         val loaded = runCatching {
-            if (cacheFile.isFile) {
+            val file = cacheFile
+            if (file != null && file.isFile) {
                 gson.fromJson<Map<String, Entry>>(
-                    cacheFile.readText(Charsets.UTF_8),
+                    file.readText(Charsets.UTF_8),
                     object : TypeToken<Map<String, Entry>>() {}.type
                 )
             } else null
@@ -66,11 +72,13 @@ object TmdbArtwork {
     }
 
     private fun saveCache() = runCatching {
-        val tmp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+        val file = cacheFile ?: return@runCatching
+        file.parentFile?.mkdirs()
+        val tmp = File(file.parentFile, "${file.name}.tmp")
         tmp.writeText(gson.toJson(HashMap(cache)), Charsets.UTF_8)
-        if (!tmp.renameTo(cacheFile)) {
-            cacheFile.delete()
-            tmp.renameTo(cacheFile)
+        if (!tmp.renameTo(file)) {
+            file.delete()
+            tmp.renameTo(file)
         }
     }
 
@@ -123,7 +131,7 @@ object TmdbArtwork {
             if (backdropPath == null && logoPath == null) continue
             AppLog.i(TAG, "\"$title\" → ${k.path}/$id (Hintergrund: ${backdropPath != null}, Logo: ${logoPath != null})")
             return Artwork(
-                backdropUrl = backdropPath?.let { "$IMAGES/original$it" },
+                backdropUrl = backdropPath?.let { "$IMAGES/$backdropSize$it" },
                 logoUrl = logoPath?.let { "$IMAGES/w500$it" }
             )
         }

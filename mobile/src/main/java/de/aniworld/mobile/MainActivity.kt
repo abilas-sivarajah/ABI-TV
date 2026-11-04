@@ -2,6 +2,7 @@ package de.aniworld.mobile
 
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -48,7 +49,11 @@ class MainActivity : ComponentActivity() {
     private var showIntro by mutableStateOf(true)
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        enableEdgeToEdge()
+        // Die App ist immer dunkel: helle Symbole in der Statusleiste, auch wenn das Handy im hellen Modus läuft
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT)
+        )
         super.onCreate(savedInstanceState)
         // Nur beim echten Start, nicht wenn Android die Activity neu aufbaut
         showIntro = savedInstanceState == null
@@ -90,6 +95,7 @@ class MainActivity : ComponentActivity() {
                                 )
                             },
                             onUpdateFound = { release -> availableRelease = release },
+                            onPlayTitle = { detail, episode, lang -> launchPhonePlayer(detail, episode, lang) },
                             state = homeState
                         )
                     } else {

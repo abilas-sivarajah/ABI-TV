@@ -1,6 +1,17 @@
+import java.util.Properties
+
 plugins {
     id("com.android.library")
 }
+
+// TMDB-Schlüssel (Bilder fürs Titelbild) – nie im Quellcode: lokal aus local.properties ("tmdb.apiKey=…"),
+// im Release-Workflow aus dem GitHub-Secret TMDB_API_KEY. Ohne Schlüssel laufen die Apps ohne TMDB-Bilder.
+val tmdbApiKey: String = providers.environmentVariable("TMDB_API_KEY").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: providers.gradleProperty("tmdbApiKey").orNull?.trim()?.takeIf { it.isNotEmpty() }
+    ?: rootProject.file("local.properties").takeIf { it.isFile }?.let { file ->
+        Properties().apply { file.inputStream().use { load(it) } }.getProperty("tmdb.apiKey")?.trim()
+    }
+    ?: ""
 
 // Android-Teil der Datenschicht (WebView, SharedPreferences, APK-Updater) für TV- und Mobile-App;
 // der plattformunabhängige Teil liegt in :shared
@@ -10,6 +21,11 @@ android {
 
     defaultConfig {
         minSdk = 21
+        buildConfigField("String", "TMDB_API_KEY", "\"$tmdbApiKey\"")
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {

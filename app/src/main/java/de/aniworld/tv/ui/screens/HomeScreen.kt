@@ -1,6 +1,10 @@
 package de.aniworld.tv.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Search
+import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -79,6 +83,8 @@ import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
+import de.aniworld.tv.data.remote.TitlePreview
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
@@ -101,18 +107,32 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 enum class MainNavTab(val label: String) {
-    HOME("🏠 Animes"),
-    MOVIES("🎬 Filme"),
-    SERIES("🍿 Serien"),
-    LIVETV("📺 Live TV"),
-    SEARCH("🔍 Suche"),
-    GENRES("🎭 Genres"),
-    WATCHLIST("★ Merkliste"),
-    SETTINGS("⚙️ Einstellungen")
+    START("Startseite"),
+    HOME("Anime"),
+    MOVIES("Filme"),
+    SERIES("Serien"),
+    LIVETV("Live TV"),
+    SEARCH("Suche"),
+    GENRES("Genres"),
+    WATCHLIST("Merkliste"),
+    SETTINGS("Einstellungen")
 }
 
+/**
+ * Reiter der oberen Leiste in dieser Reihenfolge; Suche und Einstellungen sitzen als Symbole rechts.
+ * Genres ist wie am PC vorerst ausgeblendet (gilt nur für Anime).
+ */
+private val NavBarTabs = listOf(
+    MainNavTab.START,
+    MainNavTab.MOVIES,
+    MainNavTab.SERIES,
+    MainNavTab.HOME,
+    MainNavTab.LIVETV,
+    MainNavTab.WATCHLIST
+)
+
 class HomeUiState {
-    var activeTab by mutableStateOf(MainNavTab.HOME)
+    var activeTab by mutableStateOf(MainNavTab.START)
     var tabHistory by mutableStateOf<List<MainNavTab>>(emptyList())
     var moviesCategoryPath by mutableStateOf("OVERVIEW")
     var moviesOverviewSections by mutableStateOf<List<CatalogSection>>(emptyList())
@@ -130,6 +150,10 @@ class HomeUiState {
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
     var selectedGenreKey by mutableStateOf(AniWorldScraper.GENRE_CATEGORIES.first().first)
     var genreItems by mutableStateOf<List<AnimeCard>>(emptyList())
+    // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
+    var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startLoaded by mutableStateOf(false)
 
     fun selectTab(newTab: MainNavTab) {
         if (newTab != activeTab) {
@@ -140,6 +164,8 @@ class HomeUiState {
                     searchScope = SearchScope.SERIES
                 } else if (activeTab == MainNavTab.HOME || activeTab == MainNavTab.GENRES) {
                     searchScope = SearchScope.ANIMES
+                } else if (activeTab == MainNavTab.START) {
+                    searchScope = SearchScope.ALL
                 }
             }
             tabHistory = (tabHistory + activeTab).takeLast(10)
@@ -158,8 +184,12 @@ fun HomeScreen(
     onOpenAnime: (AnimeCard) -> Unit,
     onResumeWatch: (WatchProgressEntry) -> Unit,
     onPlayLiveChannel: (LiveTvChannel) -> Unit = {},
-    onUpdateFound: (AppRelease) -> Unit = {}
+    onUpdateFound: (AppRelease) -> Unit = {},
+    onPlayTitle: PlayTitle = { _, _, _, _ -> }
 ) {
+    val expandedTitle = remember { ExpandedTitleState() }
+    // Beim Reiterwechsel ein offenes Info-Feld schließen
+    LaunchedEffect(uiState.activeTab) { expandedTitle.key = null }
     var preferredLang by remember { mutableStateOf(LocalStorage.preferredLanguage) }
     val activeTabFocusRequester = remember { FocusRequester() }
 
@@ -177,7 +207,7 @@ fun HomeScreen(
             (uiState.activeTab == MainNavTab.SERIES && uiState.seriesCategoryPath != "OVERVIEW") ||
             (uiState.activeTab == MainNavTab.SEARCH && uiState.searchQuery.isNotEmpty()) ||
             uiState.tabHistory.isNotEmpty() ||
-            uiState.activeTab != MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START
 
     BackHandler(enabled = canGoBackInHome) {
         when {
@@ -195,12 +225,13 @@ fun HomeScreen(
                 uiState.tabHistory = uiState.tabHistory.dropLast(1)
                 uiState.activeTab = prev
             }
-            uiState.activeTab != MainNavTab.HOME -> {
-                uiState.activeTab = MainNavTab.HOME
+            uiState.activeTab != MainNavTab.START -> {
+                uiState.activeTab = MainNavTab.START
             }
         }
     }
 
+    CompositionLocalProvider(LocalPlayTitle provides onPlayTitle, LocalExpandedTitle provides expandedTitle) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -226,6 +257,17 @@ fun HomeScreen(
         // ------------------- Hauptinhalt je nach Tab -------------------
         Box(modifier = Modifier.fillMaxSize()) {
             when (uiState.activeTab) {
+                MainNavTab.START -> StartTabContent(
+                    uiState = uiState,
+                    animeSections = sections,
+                    isLoadingAnime = isLoading,
+                    continueWatching = progressList,
+                    watchlist = watchlist,
+                    onRetryAnime = onRetry,
+                    onOpenAnime = onOpenAnime,
+                    onResumeWatch = onResumeWatch
+                )
+
                 MainNavTab.HOME -> HomeTabContent(
                     sections = sections,
                     continueWatching = progressList,
@@ -288,6 +330,7 @@ fun HomeScreen(
             }
         }
     }
+    }
 }
 
 @Composable
@@ -343,35 +386,53 @@ private fun TopTvNavigationBar(
                 )
             }
 
-            // Zentrierte Haupt-Tabs mit genügend Platz für Fokus-Skalierung
-            LazyRow(
+            fun focusIfActive(tab: MainNavTab): Modifier =
+                if (activeTab == tab) Modifier.focusRequester(activeTabFocusRequester) else Modifier
+
+            // Reiter direkt neben dem Logo (wie bei Streaming-Apps)
+            Row(
                 modifier = Modifier
                     .weight(1f)
-                    .padding(horizontal = 14.dp),
-                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                verticalAlignment = Alignment.CenterVertically,
-                contentPadding = PaddingValues(horizontal = 6.dp, vertical = 4.dp)
+                    .padding(start = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                verticalAlignment = Alignment.CenterVertically
             ) {
-                items(MainNavTab.entries, key = { it.name }) { tab ->
-                    TvFocusableButton(
-                        text = tab.label,
-                        isSelected = activeTab == tab,
-                        modifier = if (activeTab == tab) {
-                            Modifier.focusRequester(activeTabFocusRequester)
-                        } else {
-                            Modifier
-                        },
+                NavBarTabs.forEach { tab ->
+                    NavTextTab(
+                        label = tab.label,
+                        selected = activeTab == tab,
+                        modifier = focusIfActive(tab),
                         onClick = { onSelectTab(tab) }
                     )
                 }
             }
 
-            // Kompakte Sprachwahl rechts
-            TvFocusableButton(
-                text = "🌐 ${preferredLanguage.shortLabel}",
-                badgeColor = Color(preferredLanguage.badgeColorHex),
-                onClick = onCycleLanguage
-            )
+            // Rechts: Sprachwahl, Suche (Lupe) und Einstellungen (Zahnrad)
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                NavTextTab(
+                    label = preferredLanguage.shortLabel,
+                    selected = false,
+                    badgeColor = Color(preferredLanguage.badgeColorHex),
+                    onClick = onCycleLanguage
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Search,
+                    description = "Suche",
+                    selected = activeTab == MainNavTab.SEARCH,
+                    modifier = focusIfActive(MainNavTab.SEARCH),
+                    onClick = { onSelectTab(MainNavTab.SEARCH) }
+                )
+                NavIconButton(
+                    icon = Icons.Outlined.Settings,
+                    description = "Einstellungen",
+                    selected = activeTab == MainNavTab.SETTINGS,
+                    modifier = focusIfActive(MainNavTab.SETTINGS),
+                    onClick = { onSelectTab(MainNavTab.SETTINGS) }
+                )
+            }
         }
 
         Box(
@@ -429,9 +490,8 @@ private fun HomeTabContent(
         return
     }
 
-    var heroAnime by remember(sections) {
-        mutableStateOf(sections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Animes zum Durchblättern
+    val heroItems = remember(sections) { TitlePreview.randomPicks(sections.flatMap { it.items }) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
     LazyColumn(
@@ -439,15 +499,10 @@ private fun HomeTabContent(
         contentPadding = PaddingValues(bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
-        // 1. Hero-Spotlight-Banner für den aktuell fokussierten Anime
-        heroAnime?.let { featured ->
+        // 1. Titelbild mit zufälligen Vorschlägen
+        if (heroItems.isNotEmpty()) {
             item(key = "hero_banner") {
-                HeroBanner(
-                    anime = featured,
-                    isBookmarked = featured.cleanSlug in watchlistSlugs,
-                    onOpenDetail = { onOpenAnime(featured) },
-                    onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                )
+                HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
             }
         }
 
@@ -490,8 +545,7 @@ private fun HomeTabContent(
                     title = "★ Deine Merkliste",
                     items = watchlist,
                     watchlistSlugs = watchlistSlugs,
-                    onOpenAnime = onOpenAnime,
-                    onFocusAnime = { heroAnime = it }
+                    onOpenAnime = onOpenAnime
                 )
             }
         }
@@ -502,167 +556,14 @@ private fun HomeTabContent(
                 title = section.title,
                 items = section.items,
                 watchlistSlugs = watchlistSlugs,
-                onOpenAnime = onOpenAnime,
-                onFocusAnime = { heroAnime = it }
+                onOpenAnime = onOpenAnime
             )
         }
     }
 }
 
 @Composable
-private fun HeroBanner(
-    anime: AnimeCard,
-    isBookmarked: Boolean,
-    onOpenDetail: () -> Unit,
-    onToggleWatchlist: () -> Unit
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 36.dp, vertical = 6.dp)
-            .height(226.dp)
-            .clip(RoundedCornerShape(18.dp))
-            .background(BgSurface)
-            .border(1.dp, Color.White.copy(alpha = 0.08f), RoundedCornerShape(18.dp))
-    ) {
-        // Hintergrundbild rechtsbündig mit sanftem Verlauf nach links
-        if (anime.coverUrl.isNotBlank()) {
-            AsyncImage(
-                model = anime.coverUrl,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier
-                    .fillMaxSize()
-            )
-        }
-
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.horizontalGradient(
-                        colors = listOf(
-                            Color(0xFF0B0E14),
-                            Color(0xFF0B0E14).copy(alpha = 0.94f),
-                            Color(0xFF0B0E14).copy(alpha = 0.55f),
-                            Color.Transparent
-                        )
-                    )
-                )
-        )
-
-        Row(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 24.dp, vertical = 16.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.Center
-            ) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(AccentCyan.copy(alpha = 0.18f))
-                        .padding(horizontal = 8.dp, vertical = 3.dp)
-                ) {
-                    Text(
-                        text = when {
-                            anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
-                            anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
-                            anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
-                            else -> "ANIWORLD EMPFEHLUNG"
-                        },
-                        color = AccentCyan,
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(6.dp))
-
-                Text(
-                    text = anime.title,
-                    color = TextPrimary,
-                    fontSize = 24.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-
-                if (anime.genreOrSubtitle.isNotBlank()) {
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = anime.genreOrSubtitle,
-                        color = TextSecondary,
-                        fontSize = 12.sp,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                }
-
-                Spacer(modifier = Modifier.height(12.dp))
-
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TvFocusableButton(
-                        text = "▶ Jetzt ansehen",
-                        isPrimary = true,
-                        onClick = onOpenDetail
-                    )
-                    TvFocusableButton(
-                        text = if (isBookmarked) "★ Auf der Merkliste" else "+ Zur Merkliste",
-                        isSelected = isBookmarked,
-                        onClick = onToggleWatchlist
-                    )
-                }
-            }
-
-            if (anime.coverUrl.isNotBlank()) {
-                Spacer(modifier = Modifier.width(24.dp))
-                AsyncImage(
-                    model = anime.coverUrl,
-                    contentDescription = anime.title,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier
-                        .width(112.dp)
-                        .height(166.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.2f), RoundedCornerShape(10.dp))
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun CatalogRowSection(
-    title: String,
-    items: List<AnimeCard>,
-    watchlistSlugs: Set<String>,
-    onOpenAnime: (AnimeCard) -> Unit,
-    onFocusAnime: (AnimeCard) -> Unit
-) {
-    Column {
-        SectionHeader(title = title, subtitle = "${items.size} Titel")
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(18.dp)
-        ) {
-            items(items, key = { "${title}_${it.cleanSlug}" }) { anime ->
-                TvAnimeCard(
-                    anime = anime,
-                    isBookmarked = anime.cleanSlug in watchlistSlugs,
-                    onClick = { onOpenAnime(anime) },
-                    onFocused = { onFocusAnime(anime) }
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun SectionHeader(title: String, subtitle: String = "") {
+internal fun SectionHeader(title: String, subtitle: String = "") {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -883,9 +784,8 @@ private fun CatalogBrowser(
     val isOverview = selectedCategoryPath == "OVERVIEW"
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
-    var heroItem by remember(overviewSections) {
-        mutableStateOf(overviewSections.firstOrNull()?.items?.firstOrNull())
-    }
+    // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
+    val heroItems = remember(overviewSections) { TitlePreview.randomPicks(overviewSections.flatMap { it.items }) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Horizontale Kategorie-Leiste (Suche, Übersicht, Genres...)
@@ -956,14 +856,9 @@ private fun CatalogBrowser(
                     contentPadding = PaddingValues(bottom = 48.dp),
                     verticalArrangement = Arrangement.spacedBy(24.dp)
                 ) {
-                    heroItem?.let { featured ->
+                    if (heroItems.isNotEmpty()) {
                         item(key = "catalog_hero") {
-                            HeroBanner(
-                                anime = featured,
-                                isBookmarked = featured.cleanSlug in watchlistSlugs,
-                                onOpenDetail = { onOpenAnime(featured) },
-                                onToggleWatchlist = { LocalStorage.toggleWatchlist(featured) }
-                            )
+                            HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
                         }
                     }
 
@@ -972,8 +867,7 @@ private fun CatalogBrowser(
                             title = section.title,
                             items = section.items,
                             watchlistSlugs = watchlistSlugs,
-                            onOpenAnime = onOpenAnime,
-                            onFocusAnime = { heroItem = it }
+                            onOpenAnime = onOpenAnime
                         )
                     }
                 }
@@ -1758,6 +1652,20 @@ private fun SettingsTabContent(
                 )
             }
         }
+
+        Spacer(modifier = Modifier.height(16.dp))
+        // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+        Text(
+            text = if (TmdbArtwork.isConfigured) {
+                "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
+                    "ist aber nicht von TMDB unterstützt oder zertifiziert."
+            } else {
+                "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
+            },
+            color = TextMuted,
+            fontSize = 12.sp,
+            modifier = Modifier.fillMaxWidth(0.92f)
+        )
     }
 }
 

@@ -5,9 +5,11 @@ import android.content.Context
 import android.util.Log
 import coil.ImageLoader
 import coil.ImageLoaderFactory
+import de.aniworld.core.BuildConfig
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.StreamResolver
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.platform.AppLog
 import de.aniworld.tv.platform.SharedPrefsStore
 import de.aniworld.tv.platform.WebViewStreamExtractor
@@ -33,6 +35,8 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
         }
         LocalStorage.init(SharedPrefsStore(this, LocalStorage.PREFS_NAME))
         StreamResolver.browserExtractor = WebViewStreamExtractor(this)
+        // Auf Handy und TV reicht 1280 Pixel Breite, das volle Original wäre unnötig groß
+        TmdbArtwork.configure(BuildConfig.TMDB_API_KEY, cacheDir, backdropSize = "w1280")
     }
 
     // Cover von Filmpalast und S.to brauchen das DNS-over-HTTPS des gemeinsamen Clients,

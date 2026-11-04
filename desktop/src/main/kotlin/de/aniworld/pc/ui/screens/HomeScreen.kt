@@ -103,7 +103,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.pc.ui.compat.loadCachedImage
-import de.aniworld.pc.platform.TmdbArtwork
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage
@@ -611,7 +611,23 @@ private fun StartTabContent(
         interleaveHeroPicks(listOf(uiState.startTopMovies, uiState.startPopularSeries, popularAnime), perSource = 2)
     }
 
+    // Erst die Liste aufbauen, wenn es etwas zu zeigen gibt. Sonst bliebe sie an der Lade-Zeile hängen,
+    // während die Inhalte darüber einsortiert werden, und öffnete ganz unten.
+    if (isLoading && heroItems.isEmpty() && continueWatching.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            CircularProgressIndicator(color = AccentCyan)
+        }
+        return
+    }
+
+    // Kommt das Titelbild erst nach "Weiterschauen" dazu, trotzdem oben beginnen
+    val listState = rememberLazyListState()
+    LaunchedEffect(heroItems.isNotEmpty()) {
+        if (heroItems.isNotEmpty() && listState.firstVisibleItemIndex <= 1) listState.scrollToItem(0)
+    }
+
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 48.dp),
         verticalArrangement = Arrangement.spacedBy(26.dp)

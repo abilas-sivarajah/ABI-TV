@@ -212,7 +212,8 @@ fun MobileContinueCard(
                 overflow = TextOverflow.Ellipsis
             )
 
-            val sText = if (entry.seasonLabel.equals("Filme", true)) "Film" else "S${entry.seasonLabel} E${entry.episodeNumber}"
+            val isFilm = entry.seasonLabel.equals("Film", true) || entry.seasonLabel.equals("Filme", true)
+            val sText = if (isFilm) "Film" else "S${entry.seasonLabel} E${entry.episodeNumber}"
             Text(
                 text = "$sText • ${entry.episodeTitle}",
                 color = TextSecondary,

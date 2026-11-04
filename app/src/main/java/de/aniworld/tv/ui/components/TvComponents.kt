@@ -255,10 +255,10 @@ fun TvContinueWatchingCard(
                 overflow = TextOverflow.Ellipsis
             )
 
-            val seasonPrefix = if (entry.seasonLabel.equals("Filme", true)) {
-                "Film ${entry.episodeNumber}"
-            } else {
-                "S${entry.seasonLabel} • E${entry.episodeNumber}"
+            val seasonPrefix = when {
+                entry.seasonLabel.equals("Film", true) -> "Film"
+                entry.seasonLabel.equals("Filme", true) -> "Film ${entry.episodeNumber}"
+                else -> "S${entry.seasonLabel} • E${entry.episodeNumber}"
             }
 
             Text(

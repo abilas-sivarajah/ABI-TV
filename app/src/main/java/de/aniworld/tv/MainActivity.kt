@@ -83,6 +83,9 @@ class MainActivity : ComponentActivity() {
                         },
                         onUpdateFound = { release ->
                             availableRelease = release
+                        },
+                        onPlayTitle = { detail, episode, episodeList, lang ->
+                            launchPlayer(detail, episode, episodeList, lang)
                         }
                     )
                 } else {

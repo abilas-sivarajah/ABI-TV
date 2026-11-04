@@ -62,6 +62,8 @@ jobs:
           ABI_KEYSTORE_PASSWORD: ${{ secrets.ABI_KEYSTORE_PASSWORD }}
           ABI_KEY_ALIAS: ${{ secrets.ABI_KEY_ALIAS }}
           ABI_KEY_PASSWORD: ${{ secrets.ABI_KEY_PASSWORD }}
+          # Optional: Bilder fürs Titelbild von TMDB (ohne Secret baut die App ohne TMDB)
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: ./gradlew :app:assembleRelease :mobile:assembleRelease $VERSION_ARGS --no-daemon
 
       - name: Prepare APKs for Release

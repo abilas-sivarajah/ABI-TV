@@ -37,6 +37,7 @@ import de.aniworld.pc.ui.theme.AniWorldTvTheme
 import de.aniworld.pc.ui.theme.BgPrimary
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.StreamResolver
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -49,10 +50,21 @@ import java.io.File
 import java.io.PrintStream
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
+import java.util.Properties
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
 private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+/** TMDB-Schlüssel aus der Umgebungsvariable oder der beim Bauen eingebauten abi-tmdb.properties. */
+private fun tmdbApiKey(): String =
+    System.getenv("TMDB_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }
+        ?: runCatching {
+            AppDirs.javaClass.classLoader.getResourceAsStream("abi-tmdb.properties")?.use { input ->
+                Properties().apply { load(input) }.getProperty("apiKey")?.trim()
+            }
+        }.getOrNull()
+        ?: ""
 
 fun main() {
     setupLogging()
@@ -63,6 +75,7 @@ fun main() {
     LocalStorage.init(mainStore)
     val chromium = ChromiumStreamExtractor(File(AppDirs.cacheDir, "jcef"))
     StreamResolver.browserExtractor = chromium
+    TmdbArtwork.configure(tmdbApiKey(), AppDirs.cacheDir)
     chromium.prepareInBackground(backgroundScope)
     PcCastManager.start()
     backgroundScope.launch { AppDirs.pruneImageCache() }

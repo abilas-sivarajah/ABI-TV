@@ -1,5 +1,6 @@
 package de.aniworld.mobile.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -25,9 +26,11 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Home
@@ -75,6 +78,9 @@ import de.aniworld.mobile.ui.components.CastActionButton
 import de.aniworld.mobile.ui.components.MiniRemoteBar
 import de.aniworld.mobile.ui.components.MobileAnimeCard
 import de.aniworld.mobile.ui.components.MobileContinueCard
+import de.aniworld.mobile.ui.components.MobileHeroCarousel
+import de.aniworld.mobile.ui.components.MobilePlayTitle
+import de.aniworld.mobile.ui.components.MobileTitleSheet
 import de.aniworld.mobile.ui.theme.AccentBlue
 import de.aniworld.mobile.ui.theme.AccentCyan
 import de.aniworld.mobile.ui.theme.BgElevated
@@ -94,6 +100,8 @@ import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
+import de.aniworld.tv.data.remote.TitlePreview
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
@@ -103,13 +111,24 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 
 enum class MobileTab(val label: String, val icon: ImageVector) {
-    ANIMES("Animes", Icons.Default.Home),
+    START("Start", Icons.Default.Home),
     MOVIES("Filme", Icons.Default.Movie),
     SERIES("Serien", Icons.Default.Tv),
+    ANIMES("Anime", Icons.Default.AutoAwesome),
     LIVE_TV("Live TV", Icons.Default.LiveTv),
-    SEARCH("Suche", Icons.Default.Search),
-    WATCHLIST("Merkliste", Icons.Default.Bookmark)
+    WATCHLIST("Merkliste", Icons.Default.Bookmark),
+    SEARCH("Suche", Icons.Default.Search)
 }
+
+/** Reiter der unteren Leiste; die Suche sitzt wie am PC als Lupe in der oberen Leiste. */
+private val BottomBarTabs = listOf(
+    MobileTab.START,
+    MobileTab.MOVIES,
+    MobileTab.SERIES,
+    MobileTab.ANIMES,
+    MobileTab.LIVE_TV,
+    MobileTab.WATCHLIST
+)
 
 /** Katalog eines Tabs (Filme/Serien): gewählte Kategorie, geladene Titel und wie weit nachgeladen wurde. */
 class MobileCatalogState {
@@ -126,20 +145,28 @@ class MobileCatalogState {
  * einer Detailseite verschwindet – sonst wären Tab, Kategorie und Suche danach zurückgesetzt.
  */
 class MobileHomeState {
-    var currentTab by mutableStateOf(MobileTab.ANIMES)
-    var searchScope by mutableStateOf(SearchScope.ANIMES)
+    var currentTab by mutableStateOf(MobileTab.START)
+    // Woher die Suche geöffnet wurde, damit "Zurück" dorthin führt
+    var tabBeforeSearch by mutableStateOf(MobileTab.START)
+    var searchScope by mutableStateOf(SearchScope.ALL)
     var searchQuery by mutableStateOf("")
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
     var searchResultsKey by mutableStateOf<String?>(null)
     val movies = MobileCatalogState()
     val series = MobileCatalogState()
+    // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
+    var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
+    var startLoaded by mutableStateOf(false)
 
     fun selectTab(tab: MobileTab) {
-        if (tab == MobileTab.SEARCH) {
+        if (tab == MobileTab.SEARCH && currentTab != MobileTab.SEARCH) {
+            tabBeforeSearch = currentTab
             when (currentTab) {
                 MobileTab.ANIMES -> searchScope = SearchScope.ANIMES
                 MobileTab.MOVIES -> searchScope = SearchScope.MOVIES
                 MobileTab.SERIES -> searchScope = SearchScope.SERIES
+                MobileTab.START -> searchScope = SearchScope.ALL
                 else -> Unit
             }
         }
@@ -159,6 +186,7 @@ fun MobileHomeScreen(
     onResumeWatch: (WatchProgressEntry) -> Unit,
     onPlayLiveChannel: (LiveTvChannel) -> Unit = {},
     onUpdateFound: (AppRelease) -> Unit = {},
+    onPlayTitle: MobilePlayTitle = { _, _, _ -> },
     state: MobileHomeState = remember { MobileHomeState() }
 ) {
     val context = LocalContext.current
@@ -169,6 +197,15 @@ fun MobileHomeScreen(
     var isCheckingUpdate by remember { mutableStateOf(false) }
     var updateCheckStatus by remember { mutableStateOf<String?>(null) }
     var updateCheckFailed by remember { mutableStateOf(false) }
+    // Tippen auf eine Karte in einer Reihe: Info-Feld statt gleich die Detailseite
+    var sheetTitle by remember { mutableStateOf<AnimeCard?>(null) }
+    val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+
+    // Zurück führt von jedem Reiter erst zur Startseite (aus der Suche dorthin, woher sie kam),
+    // statt die App zu verlassen
+    BackHandler(enabled = state.currentTab != MobileTab.START) {
+        state.currentTab = if (state.currentTab == MobileTab.SEARCH) state.tabBeforeSearch else MobileTab.START
+    }
 
     Scaffold(
         containerColor = BgPrimary,
@@ -210,6 +247,13 @@ fun MobileHomeScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
+                    IconButton(onClick = { state.selectTab(MobileTab.SEARCH) }) {
+                        Icon(
+                            imageVector = Icons.Default.Search,
+                            contentDescription = "Suche",
+                            tint = if (state.currentTab == MobileTab.SEARCH) AccentCyan else TextPrimary
+                        )
+                    }
                     CastActionButton(onClick = onOpenCastSheet)
                     IconButton(onClick = {
                         updateCheckStatus = null
@@ -232,7 +276,7 @@ fun MobileHomeScreen(
                     containerColor = BgSurface,
                     tonalElevation = 8.dp
                 ) {
-                    MobileTab.entries.forEach { tab ->
+                    BottomBarTabs.forEach { tab ->
                         NavigationBarItem(
                             selected = state.currentTab == tab,
                             onClick = { state.selectTab(tab) },
@@ -257,14 +301,30 @@ fun MobileHomeScreen(
                 .padding(padding)
         ) {
             when (state.currentTab) {
+                MobileTab.START -> MobileStartTab(
+                    state = state,
+                    animeSections = sections,
+                    isLoadingAnime = isLoading,
+                    continueWatching = progressList,
+                    watchlistSlugs = watchlistSlugs,
+                    onRetryAnime = onRetry,
+                    onOpenAnime = onOpenAnime,
+                    onShowTitle = { sheetTitle = it },
+                    onResumeWatch = onResumeWatch,
+                    onPlayTitle = onPlayTitle
+                )
+
                 MobileTab.ANIMES -> MobileAnimesTab(
                     sections = sections,
                     continueWatching = progressList,
-                    watchlist = watchlist,
+                    watchlistSlugs = watchlistSlugs,
                     isLoading = isLoading,
                     errorMessage = errorMessage,
+                    onRetry = onRetry,
                     onOpenAnime = onOpenAnime,
-                    onResumeWatch = onResumeWatch
+                    onShowTitle = { sheetTitle = it },
+                    onResumeWatch = onResumeWatch,
+                    onPlayTitle = onPlayTitle
                 )
 
                 MobileTab.MOVIES -> MobileCatalogTab(
@@ -274,6 +334,8 @@ fun MobileHomeScreen(
                     emptyText = "Keine Filme gefunden. Filmpalast ist gerade nicht erreichbar.",
                     watchlist = watchlist,
                     onOpenAnime = onOpenAnime,
+                    onShowTitle = { sheetTitle = it },
+                    onPlayTitle = onPlayTitle,
                     onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
                     loadOverview = { FilmpalastScraper.fetchHomeSections() },
                     loadCategory = { path, page -> FilmpalastScraper.fetchCategory(path, page) },
@@ -287,6 +349,8 @@ fun MobileHomeScreen(
                     emptyText = "Keine Serien gefunden. S.to ist gerade nicht erreichbar.",
                     watchlist = watchlist,
                     onOpenAnime = onOpenAnime,
+                    onShowTitle = { sheetTitle = it },
+                    onPlayTitle = onPlayTitle,
                     onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
                     loadOverview = { SerienStreamScraper.fetchHomeSections() },
                     loadCategory = { path, _ -> SerienStreamScraper.fetchCategory(path) },
@@ -311,6 +375,16 @@ fun MobileHomeScreen(
                 )
             }
         }
+    }
+
+    sheetTitle?.let { title ->
+        MobileTitleSheet(
+            anime = title,
+            isBookmarked = title.cleanSlug in watchlistSlugs,
+            onDismiss = { sheetTitle = null },
+            onOpenDetail = { onOpenAnime(title) },
+            onPlayTitle = onPlayTitle
+        )
     }
 
     if (showSettingsSheet) {
@@ -484,7 +558,147 @@ fun MobileHomeScreen(
                     }
                 }
 
+                Spacer(modifier = Modifier.height(12.dp))
+                // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+                Text(
+                    text = if (TmdbArtwork.isConfigured) {
+                        "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
+                            "ist aber nicht von TMDB unterstützt oder zertifiziert."
+                    } else {
+                        "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
+                    },
+                    color = TextMuted,
+                    fontSize = 11.sp
+                )
+
                 Spacer(modifier = Modifier.height(24.dp))
+            }
+        }
+    }
+}
+
+/**
+ * Startseite über alle Anbieter: Titelbild, Weiterschauen und je eine Reihe mit den beliebtesten
+ * Filmen (Filmpalast), Serien (S.to) und Animes (AniWorld).
+ */
+@Composable
+private fun MobileStartTab(
+    state: MobileHomeState,
+    animeSections: List<CatalogSection>,
+    isLoadingAnime: Boolean,
+    continueWatching: List<WatchProgressEntry>,
+    watchlistSlugs: Set<String>,
+    onRetryAnime: () -> Unit,
+    onOpenAnime: (AnimeCard) -> Unit,
+    onShowTitle: (AnimeCard) -> Unit,
+    onResumeWatch: (WatchProgressEntry) -> Unit,
+    onPlayTitle: MobilePlayTitle
+) {
+    var isLoading by remember { mutableStateOf(!state.startLoaded) }
+    var reloadKey by remember { mutableStateOf(0) }
+    LaunchedEffect(reloadKey) {
+        if (state.startLoaded) return@LaunchedEffect
+        isLoading = true
+        coroutineScope {
+            val movies = async { runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList()) }
+            val series = async { runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList()) }
+            state.startTopMovies = movies.await().distinctBy { it.cleanSlug }.take(24)
+            state.startPopularSeries = series.await().distinctBy { it.cleanSlug }.take(24)
+        }
+        state.startLoaded = state.startTopMovies.isNotEmpty() || state.startPopularSeries.isNotEmpty()
+        isLoading = false
+    }
+
+    // Beliebte Animes: die Reihe "Beliebt bei AniWorld" der AniWorld-Startseite
+    val popularAnime = remember(animeSections) {
+        (animeSections.firstOrNull { it.title.contains("beliebt", ignoreCase = true) } ?: animeSections.firstOrNull())
+            ?.items.orEmpty()
+    }
+
+    // Titelbild: je 2 zufällige Filme, Serien und Animes, immer abwechselnd
+    val heroItems = remember(state.startTopMovies, state.startPopularSeries, popularAnime) {
+        TitlePreview.interleavedPicks(listOf(state.startTopMovies, state.startPopularSeries, popularAnime), perSource = 2)
+    }
+
+    if (heroItems.isEmpty() && continueWatching.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (isLoading || isLoadingAnime) {
+                CircularProgressIndicator(color = AccentCyan)
+            } else {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Text(text = "Die Startseite konnte nicht geladen werden.", color = TextSecondary, fontSize = 14.sp)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Button(
+                        onClick = {
+                            reloadKey++
+                            onRetryAnime()
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)
+                    ) {
+                        Text("Erneut versuchen", color = Color(0xFF060911), fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+        }
+        return
+    }
+
+    // Kommt das Titelbild erst nach "Weiterschauen" dazu, trotzdem oben beginnen
+    val listState = rememberLazyListState()
+    LaunchedEffect(heroItems.isNotEmpty()) {
+        if (heroItems.isNotEmpty() && listState.firstVisibleItemIndex <= 1) listState.scrollToItem(0)
+    }
+
+    LazyColumn(
+        state = listState,
+        modifier = Modifier.fillMaxSize(),
+        contentPadding = PaddingValues(bottom = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp)
+    ) {
+        if (heroItems.isNotEmpty()) {
+            item(key = "start_hero") {
+                MobileHeroCarousel(
+                    items = heroItems,
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenDetail = onOpenAnime,
+                    onPlayTitle = onPlayTitle
+                )
+            }
+        }
+
+        if (continueWatching.isNotEmpty()) {
+            item(key = "start_continue") {
+                MobileContinueRow(entries = continueWatching, onResumeWatch = onResumeWatch)
+            }
+        }
+
+        val rows = listOf(
+            Triple("start_movies", "🔥 Beliebte Top-Filme auf Filmpalast", state.startTopMovies),
+            Triple("start_series", "🍿 Beliebte Serien auf S.to", state.startPopularSeries),
+            Triple("start_anime", "⭐ Beliebte Anime auf AniWorld", popularAnime)
+        )
+        rows.filter { it.third.isNotEmpty() }.forEach { (key, title, items) ->
+            item(key = key) {
+                MobileCatalogRow(
+                    rowKey = key,
+                    title = title,
+                    items = items,
+                    watchlistSlugs = watchlistSlugs,
+                    onShowTitle = onShowTitle
+                )
+            }
+        }
+
+        if (isLoading) {
+            item(key = "start_loading") {
+                Box(modifier = Modifier.fillMaxWidth().padding(16.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = AccentCyan, strokeWidth = 2.5.dp, modifier = Modifier.size(24.dp))
+                }
             }
         }
     }
@@ -494,11 +708,14 @@ fun MobileHomeScreen(
 private fun MobileAnimesTab(
     sections: List<CatalogSection>,
     continueWatching: List<WatchProgressEntry>,
-    watchlist: List<AnimeCard>,
+    watchlistSlugs: Set<String>,
     isLoading: Boolean,
     errorMessage: String?,
+    onRetry: () -> Unit,
     onOpenAnime: (AnimeCard) -> Unit,
-    onResumeWatch: (WatchProgressEntry) -> Unit
+    onShowTitle: (AnimeCard) -> Unit,
+    onResumeWatch: (WatchProgressEntry) -> Unit,
+    onPlayTitle: MobilePlayTitle
 ) {
     if (isLoading && sections.isEmpty()) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
@@ -507,58 +724,115 @@ private fun MobileAnimesTab(
         return
     }
 
-    val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    if (errorMessage != null && sections.isEmpty()) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Text(text = "Verbindungsfehler: $errorMessage", color = TextSecondary, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(12.dp))
+                Button(onClick = onRetry, colors = ButtonDefaults.buttonColors(containerColor = AccentCyan)) {
+                    Text("Erneut versuchen", color = Color(0xFF060911), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+        return
+    }
+
+    // Titelbild: 6 zufällige Animes zum Durchblättern
+    val heroItems = remember(sections) { TitlePreview.randomPicks(sections.flatMap { it.items }) }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(18.dp)
     ) {
+        if (heroItems.isNotEmpty()) {
+            item(key = "anime_hero") {
+                MobileHeroCarousel(
+                    items = heroItems,
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenDetail = onOpenAnime,
+                    onPlayTitle = onPlayTitle
+                )
+            }
+        }
+
         // Weiterschauen
         if (continueWatching.isNotEmpty()) {
-            item {
-                Column {
-                    Text(
-                        text = "▶ Weiterschauen",
-                        color = TextPrimary,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                    )
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        items(continueWatching, key = { it.animeSlug }) { entry ->
-                            MobileContinueCard(entry = entry, onClick = { onResumeWatch(entry) })
-                        }
-                    }
-                }
+            item(key = "anime_continue") {
+                MobileContinueRow(entries = continueWatching, onResumeWatch = onResumeWatch)
             }
         }
 
         // Alle Katalogbereiche
         items(sections, key = { it.id }) { sec ->
-            Column {
-                Text(
-                    text = sec.title,
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+            MobileCatalogRow(
+                rowKey = sec.id,
+                title = sec.title,
+                items = sec.items,
+                watchlistSlugs = watchlistSlugs,
+                onShowTitle = onShowTitle
+            )
+        }
+    }
+}
+
+/** Überschrift mit waagerechter Reihe zuletzt geschauter Titel. */
+@Composable
+private fun MobileContinueRow(
+    entries: List<WatchProgressEntry>,
+    onResumeWatch: (WatchProgressEntry) -> Unit
+) {
+    Column {
+        Text(
+            text = "▶ Weiterschauen",
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
+            items(entries, key = { it.animeSlug }) { entry ->
+                MobileContinueCard(entry = entry, onClick = { onResumeWatch(entry) })
+            }
+        }
+    }
+}
+
+/** Überschrift mit waagerechter Kartenreihe; Tippen öffnet das Info-Feld. */
+@Composable
+private fun MobileCatalogRow(
+    rowKey: String,
+    title: String,
+    items: List<AnimeCard>,
+    watchlistSlugs: Set<String>,
+    onShowTitle: (AnimeCard) -> Unit
+) {
+    Column {
+        Text(
+            text = title,
+            color = TextPrimary,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+        )
+        LazyRow(
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            items(items, key = { "${rowKey}_${it.cleanSlug}" }) { anime ->
+                MobileAnimeCard(
+                    anime = anime,
+                    isBookmarked = anime.cleanSlug in watchlistSlugs,
+                    onClick = { onShowTitle(anime) }
                 )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    items(sec.items, key = { "${sec.id}_${it.cleanSlug}" }) { anime ->
-                        MobileAnimeCard(
-                            anime = anime,
-                            isBookmarked = anime.cleanSlug in watchlistSlugs,
-                            onClick = { onOpenAnime(anime) }
-                        )
-                    }
-                }
             }
         }
     }
@@ -576,6 +850,8 @@ private fun MobileCatalogTab(
     emptyText: String,
     watchlist: List<AnimeCard>,
     onOpenAnime: (AnimeCard) -> Unit,
+    onShowTitle: (AnimeCard) -> Unit,
+    onPlayTitle: MobilePlayTitle,
     onOpenSearch: () -> Unit,
     loadOverview: suspend () -> List<CatalogSection>,
     loadCategory: suspend (path: String, page: Int) -> List<AnimeCard>,
@@ -585,6 +861,8 @@ private fun MobileCatalogTab(
     val overviewSections = catalog.overviewSections
     val categoryItems = catalog.categoryItems
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
+    val heroItems = remember(overviewSections) { TitlePreview.randomPicks(overviewSections.flatMap { it.items }) }
     val scope = rememberCoroutineScope()
 
     // Bereits Geladenes (inkl. nachgeladener Seiten) nach der Detailseite nicht erneut laden
@@ -692,28 +970,24 @@ private fun MobileCatalogTab(
                 contentPadding = PaddingValues(bottom = 20.dp),
                 verticalArrangement = Arrangement.spacedBy(18.dp)
             ) {
-                items(overviewSections, key = { it.id }) { sec ->
-                    Column {
-                        Text(
-                            text = sec.title,
-                            color = TextPrimary,
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                if (heroItems.isNotEmpty()) {
+                    item(key = "catalog_hero") {
+                        MobileHeroCarousel(
+                            items = heroItems,
+                            watchlistSlugs = watchlistSlugs,
+                            onOpenDetail = onOpenAnime,
+                            onPlayTitle = onPlayTitle
                         )
-                        LazyRow(
-                            contentPadding = PaddingValues(horizontal = 16.dp),
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            items(sec.items, key = { "${sec.id}_${it.cleanSlug}" }) { movie ->
-                                MobileAnimeCard(
-                                    anime = movie,
-                                    isBookmarked = movie.cleanSlug in watchlistSlugs,
-                                    onClick = { onOpenAnime(movie) }
-                                )
-                            }
-                        }
                     }
+                }
+                items(overviewSections, key = { it.id }) { sec ->
+                    MobileCatalogRow(
+                        rowKey = sec.id,
+                        title = sec.title,
+                        items = sec.items,
+                        watchlistSlugs = watchlistSlugs,
+                        onShowTitle = onShowTitle
+                    )
                 }
             }
         } else {
