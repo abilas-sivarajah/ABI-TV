@@ -11,10 +11,14 @@ import androidx.compose.ui.input.key.KeyEvent
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.key
 import androidx.compose.ui.input.key.type
+import androidx.compose.ui.awt.ComposeWindow
 import androidx.compose.ui.window.WindowState
 
 /** Fensterzustand, z. B. damit der Player in den Vollbildmodus wechseln kann. */
 val LocalWindowState = staticCompositionLocalOf<WindowState> { error("Kein Fenster") }
+
+/** Das echte Fenster – nötig, um das Vollbild zuverlässig zu verlassen (siehe PlayerScreen). */
+val LocalComposeWindow = staticCompositionLocalOf<ComposeWindow?> { null }
 
 /**
  * Tastenkürzel für das ganze Fenster: Bildschirme wie der Player melden sich hier an,

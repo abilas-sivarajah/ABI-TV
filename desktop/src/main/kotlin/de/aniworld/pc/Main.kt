@@ -24,6 +24,7 @@ import de.aniworld.pc.platform.VlcSupport
 import de.aniworld.pc.ui.DesktopApp
 import de.aniworld.pc.ui.compat.BackDispatcher
 import de.aniworld.pc.ui.compat.KeyDispatcher
+import de.aniworld.pc.ui.compat.LocalComposeWindow
 import de.aniworld.pc.ui.compat.LocalWindowState
 import de.aniworld.pc.ui.components.IntroAnimation
 import de.aniworld.pc.ui.theme.AniWorldTvTheme
@@ -90,7 +91,7 @@ fun main() {
             onPreviewKeyEvent = { KeyDispatcher.dispatch(it) }
         ) {
             window.minimumSize = java.awt.Dimension(1024, 640)
-            CompositionLocalProvider(LocalWindowState provides windowState) {
+            CompositionLocalProvider(LocalWindowState provides windowState, LocalComposeWindow provides window) {
                 AniWorldTvTheme {
                     var showIntro by remember { mutableStateOf(true) }
                     Box(modifier = Modifier.fillMaxSize()) {
