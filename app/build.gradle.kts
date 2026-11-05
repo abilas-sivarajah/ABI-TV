@@ -47,6 +47,11 @@ android {
             // Achtung: Updates funktionieren nur, wenn alle Versionen mit demselben Schlüssel signiert sind.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
+        debug {
+            // Test-Version läuft neben der installierten App (eigene Kennung, eigene Daten)
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+        }
     }
 
     buildFeatures {
