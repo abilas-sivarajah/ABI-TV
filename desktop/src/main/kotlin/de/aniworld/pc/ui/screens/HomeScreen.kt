@@ -1645,12 +1645,8 @@ private fun MoviesTabContent(
     }
 
     CatalogBrowser(
-        searchLabel = "🔍 Filme suchen",
-        onOpenSearch = {
-            uiState.searchScope = SearchScope.MOVIES
-            uiState.selectTab(MainNavTab.SEARCH)
-        },
-        categories = FilmpalastScraper.CATEGORIES,
+        // Nur echte Genres; "Top"/"Neu" stecken schon in der Übersicht
+        genres = FilmpalastScraper.CATEGORIES.filter { "/genre/" in it.first },
         selectedCategoryPath = selectedCategoryPath,
         onSelectCategory = { uiState.moviesCategoryPath = it },
         overviewSections = uiState.moviesOverviewSections,
@@ -1727,12 +1723,8 @@ private fun SeriesTabContent(
     }
 
     CatalogBrowser(
-        searchLabel = "🔍 Serien suchen",
-        onOpenSearch = {
-            uiState.searchScope = SearchScope.SERIES
-            uiState.selectTab(MainNavTab.SEARCH)
-        },
-        categories = SerienStreamScraper.CATEGORIES,
+        // Nur echte Genres; "Beliebt"/"Neu" stecken schon in der Übersicht
+        genres = SerienStreamScraper.CATEGORIES.filter { "/genre/" in it.first },
         selectedCategoryPath = selectedCategoryPath,
         onSelectCategory = { uiState.seriesCategoryPath = it },
         overviewSections = uiState.seriesOverviewSections,
@@ -1748,14 +1740,13 @@ private fun SeriesTabContent(
 }
 
 /**
- * Gemeinsamer Aufbau von Filme- und Serien-Tab: Kategorie-Leiste, dann Übersicht mit Hero-Banner
- * oder Raster einer Kategorie. [gridFooter] hängt z. B. "Mehr Filme laden" ans Raster an.
+ * Gemeinsamer Aufbau von Filme- und Serien-Tab. Unter dem Titelbild wählt ein Umschalter zwischen
+ * "Übersicht & Highlights" (Reihen) und "Genre" (eigene Seite: links die Genres, rechts die Titel).
+ * [gridFooter] hängt z. B. "Mehr Filme laden" ans Raster an.
  */
 @Composable
 private fun CatalogBrowser(
-    searchLabel: String,
-    onOpenSearch: () -> Unit,
-    categories: List<Pair<String, String>>,
+    genres: List<Pair<String, String>>,
     selectedCategoryPath: String,
     onSelectCategory: (String) -> Unit,
     overviewSections: List<CatalogSection>,
@@ -1774,111 +1765,182 @@ private fun CatalogBrowser(
     // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
     val heroItems = remember(overviewSections) { randomHeroPicks(overviewSections.flatMap { it.items }) }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Horizontale Kategorie-Leiste (Suche, Übersicht, Genres...)
-        ScrollLazyRow(
-            contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            item {
-                TvFocusableButton(
-                    text = searchLabel,
-                    onClick = onOpenSearch
-                )
-            }
-            item {
-                TvFocusableButton(
-                    text = "🔥 Übersicht & Highlights",
-                    isSelected = isOverview,
-                    onClick = { onSelectCategory("OVERVIEW") }
-                )
-            }
-            items(categories, key = { it.first }) { (path, label) ->
-                TvFocusableButton(
-                    text = label,
-                    isSelected = selectedCategoryPath == path,
-                    onClick = { onSelectCategory(path) }
-                )
+    // Zuletzt gewähltes Genre merken, damit "Genre" dort weitermacht
+    var lastGenre by remember { mutableStateOf(genres.firstOrNull()?.first) }
+    LaunchedEffect(selectedCategoryPath) {
+        if (genres.any { it.first == selectedCategoryPath }) lastGenre = selectedCategoryPath
+    }
+    val switcher: @Composable () -> Unit = {
+        CatalogModeSwitcher(
+            isOverview = isOverview,
+            onOverview = { onSelectCategory("OVERVIEW") },
+            onGenre = { (lastGenre ?: genres.firstOrNull()?.first)?.let(onSelectCategory) }
+        )
+    }
+
+    if (isOverview) {
+        when {
+            isLoading -> CatalogLoading(loadingText)
+            overviewSections.isEmpty() -> CatalogEmpty(emptyText, onRetry)
+            else -> LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 48.dp),
+                verticalArrangement = Arrangement.spacedBy(24.dp)
+            ) {
+                if (heroItems.isNotEmpty()) {
+                    item(key = "catalog_hero") {
+                        HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
+                    }
+                }
+                item(key = "catalog_switcher") { switcher() }
+                items(overviewSections, key = { it.id }) { section ->
+                    CatalogRowSection(
+                        title = section.title,
+                        items = section.items,
+                        watchlistSlugs = watchlistSlugs,
+                        onOpenAnime = onOpenAnime,
+                        onFocusAnime = {}
+                    )
+                }
             }
         }
+        return
+    }
 
-        Spacer(modifier = Modifier.height(8.dp))
-
-        when {
-            isLoading -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        CircularProgressIndicator(color = AccentCyan)
-                        Spacer(modifier = Modifier.height(12.dp))
-                        Text(
-                            text = loadingText,
-                            color = TextSecondary,
-                            fontSize = 14.sp
-                        )
-                    }
+    // ------------------- Genre-Seite -------------------
+    Column(modifier = Modifier.fillMaxSize()) {
+        Spacer(modifier = Modifier.height(12.dp))
+        switcher()
+        Spacer(modifier = Modifier.height(12.dp))
+        Row(modifier = Modifier.fillMaxSize()) {
+            // Links: Genres untereinander
+            LazyColumn(
+                modifier = Modifier
+                    .width(240.dp)
+                    .fillMaxHeight(),
+                contentPadding = PaddingValues(start = 36.dp, end = 12.dp, bottom = 36.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                items(genres, key = { it.first }) { (path, label) ->
+                    GenreListItem(
+                        label = label.dropWhile { !it.isLetter() }.trim(),
+                        selected = path == selectedCategoryPath,
+                        onClick = { onSelectCategory(path) }
+                    )
                 }
             }
 
-            (isOverview && overviewSections.isEmpty()) || (!isOverview && categoryItems.isEmpty()) -> {
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = emptyText,
-                            color = TextSecondary,
-                            fontSize = 15.sp
-                        )
-                        Spacer(modifier = Modifier.height(14.dp))
-                        TvFocusableButton(
-                            text = "Erneut versuchen",
-                            isPrimary = true,
-                            onClick = onRetry
-                        )
-                    }
-                }
-            }
+            Box(
+                modifier = Modifier
+                    .width(1.dp)
+                    .fillMaxHeight()
+                    .padding(vertical = 8.dp)
+                    .background(Color.White.copy(alpha = 0.06f))
+            )
 
-            isOverview -> {
-                LazyColumn(
-                    modifier = Modifier.fillMaxSize(),
-                    contentPadding = PaddingValues(bottom = 48.dp),
-                    verticalArrangement = Arrangement.spacedBy(24.dp)
-                ) {
-                    if (heroItems.isNotEmpty()) {
-                        item(key = "catalog_hero") {
-                            HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
+            // Rechts: Titel des gewählten Genres
+            Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
+                when {
+                    isLoading -> CatalogLoading(loadingText)
+                    categoryItems.isEmpty() -> CatalogEmpty(emptyText, onRetry)
+                    else -> LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 148.dp),
+                        contentPadding = PaddingValues(start = 24.dp, end = 36.dp, top = 4.dp, bottom = 36.dp),
+                        horizontalArrangement = Arrangement.spacedBy(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(20.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(categoryItems, key = { it.cleanSlug }) { card ->
+                            TvAnimeCard(
+                                anime = card,
+                                isBookmarked = card.cleanSlug in watchlistSlugs,
+                                onClick = { onOpenAnime(card) }
+                            )
                         }
-                    }
-
-                    items(overviewSections, key = { it.id }) { section ->
-                        CatalogRowSection(
-                            title = section.title,
-                            items = section.items,
-                            watchlistSlugs = watchlistSlugs,
-                            onOpenAnime = onOpenAnime,
-                            onFocusAnime = {}
-                        )
+                        gridFooter()
                     }
                 }
             }
+        }
+    }
+}
 
-            else -> {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 148.dp),
-                    contentPadding = PaddingValues(horizontal = 36.dp, vertical = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp),
-                    verticalArrangement = Arrangement.spacedBy(20.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(categoryItems, key = { it.cleanSlug }) { card ->
-                        TvAnimeCard(
-                            anime = card,
-                            isBookmarked = card.cleanSlug in watchlistSlugs,
-                            onClick = { onOpenAnime(card) }
-                        )
-                    }
-                    gridFooter()
+/** Umschalter "Übersicht & Highlights" / "Genre" (unter dem Titelbild bzw. oben auf der Genre-Seite). */
+@Composable
+private fun CatalogModeSwitcher(isOverview: Boolean, onOverview: () -> Unit, onGenre: () -> Unit) {
+    Row(
+        modifier = Modifier.padding(horizontal = 36.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        NavTextTab(label = "Übersicht & Highlights", selected = isOverview, onClick = onOverview)
+        NavTextTab(label = "Genre", selected = !isOverview, onClick = onGenre)
+    }
+}
+
+/** Ein Eintrag in der Genre-Liste links; der gewählte mit heller Fläche und cyanfarbenem Strich. */
+@Composable
+private fun GenreListItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.12f)
+                    hovered || focused -> Color.White.copy(alpha = 0.06f)
+                    else -> Color.Transparent
                 }
-            }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 11.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(
+            modifier = Modifier
+                .width(3.dp)
+                .height(18.dp)
+                .clip(RoundedCornerShape(2.dp))
+                .background(if (selected) AccentCyan else Color.Transparent)
+        )
+        Spacer(modifier = Modifier.width(10.dp))
+        Text(
+            text = label,
+            color = if (selected || hovered || focused) TextPrimary else TextSecondary,
+            fontSize = 15.sp,
+            fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis
+        )
+    }
+}
+
+@Composable
+private fun CatalogLoading(text: String) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            CircularProgressIndicator(color = AccentCyan)
+            Spacer(modifier = Modifier.height(12.dp))
+            Text(text = text, color = TextSecondary, fontSize = 14.sp)
+        }
+    }
+}
+
+@Composable
+private fun CatalogEmpty(text: String, onRetry: () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            Text(text = text, color = TextSecondary, fontSize = 15.sp)
+            Spacer(modifier = Modifier.height(14.dp))
+            TvFocusableButton(text = "Erneut versuchen", isPrimary = true, onClick = onRetry)
         }
     }
 }
