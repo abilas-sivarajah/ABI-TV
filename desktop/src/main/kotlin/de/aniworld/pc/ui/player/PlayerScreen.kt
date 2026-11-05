@@ -54,6 +54,13 @@ import java.awt.Rectangle
 import java.awt.event.ComponentAdapter
 import java.awt.event.ComponentEvent
 import kotlinx.coroutines.launch
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.toComposeImageBitmap
+import androidx.compose.ui.layout.ContentScale
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -291,7 +298,20 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     // Kopplungscode angezeigt wird, schrumpft das Bild und die Meldung erscheint an seiner Stelle.
     // Aus demselben Grund liegen die Leisten über/unter dem Bild und Folgen/Sprache rechts daneben.
     val isLoading = controller.isResolving || controller.isStarting
-    val showVideo = !isLoading && controller.errorMessage == null && pairingNotice == null
+    val videoReady = !isLoading && controller.errorMessage == null && pairingNotice == null
+
+    // Pausen-Ansicht wie bei Netflix: nach kurzer Pause ein Standbild mit Titel und Beschreibung.
+    // (Über das laufende VLC-Bild kann Compose nicht zeichnen – darum wird es durch das Standbild ersetzt.)
+    var pauseFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    LaunchedEffect(controller.isPlaying, videoReady, controller.currentEpisode?.path) {
+        if (controller.isPlaying || !videoReady || (controller.durationMs <= 0L && !controller.isLiveStream)) {
+            pauseFrame = null
+            return@LaunchedEffect
+        }
+        delay(PAUSE_INFO_DELAY_MS)
+        pauseFrame = withContext(Dispatchers.IO) { controller.snapshot() }?.toComposeImageBitmap()
+    }
+    val showVideo = videoReady && pauseFrame == null
 
     // Lage des Videobilds auf dem Bildschirm – für die Knöpfe über dem Bild (eigenes kleines Fenster)
     val density = LocalDensity.current.density
@@ -380,6 +400,14 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
                     modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
                 )
 
+                pauseFrame?.let { frame ->
+                    PauseInfo(
+                        frame = frame,
+                        controller = controller,
+                        onResume = { controller.togglePause(); keepControlsAlive() }
+                    )
+                }
+
                 if (isLoading && controller.errorMessage == null) {
                     StatusCard {
                         CircularProgressIndicator(color = AccentCyan)
@@ -444,11 +472,115 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
 /** Seitenleiste rechts neben dem Bild. */
 private enum class PlayerPanel { EPISODES, LANGUAGE }
 
+/** Pausen-Ansicht erst nach kurzer Pause zeigen (kurzes Anhalten soll das Bild nicht verdecken). */
+private const val PAUSE_INFO_DELAY_MS = 2_500L
+
 /** "Intro überspringen" wird in den ersten Minuten angeboten und springt so weit vor wie bisher die Taste I. */
 private const val INTRO_WINDOW_MS = 5 * 60_000L
 private const val INTRO_SKIP_MS = 85_000L
 /** "Nächste Folge" erscheint in den letzten 100 Sekunden (Abspann). */
 private const val CREDITS_WINDOW_MS = 100_000L
+
+/**
+ * Pausen-Ansicht: abgedunkeltes Standbild, links "Sie sehen gerade", Titel, Staffel,
+ * Folge und Beschreibung, rechts unten "Angehalten". Klick spielt weiter.
+ */
+@Composable
+private fun PauseInfo(frame: ImageBitmap, controller: PlayerController, onResume: () -> Unit) {
+    val episode = controller.currentEpisode
+    val isLive = controller.isLiveStream
+    val isSeries = !isLive && (controller.seasonEpisodes.size > 1 || controller.seasons.size > 1)
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onResume)
+    ) {
+        Image(
+            bitmap = frame,
+            contentDescription = null,
+            contentScale = ContentScale.Fit,
+            modifier = Modifier.fillMaxSize()
+        )
+        // Abdunkeln, links etwas stärker für die Schrift
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to Color.Black.copy(alpha = 0.80f),
+                        0.6f to Color.Black.copy(alpha = 0.55f),
+                        1f to Color.Black.copy(alpha = 0.45f)
+                    )
+                )
+        )
+
+        Column(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .padding(start = 96.dp, end = 48.dp)
+                .widthIn(max = 900.dp)
+        ) {
+            Text(text = "Sie sehen gerade", color = TextSecondary, fontSize = 16.sp)
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                text = controller.animeTitle,
+                color = Color.White,
+                fontSize = 52.sp,
+                lineHeight = 56.sp,
+                fontWeight = FontWeight.ExtraBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            if (isSeries && episode != null) {
+                val season = episode.seasonLabel.takeIf { it.isNotBlank() }
+                if (season != null) {
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = if (season.equals("Filme", true)) "Filme & Specials" else "Staffel $season",
+                        color = Color.White,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.Bold
+                    )
+                }
+                Spacer(modifier = Modifier.height(22.dp))
+                Text(
+                    text = episode.displayTitle.takeIf { it.isNotBlank() && !it.startsWith("Folge ") }
+                        ?.let { "$it: Flg. ${episode.number}" } ?: "Folge ${episode.number}",
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else if (isLive) {
+                episode?.displayTitle?.takeIf { it.isNotBlank() && it != controller.animeTitle }?.let {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(text = it, color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                }
+            }
+            controller.titleDescription.takeIf { it.isNotBlank() && !isLive }?.let { description ->
+                Spacer(modifier = Modifier.height(10.dp))
+                Text(
+                    text = description,
+                    color = Color.White.copy(alpha = 0.85f),
+                    fontSize = 17.sp,
+                    lineHeight = 24.sp,
+                    maxLines = 4,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+
+        Text(
+            text = "Angehalten",
+            color = Color.White.copy(alpha = 0.85f),
+            fontSize = 18.sp,
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = 72.dp, bottom = 48.dp)
+        )
+    }
+}
 
 @Composable
 private fun StatusCard(content: @Composable () -> Unit) {

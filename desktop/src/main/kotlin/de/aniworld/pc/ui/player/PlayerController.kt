@@ -287,16 +287,23 @@ class PlayerController(private val scope: CoroutineScope) {
     /** Staffeln der Serie (für "Folgen" und "Nächste Staffel"); leer bei Filmen und Live TV. */
     var seasons by mutableStateOf<List<SeasonLink>>(emptyList())
         private set
+    /** Beschreibung des Titels (für die Pausen-Ansicht). */
+    var titleDescription by mutableStateOf("")
+        private set
     private var seasonsLoadedFor = ""
 
     private fun loadSeasonsIfNeeded() {
         if (isLiveStream || animeSlug.isBlank() || seasonsLoadedFor == animeSlug) return
         seasonsLoadedFor = animeSlug
         seasons = emptyList()
+        titleDescription = ""
         val slug = animeSlug
         scope.launch {
-            val loaded = runCatching { fetchDetailFor(slug, null).seasons }.getOrDefault(emptyList())
-            if (animeSlug == slug) seasons = loaded
+            val detail = runCatching { fetchDetailFor(slug, null) }.getOrNull() ?: return@launch
+            if (animeSlug == slug) {
+                seasons = detail.seasons
+                titleDescription = detail.description
+            }
         }
     }
 
@@ -338,6 +345,9 @@ class PlayerController(private val scope: CoroutineScope) {
             else -> AniWorldScraper.fetchAnimeDetail(slug, seasonPath)
         }
     }
+
+    /** Standbild des aktuellen Videobilds (für die Pausen-Ansicht); null, wenn keins verfügbar. */
+    fun snapshot(): java.awt.image.BufferedImage? = runCatching { mediaPlayer?.snapshots()?.get() }.getOrNull()
 
     fun findNextEpisode(): EpisodeItem? {
         val current = currentEpisode ?: return null
