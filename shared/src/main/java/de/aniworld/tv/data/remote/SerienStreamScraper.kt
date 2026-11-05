@@ -93,8 +93,14 @@ object SerienStreamScraper {
         sections
     }
 
-    suspend fun fetchCategory(categoryPath: String): List<AnimeCard> = withContext(Dispatchers.IO) {
-        val fullUrl = if (categoryPath.startsWith("http")) categoryPath else "$BASE_URL$categoryPath"
+    /** Titel einer Kategorie/eines Genres; S.to blättert Genres mit "?page=2", "?page=3" … */
+    suspend fun fetchCategory(categoryPath: String, page: Int = 1): List<AnimeCard> = withContext(Dispatchers.IO) {
+        val baseUrl = if (categoryPath.startsWith("http")) categoryPath else "$BASE_URL$categoryPath"
+        val fullUrl = if (page > 1) {
+            baseUrl + (if ('?' in baseUrl) "&" else "?") + "page=$page"
+        } else {
+            baseUrl
+        }
         val (_, html) = HttpClient.getHtml(fullUrl, "$BASE_URL/")
         val doc = Jsoup.parse(html, BASE_URL)
         parseSeriesCards(doc)
