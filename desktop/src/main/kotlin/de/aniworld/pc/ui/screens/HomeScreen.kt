@@ -2477,18 +2477,18 @@ private fun SearchTabContent(
             .fillMaxSize()
             .padding(horizontal = 36.dp)
     ) {
-        // Kompakte Kopfzeile: Suchfeld + Filter-Kategorien auf EINER Zeile
+        // Kopf: Suchfeld (nicht über die ganze Breite), darunter die Filter
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 10.dp, bottom = 10.dp),
+                .padding(top = 10.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Suchfeld
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .width(560.dp)
                     .height(46.dp)
                     .focusRequester(boxFocusRequester)
                     .clip(RoundedCornerShape(10.dp))
@@ -2590,16 +2590,24 @@ private fun SearchTabContent(
                 )
             }
 
-            // Kategorien-Filter (Animes | Serien | Filme | Alle) direkt in derselben Zeile
-            for (scopeOption in SearchScope.entries) {
-                val isSelected = searchScope == scopeOption
-                TvFocusableButton(
-                    text = "${scopeOption.icon} ${scopeOption.label}",
-                    isSelected = isSelected,
-                    badgeColor = if (isSelected) AccentCyan else null,
-                    onClick = {
-                        uiState.searchScope = scopeOption
-                    }
+        }
+
+        // Filter unter dem Suchfeld: Filme · Serien · Anime · Alle
+        Row(
+            modifier = Modifier.padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf(
+                SearchScope.MOVIES to "Filme",
+                SearchScope.SERIES to "Serien",
+                SearchScope.ANIMES to "Anime",
+                SearchScope.ALL to "Alle"
+            ).forEach { (scopeOption, label) ->
+                NavTextTab(
+                    label = label,
+                    selected = searchScope == scopeOption,
+                    onClick = { uiState.searchScope = scopeOption }
                 )
             }
         }
