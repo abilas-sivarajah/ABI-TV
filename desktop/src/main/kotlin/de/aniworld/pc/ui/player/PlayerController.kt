@@ -10,6 +10,8 @@ import de.aniworld.pc.platform.VlcSupport
 import de.aniworld.tv.cast.CastStatus
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.EpisodeItem
+import de.aniworld.tv.data.model.AnimeDetail
+import de.aniworld.tv.data.model.SeasonLink
 import de.aniworld.tv.data.model.HosterLink
 import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.ResolvedStream
@@ -193,6 +195,7 @@ class PlayerController(private val scope: CoroutineScope) {
                 selectedLangKey = request.preferredLangKey
                 seasonEpisodes = request.seasonEpisodes
                 loadEpisodeAndPlay(request.episode)
+                loadSeasonsIfNeeded()
             }
         }
     }
@@ -277,6 +280,63 @@ class PlayerController(private val scope: CoroutineScope) {
         val mp = mediaPlayer ?: return
         volume = level.coerceIn(0, 150)
         mp.audio().setVolume(volume)
+    }
+
+    // ------------------- Staffeln -------------------
+
+    /** Staffeln der Serie (für "Folgen" und "Nächste Staffel"); leer bei Filmen und Live TV. */
+    var seasons by mutableStateOf<List<SeasonLink>>(emptyList())
+        private set
+    private var seasonsLoadedFor = ""
+
+    private fun loadSeasonsIfNeeded() {
+        if (isLiveStream || animeSlug.isBlank() || seasonsLoadedFor == animeSlug) return
+        seasonsLoadedFor = animeSlug
+        seasons = emptyList()
+        val slug = animeSlug
+        scope.launch {
+            val loaded = runCatching { fetchDetailFor(slug, null).seasons }.getOrDefault(emptyList())
+            if (animeSlug == slug) seasons = loaded
+        }
+    }
+
+    /** Staffel der laufenden Folge. */
+    val currentSeason: SeasonLink?
+        get() = currentEpisode?.seasonLabel?.let { label -> seasons.firstOrNull { it.label == label } }
+
+    /** Nächste reguläre Staffel nach der laufenden (ohne "Filme"). */
+    fun findNextSeason(): SeasonLink? {
+        val current = currentSeason ?: return null
+        return seasons.drop(seasons.indexOf(current) + 1).firstOrNull { !it.isMovies }
+    }
+
+    /** Folgen einer Staffel laden (für die Staffelwahl im Player). */
+    suspend fun fetchSeasonEpisodes(season: SeasonLink): List<EpisodeItem> =
+        fetchDetailFor(animeSlug, season.path).episodes
+
+    /** Folge aus einer (evtl. anderen) Staffel spielen. */
+    fun playEpisodeOf(episode: EpisodeItem, episodes: List<EpisodeItem>) {
+        persistCurrentProgress()
+        seasonEpisodes = episodes
+        loadEpisodeAndPlay(episode)
+    }
+
+    /** Erste Folge der nächsten Staffel spielen. */
+    fun playNextSeason() {
+        val next = findNextSeason() ?: return
+        scope.launch {
+            val episodes = runCatching { fetchSeasonEpisodes(next) }.getOrDefault(emptyList())
+            episodes.firstOrNull()?.let { playEpisodeOf(it, episodes) }
+        }
+    }
+
+    private suspend fun fetchDetailFor(slug: String, seasonPath: String?): AnimeDetail = withContext(Dispatchers.IO) {
+        when {
+            FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
+            HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug, seasonPath)
+            SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug, seasonPath)
+            else -> AniWorldScraper.fetchAnimeDetail(slug, seasonPath)
+        }
     }
 
     fun findNextEpisode(): EpisodeItem? {

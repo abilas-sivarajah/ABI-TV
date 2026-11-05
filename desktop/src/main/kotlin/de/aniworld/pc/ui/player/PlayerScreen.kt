@@ -42,6 +42,18 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.DpOffset
 import de.aniworld.tv.data.model.EpisodeItem
 import de.aniworld.tv.data.model.LanguageOption
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.ui.layout.LayoutCoordinates
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.platform.LocalDensity
+import de.aniworld.tv.data.model.SeasonLink
+import java.awt.Rectangle
+import java.awt.event.ComponentAdapter
+import java.awt.event.ComponentEvent
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -279,6 +291,66 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     val isLoading = controller.isResolving || controller.isStarting
     val showVideo = !isLoading && controller.errorMessage == null && pairingNotice == null
 
+    // Lage des Videobilds auf dem Bildschirm – für die Knöpfe über dem Bild (eigenes kleines Fenster)
+    val density = LocalDensity.current.density
+    val videoCoords = remember { arrayOfNulls<LayoutCoordinates>(1) }
+    var videoBounds by remember { mutableStateOf<Rectangle?>(null) }
+    fun updateVideoBounds() {
+        val coords = videoCoords[0]?.takeIf { it.isAttached } ?: return
+        val origin = runCatching { composeWindow?.contentPane?.locationOnScreen }.getOrNull() ?: return
+        val pos = coords.positionInWindow()
+        val bounds = Rectangle(
+            origin.x + (pos.x / density).toInt(),
+            origin.y + (pos.y / density).toInt(),
+            (coords.size.width / density).toInt(),
+            (coords.size.height / density).toInt()
+        )
+        // Nur bei echter Änderung setzen (Rectangle vergleicht nach Werten)
+        if (bounds != videoBounds) videoBounds = bounds
+    }
+    DisposableEffect(composeWindow) {
+        val window = composeWindow
+        val listener = object : ComponentAdapter() {
+            override fun componentMoved(e: ComponentEvent) = updateVideoBounds()
+            override fun componentResized(e: ComponentEvent) = updateVideoBounds()
+        }
+        window?.addComponentListener(listener)
+        onDispose { window?.removeComponentListener(listener) }
+    }
+
+    // Serien: "Intro überspringen" am Anfang, "Nächste Folge"/"Nächste Staffel" im Abspann
+    val isSeries = !controller.isLiveStream && (controller.seasonEpisodes.size > 1 || controller.seasons.size > 1)
+    val position = controller.currentPositionMs
+    val duration = controller.durationMs
+    val episodePath = controller.currentEpisode?.path
+    var introSkippedFor by remember { mutableStateOf<String?>(null) }
+    val nextEpisode = controller.findNextEpisode()
+    val nextSeason = if (nextEpisode == null) controller.findNextSeason() else null
+    val longEnough = duration > 10 * 60_000L
+    val showIntroSkip = isSeries && showVideo && longEnough &&
+        position in 5_000L..INTRO_WINDOW_MS && introSkippedFor != episodePath
+    val showNextUp = isSeries && showVideo && longEnough &&
+        duration - position in 0L..CREDITS_WINDOW_MS && (nextEpisode != null || nextSeason != null)
+    VideoOverlayButton(
+        visible = showIntroSkip || showNextUp,
+        label = when {
+            showNextUp && nextEpisode != null -> "Nächste Folge"
+            showNextUp -> "Nächste Staffel"
+            else -> "Intro überspringen"
+        },
+        icon = if (showNextUp) Icons.Filled.SkipNext else Icons.Filled.FastForward,
+        videoBounds = videoBounds,
+        onClick = {
+            if (showNextUp) {
+                if (nextEpisode != null) controller.playNextEpisode() else controller.playNextSeason()
+            } else {
+                controller.seekBy(INTRO_SKIP_MS)
+                introSkippedFor = episodePath
+            }
+            keepControlsAlive()
+        }
+    )
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -296,7 +368,8 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .fillMaxHeight(),
+                    .fillMaxHeight()
+                    .onGloballyPositioned { videoCoords[0] = it; updateVideoBounds() },
                 contentAlignment = Alignment.Center
             ) {
                 SwingPanel(
@@ -335,10 +408,9 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             when (sidePanel) {
                 PlayerPanel.EPISODES -> EpisodesPanel(
                     controller = controller,
-                    onPick = { episode ->
+                    onPick = { episode, episodes ->
                         sidePanel = null
-                        controller.persistCurrentProgress()
-                        controller.loadEpisodeAndPlay(episode)
+                        controller.playEpisodeOf(episode, episodes)
                     },
                     onClose = { sidePanel = null }
                 )
@@ -369,6 +441,12 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
 
 /** Seitenleiste rechts neben dem Bild. */
 private enum class PlayerPanel { EPISODES, LANGUAGE }
+
+/** "Intro überspringen" wird in den ersten Minuten angeboten und springt so weit vor wie bisher die Taste I. */
+private const val INTRO_WINDOW_MS = 5 * 60_000L
+private const val INTRO_SKIP_MS = 85_000L
+/** "Nächste Folge" erscheint in den letzten 100 Sekunden (Abspann). */
+private const val CREDITS_WINDOW_MS = 100_000L
 
 @Composable
 private fun StatusCard(content: @Composable () -> Unit) {
@@ -412,8 +490,9 @@ private fun PlayerBottomBar(
     onInteraction: () -> Unit
 ) {
     val isLive = controller.isLiveStream
-    val hasEpisodes = !isLive && controller.seasonEpisodes.size > 1
+    val hasEpisodes = !isLive && (controller.seasonEpisodes.size > 1 || controller.seasons.size > 1)
     val nextEpisode = if (isLive) null else controller.findNextEpisode()
+    val nextSeason = if (isLive || nextEpisode != null) null else controller.findNextSeason()
 
     Column(
         modifier = Modifier
@@ -546,6 +625,12 @@ private fun PlayerBottomBar(
                         description = "Nächste Folge (${nextEpisode.number})",
                         onClick = { controller.playNextEpisode(); onInteraction() }
                     )
+                } else if (nextSeason != null) {
+                    PlayerIconButton(
+                        icon = Icons.Filled.SkipNext,
+                        description = "Nächste Staffel (${nextSeason.label})",
+                        onClick = { controller.playNextSeason(); onInteraction() }
+                    )
                 }
                 if (hasEpisodes) {
                     PlayerIconButton(
@@ -647,43 +732,126 @@ private fun SidePanel(title: String, onClose: () -> Unit, content: @Composable (
     }
 }
 
-/** Folgen der Staffel; die laufende ist hervorgehoben, ein Klick spielt die gewählte. */
+/**
+ * Folgen mit Staffelwahl oben (falls es mehrere Staffeln gibt). Die laufende Folge ist
+ * hervorgehoben; ein Klick spielt die gewählte, auch aus einer anderen Staffel.
+ */
 @Composable
-private fun EpisodesPanel(controller: PlayerController, onPick: (EpisodeItem) -> Unit, onClose: () -> Unit) {
-    val episodes = controller.seasonEpisodes
+private fun EpisodesPanel(
+    controller: PlayerController,
+    onPick: (EpisodeItem, List<EpisodeItem>) -> Unit,
+    onClose: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
     val currentPath = controller.currentEpisode?.path
+    var viewSeason by remember { mutableStateOf(controller.currentSeason) }
+    var viewEpisodes by remember { mutableStateOf(controller.seasonEpisodes) }
+    var loading by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     LaunchedEffect(Unit) {
-        val index = episodes.indexOfFirst { it.path == currentPath }
+        val index = viewEpisodes.indexOfFirst { it.path == currentPath }
         if (index > 2) listState.scrollToItem(index - 2)
     }
-    val season = controller.currentEpisode?.seasonLabel?.takeIf { it.isNotBlank() }
-    SidePanel(title = if (season != null) "Staffel $season" else "Folgen", onClose = onClose) {
-        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            items(episodes, key = { it.path }) { episode ->
-                val isCurrent = episode.path == currentPath
-                PanelRow(selected = isCurrent, onClick = { if (!isCurrent) onPick(episode) }) {
-                    Text(
-                        text = "${episode.number}",
-                        color = if (isCurrent) AccentCyan else TextSecondary,
-                        fontSize = 18.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.width(40.dp)
+
+    fun showSeason(season: SeasonLink) {
+        viewSeason = season
+        if (season == controller.currentSeason) {
+            viewEpisodes = controller.seasonEpisodes
+            return
+        }
+        scope.launch {
+            loading = true
+            viewEpisodes = runCatching { controller.fetchSeasonEpisodes(season) }.getOrDefault(emptyList())
+            loading = false
+            listState.scrollToItem(0)
+        }
+    }
+
+    SidePanel(title = "Folgen", onClose = onClose) {
+        val seasons = controller.seasons
+        if (seasons.size > 1) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState()),
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                seasons.forEach { season ->
+                    SeasonChip(
+                        label = if (season.isMovies) "Filme" else "Staffel ${season.label}",
+                        selected = season == viewSeason,
+                        onClick = { showSeason(season) }
                     )
-                    Column(modifier = Modifier.weight(1f)) {
+                }
+            }
+            Spacer(modifier = Modifier.height(12.dp))
+        }
+
+        if (loading) {
+            Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                CircularProgressIndicator(color = AccentCyan)
+            }
+        } else {
+            LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                items(viewEpisodes, key = { it.path }) { episode ->
+                    val isCurrent = episode.path == currentPath
+                    PanelRow(selected = isCurrent, onClick = { if (!isCurrent) onPick(episode, viewEpisodes) }) {
                         Text(
-                            text = episode.displayTitle.ifBlank { "Folge ${episode.number}" },
-                            color = TextPrimary,
-                            fontSize = 14.sp,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
+                            text = "${episode.number}",
+                            color = if (isCurrent) AccentCyan else TextSecondary,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.width(40.dp)
                         )
-                        if (isCurrent) Text(text = "Läuft gerade", color = AccentCyan, fontSize = 12.sp)
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = episode.displayTitle.ifBlank { "Folge ${episode.number}" },
+                                color = TextPrimary,
+                                fontSize = 14.sp,
+                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            if (isCurrent) Text(text = "Läuft gerade", color = AccentCyan, fontSize = 12.sp)
+                        }
                     }
                 }
             }
         }
+    }
+}
+
+/** Staffel-Kästchen oben in der Folgen-Leiste. */
+@Composable
+private fun SeasonChip(label: String, selected: Boolean, onClick: () -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(50)
+    Box(
+        modifier = Modifier
+            .clip(shape)
+            .background(
+                when {
+                    selected -> Color.White
+                    hovered || focused -> Color.White.copy(alpha = 0.16f)
+                    else -> Color.White.copy(alpha = 0.08f)
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 7.dp)
+    ) {
+        Text(
+            text = label,
+            color = if (selected) Color(0xFF0B0E14) else TextPrimary,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Bold,
+            maxLines = 1
+        )
     }
 }
 
