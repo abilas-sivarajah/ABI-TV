@@ -1,5 +1,53 @@
 package de.aniworld.tv.ui.player
 
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.focusable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.FastForward
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
+import de.aniworld.tv.data.model.AnimeDetail
+import de.aniworld.tv.data.model.SeasonLink
+import de.aniworld.tv.ui.theme.FocusBorder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
@@ -106,7 +154,7 @@ class PlayerActivity : ComponentActivity() {
     private var animeSlug: String = ""
     private var animeTitle: String = ""
     private var coverUrl: String = ""
-    private var seasonEpisodes: ArrayList<EpisodeItem> = arrayListOf()
+    private var seasonEpisodes by mutableStateOf<ArrayList<EpisodeItem>>(arrayListOf())
 
     private var currentEpisode by mutableStateOf<EpisodeItem?>(null)
     private var availableHosters by mutableStateOf<List<HosterLink>>(emptyList())
@@ -131,6 +179,21 @@ class PlayerActivity : ComponentActivity() {
     private var lastInteractionTime by mutableLongStateOf(System.currentTimeMillis())
     private var resolveJob: Job? = null
     private var releasedInBackground = false
+
+    /** Seitenleiste rechts (Folgen, Sprache) oder null. */
+    private var sidePanel by mutableStateOf<PlayerPanel?>(null)
+    /** Staffeln der Serie (für "Folgen" und "Nächste Staffel"); leer bei Filmen und Live TV. */
+    private var seasons by mutableStateOf<List<SeasonLink>>(emptyList())
+    /** Beschreibung des Titels (für die Pausen-Ansicht). */
+    private var titleDescription by mutableStateOf("")
+    private var seasonsLoadedFor = ""
+    private var introSkippedFor by mutableStateOf<String?>(null)
+    /** Zählt jede Sekunde hoch, damit zeitabhängige Anzeigen (Pausen-Ansicht) neu geprüft werden. */
+    private var idleTick by mutableIntStateOf(0)
+    /** Steht "Intro überspringen"/"Nächste Folge" im Bild? Dann geht OK an diesen Knopf. */
+    private var overlayButtonVisible = false
+    /** Wird die Pausen-Ansicht gezeigt? Dann spielt OK weiter. */
+    private var pauseInfoVisible = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -274,11 +337,13 @@ class PlayerActivity : ComponentActivity() {
                 if (tick % 8 == 0) {
                     persistCurrentProgress()
                 }
-                if (controlsVisible && isPlaying && !isResolving && errorMessage == null) {
-                    if (System.currentTimeMillis() - lastInteractionTime > 5_000L) {
+                // Leisten nach kurzer Zeit ohne Eingabe ausblenden (nicht, solange eine Seitenleiste offen ist)
+                if (controlsVisible && sidePanel == null && !isResolving && errorMessage == null) {
+                    if (System.currentTimeMillis() - lastInteractionTime > CONTROLS_HIDE_MS) {
                         controlsVisible = false
                     }
                 }
+                idleTick++
             }
         }
 
@@ -288,6 +353,26 @@ class PlayerActivity : ComponentActivity() {
                 releasePlayer()
             }
         }
+
+        val videoReady = !isResolving && errorMessage == null && exoPlayer != null
+
+        // Serien: "Intro überspringen" am Anfang, "Nächste Folge"/"Nächste Staffel" im Abspann
+        val isSeries = !isLiveStream && (seasonEpisodes.size > 1 || seasons.size > 1)
+        val episodePath = currentEpisode?.path
+        val nextEpisode = if (isLiveStream) null else findNextEpisode()
+        val nextSeason = if (isLiveStream || nextEpisode != null) null else findNextSeason()
+        val longEnough = durationMs > 10 * 60_000L
+        val showIntroSkip = isSeries && videoReady && longEnough &&
+            currentPositionMs in 5_000L..INTRO_WINDOW_MS && introSkippedFor != episodePath
+        val showNextUp = isSeries && videoReady && longEnough &&
+            durationMs - currentPositionMs in 0L..CREDITS_WINDOW_MS && (nextEpisode != null || nextSeason != null)
+        overlayButtonVisible = (showIntroSkip || showNextUp) && sidePanel == null
+
+        // Pausen-Ansicht wie bei Netflix: nach kurzer Pause ohne Eingabe Titel und Beschreibung über dem Bild
+        // (idleTick zählt jede Sekunde hoch, damit diese Zeitbedingung neu geprüft wird)
+        val pausedIdle = idleTick >= 0 && !isPlaying && videoReady && sidePanel == null &&
+            System.currentTimeMillis() - lastInteractionTime > PAUSE_INFO_DELAY_MS
+        pauseInfoVisible = pausedIdle
 
         Box(
             modifier = Modifier
@@ -317,23 +402,14 @@ class PlayerActivity : ComponentActivity() {
                 )
             }
 
-            // Lade-/Auflöse-Indikator
-            if (isResolving || isBuffering) {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(BgSurface.copy(alpha = 0.9f))
-                            .padding(horizontal = 28.dp, vertical = 20.dp)
-                    ) {
+            // Laden: nur "Starte …" statt Hoster-Namen
+            if ((isResolving || isBuffering) && errorMessage == null) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    StatusCard {
                         CircularProgressIndicator(color = AccentCyan)
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = if (isResolving) statusMessage else "Puffere Video...",
+                            text = if (isResolving) statusMessage else "Lädt …",
                             color = TextPrimary,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Medium
@@ -342,318 +418,799 @@ class PlayerActivity : ComponentActivity() {
                 }
             }
 
-            // Fehler-Overlay mit Hoster-Wechsel
-            if (errorMessage != null) {
+            // Pausen-Ansicht
+            AnimatedVisibility(
+                visible = pausedIdle,
+                enter = fadeIn(tween(600)),
+                exit = fadeOut(tween(200)),
+                modifier = Modifier.fillMaxSize()
+            ) {
+                PauseInfo(isSeries = isSeries)
+            }
+
+            // Leisten unten (Fortschritt, Bedienung, Titel)
+            AnimatedVisibility(
+                visible = controlsVisible && !pausedIdle && errorMessage == null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+                modifier = Modifier.align(Alignment.BottomCenter)
+            ) {
+                PlayerBottomBar(nextEpisode = nextEpisode, nextSeason = nextSeason)
+            }
+
+            // "Intro überspringen" / "Nächste Folge" unten rechts im Bild
+            if (overlayButtonVisible && !pausedIdle) {
+                val focus = remember { FocusRequester() }
+                LaunchedEffect(showNextUp, controlsVisible) {
+                    // Ohne Leisten bekommt der Knopf den Fokus: OK löst ihn direkt aus
+                    if (!controlsVisible) {
+                        delay(50)
+                        runCatching { focus.requestFocus() }
+                    }
+                }
+                VideoOverlayButton(
+                    label = when {
+                        showNextUp && nextEpisode != null -> "Nächste Folge"
+                        showNextUp -> "Nächste Staffel"
+                        else -> "Intro überspringen"
+                    },
+                    icon = if (showNextUp) Icons.Filled.SkipNext else Icons.Filled.FastForward,
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 48.dp, bottom = if (controlsVisible) 150.dp else 56.dp)
+                        .focusRequester(focus),
+                    onClick = {
+                        if (showNextUp) {
+                            if (nextEpisode != null) playNextEpisode() else playNextSeason()
+                        } else {
+                            seekBy(INTRO_SKIP_MS)
+                            introSkippedFor = episodePath
+                        }
+                        keepControlsAlive()
+                    }
+                )
+            }
+
+            // Seitenleisten rechts über dem Bild
+            if (sidePanel != null) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black.copy(alpha = 0.45f))
+                )
+                Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                    when (sidePanel) {
+                        PlayerPanel.EPISODES -> EpisodesPanel(
+                            onPick = { episode, episodes ->
+                                sidePanel = null
+                                playEpisodeOf(episode, episodes)
+                            }
+                        )
+                        PlayerPanel.LANGUAGE -> LanguagePanel(
+                            onPick = { language ->
+                                sidePanel = null
+                                selectLanguage(language)
+                            }
+                        )
+                        null -> Unit
+                    }
+                }
+            }
+
+            // Fehler
+            errorMessage?.let { message ->
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(Color.Black.copy(alpha = 0.8f)),
                     contentAlignment = Alignment.Center
                 ) {
-                    Column(
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(BgSurface)
-                            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(16.dp))
-                            .padding(28.dp)
-                    ) {
-                        Text(
-                            text = "Wiedergabefehler",
-                            color = AccentCyan,
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold
-                        )
+                    val retryFocus = remember { FocusRequester() }
+                    LaunchedEffect(message) {
+                        delay(50)
+                        runCatching { retryFocus.requestFocus() }
+                    }
+                    StatusCard {
+                        Text(text = "Wiedergabefehler", color = AccentCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                         Spacer(modifier = Modifier.height(8.dp))
-                        Text(
-                            text = errorMessage.orEmpty(),
-                            color = TextSecondary,
-                            fontSize = 14.sp
-                        )
+                        Text(text = message, color = TextSecondary, fontSize = 14.sp)
                         Spacer(modifier = Modifier.height(18.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                             TvFocusableButton(
                                 text = "Erneut versuchen",
                                 isPrimary = true,
+                                modifier = Modifier.focusRequester(retryFocus),
                                 onClick = {
-                                    if (isLiveStream) {
-                                        reconnectLive()
-                                    } else {
-                                        currentEpisode?.let { loadEpisodeAndPlay(it) }
-                                    }
+                                    if (isLiveStream) reconnectLive() else currentEpisode?.let { loadEpisodeAndPlay(it) }
                                 }
                             )
-                            TvFocusableButton(
-                                text = "Zurück",
-                                onClick = { finish() }
-                            )
+                            TvFocusableButton(text = "Zurück", onClick = { finish() })
                         }
                     }
                 }
             }
+        }
+    }
 
-            // TV OSD-Steuerleiste (Oben: Titel & Sprache/Hoster, Unten: Seekbar, Steuerung & Nächste Folge)
-            AnimatedVisibility(
-                visible = controlsVisible,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.fillMaxSize()
+    @Composable
+    private fun StatusCard(content: @Composable () -> Unit) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier
+                .clip(RoundedCornerShape(16.dp))
+                .background(BgSurface.copy(alpha = 0.92f))
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(16.dp))
+                .padding(horizontal = 28.dp, vertical = 20.dp)
+        ) {
+            content()
+        }
+    }
+
+    /**
+     * Pausen-Ansicht: Bild abgedunkelt, links "Sie sehen gerade", Titel, Staffel, Folge und
+     * Beschreibung, rechts unten "Angehalten". OK spielt weiter, jede andere Taste zeigt die Leisten.
+     */
+    @Composable
+    private fun PauseInfo(isSeries: Boolean) {
+        val episode = currentEpisode
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.horizontalGradient(
+                        0f to Color.Black.copy(alpha = 0.82f),
+                        0.6f to Color.Black.copy(alpha = 0.58f),
+                        1f to Color.Black.copy(alpha = 0.45f)
+                    )
+                )
+        ) {
+            Column(
+                modifier = Modifier
+                    .align(Alignment.CenterStart)
+                    .padding(start = 64.dp, end = 48.dp)
+                    .widthIn(max = 620.dp)
             ) {
-                Box(modifier = Modifier.fillMaxSize()) {
-                    // Oberer Verlauf + Episodeninfo
-                    val ep = currentEpisode
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.TopCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(Color.Black.copy(alpha = 0.88f), Color.Transparent)
-                                )
-                            )
-                            .padding(horizontal = 36.dp, vertical = 22.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = if (isLiveStream) "Live TV" else animeTitle,
-                                color = AccentCyan,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.Bold
-                            )
-                            if (ep != null) {
-                                val epLabel = when {
-                                    isLiveStream -> ep.displayTitle
-                                    ep.seasonLabel.equals("Filme", true) -> "Film ${ep.number}: ${ep.displayTitle}"
-                                    else -> "Staffel ${ep.seasonLabel} • Folge ${ep.number}: ${ep.displayTitle}"
-                                }
-                                Text(
-                                    text = epLabel,
-                                    color = TextPrimary,
-                                    fontSize = 20.sp,
-                                    fontWeight = FontWeight.ExtraBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis
-                                )
-                            }
-                        }
+                Text(text = "Sie sehen gerade", color = TextSecondary, fontSize = 14.sp)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = if (isLiveStream) "Live TV" else animeTitle,
+                    color = Color.White,
+                    fontSize = 38.sp,
+                    lineHeight = 42.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (isSeries && episode != null) {
+                    episode.seasonLabel.takeIf { it.isNotBlank() }?.let { season ->
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = if (season.equals("Filme", true)) "Filme & Specials" else "Staffel $season",
+                            color = Color.White,
+                            fontSize = 18.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        text = episode.displayTitle.takeIf { it.isNotBlank() && !it.startsWith("Folge ") }
+                            ?.let { "$it: Flg. ${episode.number}" } ?: "Folge ${episode.number}",
+                        color = Color.White,
+                        fontSize = 19.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                } else if (isLiveStream) {
+                    episode?.displayTitle?.takeIf { it.isNotBlank() }?.let {
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = it, color = Color.White, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+                titleDescription.takeIf { it.isNotBlank() && !isLiveStream }?.let { description ->
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = description,
+                        color = Color.White.copy(alpha = 0.85f),
+                        fontSize = 14.sp,
+                        lineHeight = 20.sp,
+                        maxLines = 4,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Text(
+                text = "Angehalten",
+                color = Color.White.copy(alpha = 0.85f),
+                fontSize = 15.sp,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 48.dp, bottom = 36.dp)
+            )
+        }
+    }
 
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            if (isLiveStream) {
+    /**
+     * Unten: Fortschritt über die ganze Breite mit Restzeit (fokussiert: Links/Rechts spult),
+     * darunter links Play/Spulen, in der Mitte der Titel, rechts nächste Folge, Folgen und Sprache.
+     */
+    @Composable
+    private fun PlayerBottomBar(nextEpisode: EpisodeItem?, nextSeason: SeasonLink?) {
+        val hasEpisodes = !isLiveStream && (seasonEpisodes.size > 1 || seasons.size > 1)
+        val playFocus = remember { FocusRequester() }
+        val episodesFocus = remember { FocusRequester() }
+        val languageFocus = remember { FocusRequester() }
+        // Beim Einblenden steht der Fokus auf Play/Pause
+        LaunchedEffect(Unit) {
+            delay(60)
+            runCatching { playFocus.requestFocus() }
+        }
+        // Nach dem Schließen einer Seitenleiste zurück auf den Knopf, der sie geöffnet hat
+        var lastPanel by remember { mutableStateOf<PlayerPanel?>(null) }
+        LaunchedEffect(sidePanel) {
+            val closed = lastPanel
+            lastPanel = sidePanel
+            if (sidePanel == null && closed != null) {
+                delay(60)
+                runCatching {
+                    when (closed) {
+                        PlayerPanel.EPISODES -> episodesFocus.requestFocus()
+                        PlayerPanel.LANGUAGE -> languageFocus.requestFocus()
+                    }
+                }
+            }
+        }
+
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = 0.92f))))
+                .padding(start = 36.dp, end = 36.dp, top = 40.dp, bottom = 18.dp)
+        ) {
+            if (!isLiveStream) {
+                var barFocused by remember { mutableStateOf(false) }
+                val fraction = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs).coerceIn(0f, 1f) else 0f
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(22.dp)
+                            .onFocusChanged { barFocused = it.isFocused }
+                            .onKeyEvent { event ->
+                                if (event.type != KeyEventType.KeyDown) return@onKeyEvent false
+                                when (event.key) {
+                                    Key.DirectionLeft -> { seekBy(-10_000L); keepControlsAlive(); true }
+                                    Key.DirectionRight -> { seekBy(10_000L); keepControlsAlive(); true }
+                                    else -> false
+                                }
+                            }
+                            .focusable(),
+                        contentAlignment = Alignment.CenterStart
+                    ) {
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(if (barFocused) 8.dp else 5.dp)
+                                .clip(RoundedCornerShape(4.dp)),
+                            color = AccentCyan,
+                            trackColor = Color.White.copy(alpha = 0.25f),
+                            // Ohne Lücke und ohne Punkt am Ende (schlichte Leiste wie bei Streaming-Apps)
+                            gapSize = 0.dp,
+                            drawStopIndicator = {}
+                        )
+                        if (barFocused) {
+                            // Punkt an der aktuellen Stelle
+                            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                                 Box(
                                     modifier = Modifier
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Color(0xFFEF4444))
-                                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                                ) {
-                                    Text(
-                                        text = "🔴 LIVE SENDER",
-                                        color = Color.White,
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                }
-                            } else {
-                                activeHoster?.let { h ->
-                                    LanguageBadge(h.language)
-                                    Box(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(6.dp))
-                                            .background(BgElevated)
-                                            .padding(horizontal = 10.dp, vertical = 4.dp)
-                                    ) {
-                                        Text(
-                                            text = "Hoster: ${h.hosterName}",
-                                            color = TextPrimary,
-                                            fontSize = 12.sp,
-                                            fontWeight = FontWeight.Bold
-                                        )
-                                    }
-                                }
+                                        .offset(x = (maxWidth * fraction) - 8.dp)
+                                        .size(16.dp)
+                                        .clip(CircleShape)
+                                        .background(Color.White)
+                                )
                             }
                         }
                     }
+                    Spacer(modifier = Modifier.width(14.dp))
+                    // Restzeit wie bei Streaming-Apps
+                    Text(
+                        text = if (durationMs > 0) formatDuration(durationMs - currentPositionMs) else "--:--",
+                        color = TextPrimary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                }
+            } else {
+                Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+                    Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(0xFFEF4444)))
+                    Spacer(modifier = Modifier.width(8.dp))
+                    Text(text = "LIVE", color = Color(0xFFEF4444), fontSize = 14.sp, fontWeight = FontWeight.Bold)
+                }
+            }
 
-                    // Unteres Steuer-Panel
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .align(Alignment.BottomCenter)
-                            .background(
-                                Brush.verticalGradient(
-                                    listOf(Color.Transparent, Color.Black.copy(alpha = 0.92f))
-                                )
-                            )
-                            .padding(horizontal = 36.dp, vertical = 22.dp)
-                    ) {
-                        if (isLiveStream) {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(10.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(12.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Color(0xFFEF4444))
-                                )
-                                Text(
-                                    text = "LIVE ÜBERTRAGUNG",
-                                    color = Color(0xFFEF4444),
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.Bold
-                                )
-                                Spacer(modifier = Modifier.weight(1f))
-                                Text(
-                                    text = animeTitle,
-                                    color = TextSecondary,
-                                    fontSize = 13.sp
-                                )
-                            }
-                        } else {
-                            // Fortschrittsbalken & Zeit
-                            val fraction = if (durationMs > 0) {
-                                (currentPositionMs.toFloat() / durationMs.toFloat()).coerceIn(0f, 1f)
-                            } else 0f
+            Spacer(modifier = Modifier.height(6.dp))
 
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(14.dp)
-                            ) {
-                                Text(
-                                    text = formatDuration(currentPositionMs),
-                                    color = TextPrimary,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold
-                                )
-                                LinearProgressIndicator(
-                                    progress = { fraction },
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .height(6.dp)
-                                        .clip(RoundedCornerShape(3.dp)),
-                                    color = AccentCyan,
-                                    trackColor = Color.White.copy(alpha = 0.25f)
-                                )
-                                Text(
-                                    text = formatDuration(durationMs),
-                                    color = TextSecondary,
-                                    fontSize = 13.sp
-                                )
-                            }
+            Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+                // Links: Play, Spulen
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    PlayerIconButton(
+                        icon = if (isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                        label = if (isPlaying) "Pause" else "Abspielen",
+                        large = true,
+                        modifier = Modifier.focusRequester(playFocus),
+                        onClick = { togglePause(); keepControlsAlive() }
+                    )
+                    if (!isLiveStream) {
+                        PlayerIconButton(icon = Icons.Filled.Replay10, label = "−10 s", onClick = { seekBy(-10_000L); keepControlsAlive() })
+                        PlayerIconButton(icon = Icons.Filled.Forward10, label = "+10 s", onClick = { seekBy(10_000L); keepControlsAlive() })
+                    } else {
+                        PlayerIconButton(icon = Icons.Filled.Refresh, label = "Neu verbinden", onClick = { reconnectLive(); keepControlsAlive() })
+                    }
+                }
+
+                // Mitte: Titel – Serie fett, dann "St. 1 · Flg. 22  Episodentitel"
+                val episode = currentEpisode
+                val title = buildAnnotatedString {
+                    withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(if (isLiveStream) "Live TV" else animeTitle) }
+                    if (episode != null && !isLiveStream) {
+                        val isMovie = episode.seasonLabel.equals("Film", true) || (seasonEpisodes.size <= 1 && seasons.size <= 1)
+                        if (!isMovie) {
+                            val season = episode.seasonLabel.takeIf { it.isNotBlank() && !it.equals("Filme", true) }
+                            append("   ")
+                            append(if (season != null) "St. $season · Flg. ${episode.number}" else "Flg. ${episode.number}")
+                            episode.displayTitle.takeIf { it.isNotBlank() && it != animeTitle && !it.startsWith("Folge ") }
+                                ?.let { append("   $it") }
                         }
+                    } else if (isLiveStream) {
+                        episode?.displayTitle?.takeIf { it.isNotBlank() }?.let { append("   $it") }
+                    }
+                }
+                Text(
+                    text = title,
+                    color = TextPrimary,
+                    fontSize = 15.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .weight(1.4f)
+                        .padding(top = 14.dp)
+                )
 
-                        Spacer(modifier = Modifier.height(14.dp))
-
-                        // Steuerbuttons + Sprach-/Hosterwahl + Nächste Episode
-                        if (isLiveStream) {
-                            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                TvFocusableButton(
-                                    text = if (isPlaying) "⏸ Pause" else "▶ Play",
-                                    isPrimary = true,
-                                    onClick = {
-                                        keepControlsAlive()
-                                        exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
-                                    }
-                                )
-                                TvFocusableButton(
-                                    text = "🔄 Neu verbinden",
-                                    onClick = {
-                                        keepControlsAlive()
-                                        reconnectLive()
-                                    }
-                                )
-                            }
-                        } else {
-                            Row(
-                                modifier = Modifier.fillMaxWidth(),
-                                horizontalArrangement = Arrangement.SpaceBetween,
-                                verticalAlignment = Alignment.CenterVertically
-                            ) {
-                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                    TvFocusableButton(
-                                        text = if (isPlaying) "⏸ Pause" else "▶ Play",
-                                        isPrimary = true,
-                                        onClick = {
-                                            keepControlsAlive()
-                                            exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
-                                        }
-                                    )
-                                    TvFocusableButton(
-                                        text = "⏪ -10s",
-                                        onClick = {
-                                            keepControlsAlive()
-                                            seekBy(-10_000L)
-                                        }
-                                    )
-                                    TvFocusableButton(
-                                        text = "⏩ +10s",
-                                        onClick = {
-                                            keepControlsAlive()
-                                            seekBy(10_000L)
-                                        }
-                                    )
-                                    TvFocusableButton(
-                                        text = "+85s Intro Skip",
-                                        onClick = {
-                                            keepControlsAlive()
-                                            seekBy(85_000L)
-                                        }
-                                    )
-
-                                    val nextEp = findNextEpisode()
-                                    if (nextEp != null) {
-                                        TvFocusableButton(
-                                            text = "⏭ Folge ${nextEp.number}",
-                                            onClick = {
-                                                keepControlsAlive()
-                                                persistCurrentProgress()
-                                                loadEpisodeAndPlay(nextEp)
-                                            }
-                                        )
-                                    }
-                                }
-
-                                // Verfügbare Hoster / Sprachen für diese Folge direkt umschaltbar
-                                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    items(availableHosters, key = { it.redirectPath }) { hoster ->
-                                        val isCurrent = activeHoster?.redirectPath == hoster.redirectPath
-                                        TvFocusableButton(
-                                            text = "${hoster.language.shortLabel} • ${hoster.hosterName}",
-                                            isSelected = isCurrent,
-                                            badgeColor = Color(hoster.language.badgeColorHex),
-                                            onClick = {
-                                                keepControlsAlive()
-                                                selectedLangKey = hoster.langKey
-                                                resolveAndPlaySingleHoster(hoster)
-                                            }
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        Spacer(modifier = Modifier.height(6.dp))
-
-                        Text(
-                            text = if (isLiveStream) {
-                                "OK: Play/Pause • Hoch/Runter: Steuerung • Zurück: Sender beenden"
-                            } else {
-                                "Steuerkreuz Links/Rechts: Spulen • OK: Play/Pause • Hoch/Runter: Hoster & Intro-Skip • Zurück: Ausblenden/Beenden"
-                            },
-                            color = TextMuted,
-                            fontSize = 11.sp
+                // Rechts: nächste Folge, Folgen, Sprache
+                Row(
+                    modifier = Modifier.weight(1f),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)
+                ) {
+                    if (nextEpisode != null) {
+                        PlayerIconButton(icon = Icons.Filled.SkipNext, label = "Nächste Folge", onClick = { playNextEpisode(); keepControlsAlive() })
+                    } else if (nextSeason != null) {
+                        PlayerIconButton(icon = Icons.Filled.SkipNext, label = "Nächste Staffel", onClick = { playNextSeason(); keepControlsAlive() })
+                    }
+                    if (hasEpisodes) {
+                        PlayerIconButton(
+                            icon = Icons.Filled.VideoLibrary,
+                            label = "Folgen",
+                            selected = sidePanel == PlayerPanel.EPISODES,
+                            modifier = Modifier.focusRequester(episodesFocus),
+                            onClick = { sidePanel = PlayerPanel.EPISODES; keepControlsAlive() }
+                        )
+                    }
+                    if (!isLiveStream && availableLanguages.isNotEmpty()) {
+                        PlayerIconButton(
+                            icon = Icons.Filled.Subtitles,
+                            label = "Sprache",
+                            selected = sidePanel == PlayerPanel.LANGUAGE,
+                            modifier = Modifier.focusRequester(languageFocus),
+                            onClick = { sidePanel = PlayerPanel.LANGUAGE; keepControlsAlive() }
                         )
                     }
                 }
             }
         }
+    }
+
+    /** Rundes Symbol; mit Fokus hell hinterlegt, darunter steht dann, was es tut. */
+    @Composable
+    private fun PlayerIconButton(
+        icon: ImageVector,
+        label: String,
+        onClick: () -> Unit,
+        modifier: Modifier = Modifier,
+        large: Boolean = false,
+        selected: Boolean = false
+    ) {
+        var focused by remember { mutableStateOf(false) }
+        Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.width(76.dp)) {
+            Box(
+                modifier = modifier
+                    .size(if (large) 50.dp else 44.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when {
+                            focused -> Color.White
+                            selected -> Color.White.copy(alpha = 0.22f)
+                            else -> Color.Transparent
+                        }
+                    )
+                    .onFocusChanged { focused = it.isFocused }
+                    .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = label,
+                    tint = if (focused) Color.Black else Color.White,
+                    modifier = Modifier.size(if (large) 34.dp else 28.dp)
+                )
+            }
+            Text(
+                text = label,
+                color = Color.White,
+                fontSize = 11.sp,
+                maxLines = 1,
+                softWrap = false,
+                modifier = Modifier
+                    .padding(top = 3.dp)
+                    .alpha(if (focused) 1f else 0f)
+            )
+        }
+    }
+
+    /** Knopf über dem Bild ("Intro überspringen", "Nächste Folge"). */
+    @Composable
+    private fun VideoOverlayButton(label: String, icon: ImageVector, modifier: Modifier, onClick: () -> Unit) {
+        var focused by remember { mutableStateOf(false) }
+        val shape = RoundedCornerShape(8.dp)
+        Row(
+            modifier = modifier
+                .clip(shape)
+                .background(if (focused) Color.White else Color(0xFF1C1C1C).copy(alpha = 0.85f))
+                .border(1.dp, Color.White.copy(alpha = if (focused) 1f else 0.5f), shape)
+                .onFocusChanged { focused = it.isFocused }
+                .clickable(interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+                .padding(horizontal = 18.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(imageVector = icon, contentDescription = null, tint = if (focused) Color.Black else Color.White, modifier = Modifier.size(22.dp))
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(text = label, color = if (focused) Color.Black else Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+        }
+    }
+
+    /** Rahmen der Seitenleisten (Folgen, Sprache). */
+    @Composable
+    private fun SidePanelFrame(content: @Composable ColumnScope.() -> Unit) {
+        Column(
+            modifier = Modifier
+                .width(360.dp)
+                .fillMaxHeight()
+                .background(BgSurface)
+                .padding(16.dp),
+            content = content
+        )
+    }
+
+    /**
+     * Folgen-Leiste wie bei Netflix: oben "‹ Staffel N", darunter die Folgen. OK auf "‹ Staffel"
+     * zeigt alle Staffeln (und "Filme & Specials") untereinander; die gewählte trägt ein Häkchen.
+     */
+    @Composable
+    private fun EpisodesPanel(onPick: (EpisodeItem, List<EpisodeItem>) -> Unit) {
+        val scope = rememberCoroutineScope()
+        val currentPath = currentEpisode?.path
+        var viewSeason by remember { mutableStateOf(currentSeason) }
+        var viewEpisodes by remember { mutableStateOf<List<EpisodeItem>>(seasonEpisodes) }
+        var choosingSeason by remember { mutableStateOf(false) }
+        var loading by remember { mutableStateOf(false) }
+        val listState = rememberLazyListState()
+        val itemFocus = remember { FocusRequester() }
+        var focusTarget by remember { mutableStateOf(currentPath) }
+
+        fun seasonLabel(season: SeasonLink?): String = when {
+            season == null -> "Folgen"
+            season.isMovies -> "Filme & Specials"
+            else -> "Staffel ${season.label}"
+        }
+
+        fun showSeason(season: SeasonLink) {
+            choosingSeason = false
+            viewSeason = season
+            if (season == currentSeason) {
+                viewEpisodes = seasonEpisodes
+                focusTarget = currentPath
+                return
+            }
+            scope.launch {
+                loading = true
+                viewEpisodes = runCatching { fetchSeasonEpisodes(season) }.getOrDefault(emptyList())
+                loading = false
+                focusTarget = viewEpisodes.firstOrNull()?.path
+            }
+        }
+
+        // Fokus auf die laufende (bzw. erste) Folge oder die gewählte Staffel
+        LaunchedEffect(choosingSeason, focusTarget, loading, viewEpisodes) {
+            if (loading) return@LaunchedEffect
+            val index = if (choosingSeason) {
+                seasons.indexOf(viewSeason).coerceAtLeast(0)
+            } else {
+                viewEpisodes.indexOfFirst { it.path == focusTarget }.coerceAtLeast(0)
+            }
+            runCatching { listState.scrollToItem((index - 2).coerceAtLeast(0)) }
+            delay(80)
+            runCatching { itemFocus.requestFocus() }
+        }
+
+        SidePanelFrame {
+            // ---------- Kopf ----------
+            if (choosingSeason) {
+                Text(
+                    text = animeTitle,
+                    color = TextPrimary,
+                    fontSize = 20.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            } else {
+                val canChoose = seasons.size > 1
+                PanelRow(
+                    selected = false,
+                    enabled = canChoose,
+                    onClick = { if (canChoose) choosingSeason = true }
+                ) {
+                    if (canChoose) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Staffel wählen",
+                            tint = Color.White,
+                            modifier = Modifier.size(28.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = seasonLabel(viewSeason),
+                        color = TextPrimary,
+                        fontSize = 20.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                }
+            }
+            Spacer(modifier = Modifier.height(10.dp))
+
+            // ---------- Inhalt ----------
+            when {
+                choosingSeason -> LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    items(seasons, key = { it.path }) { season ->
+                        val selected = season == viewSeason
+                        PanelRow(
+                            selected = selected,
+                            modifier = if (selected) Modifier.focusRequester(itemFocus) else Modifier,
+                            onClick = { showSeason(season) }
+                        ) {
+                            Box(modifier = Modifier.width(30.dp), contentAlignment = Alignment.CenterStart) {
+                                if (selected) {
+                                    Icon(imageVector = Icons.Filled.Check, contentDescription = "Gewählt", tint = Color.White, modifier = Modifier.size(20.dp))
+                                }
+                            }
+                            Text(
+                                text = seasonLabel(season),
+                                color = TextPrimary,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.weight(1f)
+                            )
+                            if (season == currentSeason) {
+                                Text(text = "läuft", color = AccentCyan, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+
+                loading -> Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(color = AccentCyan)
+                }
+
+                else -> LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(viewEpisodes, key = { it.path }) { episode ->
+                        val isCurrent = episode.path == currentPath
+                        PanelRow(
+                            selected = isCurrent,
+                            modifier = if (episode.path == focusTarget) Modifier.focusRequester(itemFocus) else Modifier,
+                            onClick = { if (!isCurrent) onPick(episode, viewEpisodes) }
+                        ) {
+                            Text(
+                                text = "${episode.number}",
+                                color = if (isCurrent) AccentCyan else TextSecondary,
+                                fontSize = 17.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.width(38.dp)
+                            )
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = episode.displayTitle.ifBlank { "Folge ${episode.number}" },
+                                    color = TextPrimary,
+                                    fontSize = 14.sp,
+                                    fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                                if (isCurrent) Text(text = "Läuft gerade", color = AccentCyan, fontSize = 12.sp)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** Sprachen der aktuellen Folge; die gewählte wird auch für die nächsten Titel gemerkt. */
+    @Composable
+    private fun LanguagePanel(onPick: (LanguageOption) -> Unit) {
+        val active = activeHoster?.language
+        val firstFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) {
+            delay(80)
+            runCatching { firstFocus.requestFocus() }
+        }
+        SidePanelFrame {
+            Text(text = "Sprache", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+            Spacer(modifier = Modifier.height(10.dp))
+            val languages = availableLanguages
+            val focusIndex = languages.indexOf(active).coerceAtLeast(0)
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                languages.forEachIndexed { index, language ->
+                    PanelRow(
+                        selected = language == active,
+                        modifier = if (index == focusIndex) Modifier.focusRequester(firstFocus) else Modifier,
+                        onClick = { onPick(language) }
+                    ) {
+                        Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(language.badgeColorHex)))
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(text = language.shortLabel, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                            Text(text = language.fullLabel, color = TextSecondary, fontSize = 12.sp)
+                        }
+                        if (language == active) {
+                            Icon(imageVector = Icons.Filled.Check, contentDescription = "Aktiv", tint = AccentCyan, modifier = Modifier.size(20.dp))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    @Composable
+    private fun PanelRow(
+        selected: Boolean,
+        onClick: () -> Unit,
+        modifier: Modifier = Modifier,
+        enabled: Boolean = true,
+        content: @Composable RowScope.() -> Unit
+    ) {
+        var focused by remember { mutableStateOf(false) }
+        val shape = RoundedCornerShape(10.dp)
+        Row(
+            modifier = modifier
+                .fillMaxWidth()
+                .clip(shape)
+                .background(
+                    when {
+                        focused -> Color.White.copy(alpha = 0.16f)
+                        selected -> Color.White.copy(alpha = 0.10f)
+                        else -> Color.Transparent
+                    }
+                )
+                .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+                .onFocusChanged { focused = it.isFocused }
+                .clickable(enabled = enabled, interactionSource = remember { MutableInteractionSource() }, indication = null, onClick = onClick)
+                .padding(horizontal = 12.dp, vertical = 9.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            content = content
+        )
+    }
+
+    // ------------------- Sprache, Staffeln, nächste Folge -------------------
+
+    /** Sprachen, in denen es die aktuelle Folge gibt (aus den Hostern). */
+    private val availableLanguages: List<LanguageOption>
+        get() = availableHosters.map { it.language }.distinct().sortedBy { it.ordinal }
+
+    /**
+     * Sprache im Player wechseln: ersten funktionierenden Hoster dieser Sprache nehmen, an der
+     * aktuellen Stelle weiterspielen und die Sprache als Standard für die nächsten Titel merken.
+     */
+    private fun selectLanguage(language: LanguageOption) {
+        LocalStorage.preferredLanguage = language
+        val ep = currentEpisode ?: return
+        if (activeHoster?.language == language) return
+        val candidates = availableHosters.filter { it.language == language }
+        if (candidates.isEmpty()) return
+        persistCurrentProgress()
+        currentPositionMs = exoPlayer?.currentPosition ?: currentPositionMs
+        resolveJob?.cancel()
+        selectedLangKey = language.langKey
+        failedHosterPaths.removeAll(candidates.map { it.redirectPath }.toSet())
+        isResolving = true
+        errorMessage = null
+        statusMessage = "Starte …"
+        resolveJob = lifecycleScope.launch {
+            if (!playFirstWorkingHoster(ep, candidates)) {
+                isResolving = false
+                errorMessage = "In dieser Sprache lässt sich die Folge gerade nicht abspielen."
+            }
+        }
+    }
+
+    private fun loadSeasonsIfNeeded() {
+        if (isLiveStream || animeSlug.isBlank() || seasonsLoadedFor == animeSlug) return
+        seasonsLoadedFor = animeSlug
+        seasons = emptyList()
+        titleDescription = ""
+        val slug = animeSlug
+        lifecycleScope.launch {
+            val detail = runCatching { fetchDetailFor(slug, null) }.getOrNull() ?: return@launch
+            if (animeSlug == slug) {
+                seasons = detail.seasons
+                titleDescription = detail.description
+            }
+        }
+    }
+
+    /** Staffel der laufenden Folge. */
+    private val currentSeason: SeasonLink?
+        get() = currentEpisode?.seasonLabel?.let { label -> seasons.firstOrNull { it.label == label } }
+
+    /** Nächste reguläre Staffel nach der laufenden (ohne "Filme"). */
+    private fun findNextSeason(): SeasonLink? {
+        val current = currentSeason ?: return null
+        return seasons.drop(seasons.indexOf(current) + 1).firstOrNull { !it.isMovies }
+    }
+
+    private suspend fun fetchSeasonEpisodes(season: SeasonLink): List<EpisodeItem> =
+        fetchDetailFor(animeSlug, season.path).episodes
+
+    private suspend fun fetchDetailFor(slug: String, seasonPath: String?): AnimeDetail = withContext(Dispatchers.IO) {
+        when {
+            FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
+            HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug, seasonPath)
+            SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug, seasonPath)
+            KissAsianScraper.isKissAsianSlug(slug) -> KissAsianScraper.fetchDetail(slug, seasonPath)
+            else -> AniWorldScraper.fetchAnimeDetail(slug, seasonPath)
+        }
+    }
+
+    /** Folge aus einer (evtl. anderen) Staffel spielen. */
+    private fun playEpisodeOf(episode: EpisodeItem, episodes: List<EpisodeItem>) {
+        persistCurrentProgress()
+        seasonEpisodes = ArrayList(episodes)
+        loadEpisodeAndPlay(episode)
+    }
+
+    private fun playNextEpisode() {
+        val next = findNextEpisode() ?: return
+        persistCurrentProgress()
+        loadEpisodeAndPlay(next)
+    }
+
+    /** Erste Folge der nächsten Staffel spielen. */
+    private fun playNextSeason() {
+        val next = findNextSeason() ?: return
+        lifecycleScope.launch {
+            val episodes = runCatching { fetchSeasonEpisodes(next) }.getOrDefault(emptyList())
+            episodes.firstOrNull()?.let { playEpisodeOf(it, episodes) }
+        }
+    }
+
+    private fun togglePause() {
+        exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
     }
 
     /** Startet den Live-Sender (neu) am aktuellen Live-Punkt. */
@@ -718,7 +1275,9 @@ class PlayerActivity : ComponentActivity() {
         failedHosterPaths.clear()
         isResolving = true
         errorMessage = null
-        statusMessage = "Lade Hoster für Folge ${episode.number}..."
+        statusMessage = "Lade Folge ${episode.number} …"
+        sidePanel = null
+        loadSeasonsIfNeeded()
 
         resolveJob = lifecycleScope.launch {
             val hosters = runCatching {
@@ -757,7 +1316,7 @@ class PlayerActivity : ComponentActivity() {
 
             if (!playFirstWorkingHoster(episode, orderedCandidates)) {
                 isResolving = false
-                errorMessage = "Keiner der Hoster (${hosters.joinToString { it.hosterName }}) konnte aufgelöst werden."
+                errorMessage = "Dieser Titel lässt sich gerade nicht abspielen. Bitte später erneut versuchen."
             }
         }
     }
@@ -769,7 +1328,7 @@ class PlayerActivity : ComponentActivity() {
     private suspend fun playFirstWorkingHoster(episode: EpisodeItem, candidates: List<HosterLink>): Boolean {
         for (candidate in candidates) {
             if (candidate.redirectPath in failedHosterPaths) continue
-            statusMessage = "Verbinde mit ${candidate.hosterName} (${candidate.language.shortLabel})..."
+            statusMessage = "Starte …"
             val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
             if (resolved != null) {
                 activeHoster = candidate
@@ -791,7 +1350,7 @@ class PlayerActivity : ComponentActivity() {
             .sortedWith(compareBy<HosterLink> { if (it.langKey == selectedLangKey) 0 else 1 })
         if (remaining.isEmpty()) {
             isResolving = false
-            errorMessage = "Wiedergabefehler (${error.errorCodeName})"
+            errorMessage = "Wiedergabe abgebrochen (${error.errorCodeName}). Bitte erneut versuchen."
             return
         }
 
@@ -802,7 +1361,7 @@ class PlayerActivity : ComponentActivity() {
         resolveJob = lifecycleScope.launch {
             if (!playFirstWorkingHoster(ep, remaining)) {
                 isResolving = false
-                errorMessage = "Wiedergabefehler (${error.errorCodeName}) – kein weiterer Hoster verfügbar."
+                errorMessage = "Wiedergabe abgebrochen (${error.errorCodeName}). Bitte erneut versuchen."
             }
         }
     }
@@ -812,7 +1371,7 @@ class PlayerActivity : ComponentActivity() {
         persistCurrentProgress()
         isResolving = true
         errorMessage = null
-        statusMessage = "Wechsle zu ${hoster.hosterName} (${hoster.language.shortLabel})..."
+        statusMessage = "Starte …"
 
         lifecycleScope.launch {
             runCatching {
@@ -823,7 +1382,7 @@ class PlayerActivity : ComponentActivity() {
                 startExoPlayer(ep, resolved)
             }.onFailure { err ->
                 isResolving = false
-                errorMessage = "${hoster.hosterName} fehlgeschlagen: ${err.message}"
+                errorMessage = "Wiedergabe fehlgeschlagen. Bitte erneut versuchen."
             }
         }
     }
@@ -864,9 +1423,13 @@ class PlayerActivity : ComponentActivity() {
                         if (playbackState == Player.STATE_READY) liveRetryCount = 0
                         if (!isLiveStream && playbackState == Player.STATE_ENDED) {
                             LocalStorage.markEpisodeWatched(episode.path)
-                            findNextEpisode()?.let { next ->
+                            val next = findNextEpisode()
+                            if (next != null) {
                                 currentPositionMs = 0L
                                 loadEpisodeAndPlay(next)
+                            } else if (findNextSeason() != null) {
+                                currentPositionMs = 0L
+                                playNextSeason()
                             }
                         }
                     }
@@ -957,12 +1520,13 @@ class PlayerActivity : ComponentActivity() {
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         if (event.action == KeyEvent.ACTION_DOWN) {
+            val wasPauseInfo = pauseInfoVisible
             lastInteractionTime = System.currentTimeMillis()
 
             when (event.keyCode) {
                 KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
                 KeyEvent.KEYCODE_HEADSETHOOK -> {
-                    exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                    togglePause()
                     keepControlsAlive()
                     return true
                 }
@@ -987,18 +1551,35 @@ class PlayerActivity : ComponentActivity() {
                     return true
                 }
                 KeyEvent.KEYCODE_BACK -> {
+                    // Zuerst eine offene Seitenleiste schließen, sonst den Player beenden
+                    if (sidePanel != null) {
+                        sidePanel = null
+                        keepControlsAlive()
+                        return true
+                    }
                     persistCurrentProgress()
                     finish()
                     return true
                 }
             }
 
-            // Wenn das OSD ausgeblendet ist, steuert das Steuerkreuz direkt Play/Pause & Spulen
-            if (!controlsVisible) {
+            // Pausen-Ansicht: OK spielt weiter, jede andere Taste zeigt die Leisten
+            if (wasPauseInfo) {
+                if (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER) {
+                    exoPlayer?.play()
+                }
+                keepControlsAlive()
+                return true
+            }
+
+            // Leisten ausgeblendet: Steuerkreuz steuert direkt Play/Pause und Spulen
+            if (!controlsVisible && sidePanel == null && errorMessage == null) {
                 when (event.keyCode) {
                     KeyEvent.KEYCODE_DPAD_CENTER,
                     KeyEvent.KEYCODE_ENTER -> {
-                        exoPlayer?.let { if (it.isPlaying) it.pause() else it.play() }
+                        // "Intro überspringen"/"Nächste Folge" hat dann den Fokus und bekommt das OK
+                        if (overlayButtonVisible) return super.dispatchKeyEvent(event)
+                        togglePause()
                         keepControlsAlive()
                         return true
                     }
@@ -1018,6 +1599,8 @@ class PlayerActivity : ComponentActivity() {
                         return true
                     }
                 }
+            } else {
+                keepControlsAlive()
             }
         }
         return super.dispatchKeyEvent(event)
@@ -1087,6 +1670,16 @@ class PlayerActivity : ComponentActivity() {
         const val LIVE_SEASON_LABEL = "LIVE"
         private const val MAX_LIVE_RETRIES = 3
 
+        /** Leisten nach so langer Zeit ohne Eingabe ausblenden. */
+        private const val CONTROLS_HIDE_MS = 5_000L
+        /** Pausen-Ansicht erst nach kurzer Pause zeigen (kurzes Anhalten soll das Bild nicht verdecken). */
+        private const val PAUSE_INFO_DELAY_MS = 2_500L
+        /** "Intro überspringen" in den ersten Minuten; springt so weit vor wie bisher "+85s Intro Skip". */
+        private const val INTRO_WINDOW_MS = 5 * 60_000L
+        private const val INTRO_SKIP_MS = 85_000L
+        /** "Nächste Folge" erscheint in den letzten 100 Sekunden (Abspann). */
+        private const val CREDITS_WINDOW_MS = 100_000L
+
         const val EXTRA_IS_LIVE = "extra_is_live"
         const val EXTRA_DIRECT_STREAM_URL = "extra_direct_stream_url"
         const val EXTRA_STREAM_HEADERS = "extra_stream_headers"
@@ -1129,3 +1722,6 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 }
+
+/** Seitenleiste rechts über dem Bild. */
+private enum class PlayerPanel { EPISODES, LANGUAGE }
