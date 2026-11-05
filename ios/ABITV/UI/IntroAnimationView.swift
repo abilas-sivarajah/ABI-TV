@@ -54,6 +54,8 @@ public struct IntroAnimationView: View {
     @State private var startTime: Date?
     @State private var audioPlayer: AVAudioPlayer?
     @State private var didFinish = false
+    /// Breite von Dreieck + Schriftzug; daraus ergibt sich, wie weit das Dreieck anfangs zur Mitte rückt.
+    @State private var rowWidth: CGFloat = 0
 
     public init(onFinished: @escaping () -> Void) {
         self.onFinished = onFinished
@@ -124,8 +126,8 @@ public struct IntroAnimationView: View {
                     .frame(width: 70, height: 84)
                     .zIndex(1)
 
-                    if revealProgress > 0.01 {
-                        HStack(spacing: 12) {
+                    // Schriftzug ist immer im Layout (nur unsichtbar), damit nichts springt, wenn er erscheint
+                    HStack(spacing: 12) {
                             Text("ABI")
                                 .font(.system(size: 36, weight: .heavy))
                                 .foregroundColor(.white)
@@ -146,11 +148,22 @@ public struct IntroAnimationView: View {
                         }
                         .offset(x: -(1.0 - revealProgress) * 140.0)
                         .opacity(wordAlpha)
-                    }
                 }
-                .offset(x: (1.0 - revealProgress) * 70.0)
+                .fixedSize()
+                .background(
+                    GeometryReader { geo in
+                        Color.clear.preference(key: IntroRowWidthKey.self, value: geo.size.width)
+                    }
+                )
+                // Wie auf PC und TV: anfangs steht der Schwerpunkt des Dreiecks (1/3 seiner Breite)
+                // genau in der Bildmitte, am Ende ist Dreieck + Schriftzug gemeinsam zentriert
+                .offset(x: (1.0 - revealProgress) * max(rowWidth / 2.0 - 70.0 / 3.0, 0))
                 .scaleEffect(totalScale)
             }
+            // Mitte des ganzen Bildschirms, nicht nur des sicheren Bereichs (Notch/Home-Balken sind ungleich hoch)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .ignoresSafeArea()
+            .onPreferenceChange(IntroRowWidthKey.self) { rowWidth = $0 }
             .onChange(of: elapsedMs >= introDurationMs) { finished in
                 if finished && !didFinish {
                     didFinish = true
@@ -186,6 +199,11 @@ public struct IntroAnimationView: View {
             // Ton optional, falls Gerät stumm oder Audio-Session belegt
         }
     }
+}
+
+private struct IntroRowWidthKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 private struct PlayTriangleShape: Shape {
