@@ -159,6 +159,8 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             windowState.placement = WindowPlacement.Floating
             return
         }
+        // App wird gerade geschlossen: Fenster ist schon weg, dann nichts mehr umschalten
+        if (!window.isDisplayable) return
         window.placement = WindowPlacement.Floating
         if (target == WindowPlacement.Maximized) window.placement = WindowPlacement.Maximized
         windowState.placement = target
