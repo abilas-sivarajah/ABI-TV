@@ -62,12 +62,14 @@ object SerienStreamScraper {
         val sections = mutableListOf<CatalogSection>()
 
         // Reihen parallel laden, sonst wartet die Übersicht auf fünf Seitenaufrufe hintereinander
-        fun load(path: String) = async { runCatching { fetchCategory(path) }.getOrDefault(emptyList()) }
-        val popularJob = load("/beliebte-serien")
-        val actionJob = load("/genre/action")
-        val scifiJob = load("/genre/science-fiction")
-        val dramaJob = load("/genre/drama")
-        val krimiJob = load("/genre/krimi")
+        fun loadSto(path: String) = async { runCatching { fetchStoOnlyCategory(path) }.getOrDefault(emptyList()) }
+
+        val popularJob = loadSto("/beliebte-serien")
+        val actionJob = loadSto("/genre/action")
+        val scifiJob = loadSto("/genre/science-fiction")
+        val dramaJob = loadSto("/genre/drama")
+        val krimiJob = loadSto("/genre/krimi")
+
         val popular = popularJob.await()
         val action = actionJob.await()
         val scifi = scifiJob.await()
@@ -93,8 +95,28 @@ object SerienStreamScraper {
         sections
     }
 
-    /** Titel einer Kategorie/eines Genres; S.to blättert Genres mit "?page=2", "?page=3" … */
+    /** Titel einer Kategorie/eines Genres (S.to + KissAsian); unterstützt Seitennummern. */
     suspend fun fetchCategory(categoryPath: String, page: Int = 1): List<AnimeCard> = withContext(Dispatchers.IO) {
+        if (categoryPath.startsWith(KissAsianScraper.PREFIX)) {
+            val kissPath = mapKissAsianCategoryPath(categoryPath.removePrefix(KissAsianScraper.PREFIX))
+            return@withContext KissAsianScraper.fetchCategory(kissPath, page)
+        }
+        // Der S.to-Anime-Filter fragt "/genre/anime" ab – dort nur S.to laden
+        if (categoryPath == "/genre/anime") {
+            return@withContext fetchStoOnlyCategory(categoryPath, page)
+        }
+
+        val matchingKissPath = mapStoToKissAsianPath(categoryPath)
+        if (matchingKissPath == null) {
+            return@withContext fetchStoOnlyCategory(categoryPath, page)
+        }
+
+        val stoJob = async { runCatching { fetchStoOnlyCategory(categoryPath, page) }.getOrDefault(emptyList()) }
+        val kissJob = async { runCatching { KissAsianScraper.fetchCategory(matchingKissPath, page) }.getOrDefault(emptyList()) }
+        interleaveCards(stoJob.await(), kissJob.await())
+    }
+
+    private suspend fun fetchStoOnlyCategory(categoryPath: String, page: Int = 1): List<AnimeCard> {
         val baseUrl = if (categoryPath.startsWith("http")) categoryPath else "$BASE_URL$categoryPath"
         val fullUrl = if (page > 1) {
             baseUrl + (if ('?' in baseUrl) "&" else "?") + "page=$page"
@@ -103,7 +125,46 @@ object SerienStreamScraper {
         }
         val (_, html) = HttpClient.getHtml(fullUrl, "$BASE_URL/")
         val doc = Jsoup.parse(html, BASE_URL)
-        parseSeriesCards(doc)
+        return parseSeriesCards(doc)
+    }
+
+    private fun mapKissAsianCategoryPath(raw: String): String = when (raw) {
+        "/genre/popular" -> "/series/?status=&type=Drama&order=popular"
+        "/genre/update" -> "/series/?status=&type=Drama&order=update"
+        else -> if (raw.startsWith("/genre/")) {
+            val slug = raw.removePrefix("/genre/").trim('/')
+            "/genres/$slug/"
+        } else {
+            raw
+        }
+    }
+
+    private fun mapStoToKissAsianPath(stoPath: String): String? = when (stoPath) {
+        "/beliebte-serien" -> "/series/?status=&type=Drama&order=popular"
+        "/neu" -> "/series/?status=&type=Drama&order=update"
+        "/genre/action" -> "/genres/action/"
+        "/genre/drama" -> "/genres/drama/"
+        "/genre/krimi" -> "/genres/crime/"
+        "/genre/science-fiction" -> "/genres/sci-fi/"
+        "/genre/comedy" -> "/genres/comedy/"
+        "/genre/fantasy" -> "/genres/fantasy/"
+        "/genre/thriller" -> "/genres/thriller/"
+        "/genre/horror" -> "/genres/horror/"
+        "/genre/abenteuer" -> "/genres/adventure/"
+        "/genre/mystery" -> "/genres/mystery/"
+        else -> null
+    }
+
+    private fun interleaveCards(primary: List<AnimeCard>, secondary: List<AnimeCard>): List<AnimeCard> {
+        if (primary.isEmpty()) return secondary
+        if (secondary.isEmpty()) return primary
+        val result = ArrayList<AnimeCard>(primary.size + secondary.size)
+        val max = maxOf(primary.size, secondary.size)
+        for (i in 0 until max) {
+            primary.getOrNull(i)?.let { result.add(it) }
+            secondary.getOrNull(i)?.let { result.add(it) }
+        }
+        return result.distinctBy { it.cleanSlug }
     }
 
     private fun parseSeriesCards(doc: Document): List<AnimeCard> {
@@ -324,8 +385,19 @@ object SerienStreamScraper {
         val trimmed = query.trim().lowercase()
         if (trimmed.length < 2) return@withContext emptyList()
 
-        // Wortanfänge statt "enthält": "sp" findet "Marvel's Spider-Man", "spiderman" findet "Spider-Man"
-        TitleSearch.filterAndRank(loadAtoZSeries(), query).take(40)
+        val stoDeferred = async {
+            runCatching { TitleSearch.filterAndRank(loadAtoZSeries(), query).take(40) }.getOrDefault(emptyList())
+        }
+        val kissDeferred = async {
+            runCatching { KissAsianScraper.searchSeries(query) }.getOrDefault(emptyList())
+        }
+        val stoResults = stoDeferred.await()
+        val kissResults = kissDeferred.await()
+        val combined = interleaveCards(stoResults, kissResults)
+        TitleSearch.filterAndRank(combined, query)
+            .ifEmpty { combined }
+            .distinctBy { it.cleanSlug }
+            .take(50)
     }
 
     private suspend fun loadAtoZSeries(): List<AnimeCard> = atoZMutex.withLock {

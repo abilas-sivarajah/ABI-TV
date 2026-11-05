@@ -68,13 +68,13 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
         @Volatile var refererSet = false
         @Volatile var mainLoaded = false
         @Volatile var kickJobStarted = false
+        val frames: MutableSet<CefFrame> = ConcurrentHashMap.newKeySet()
         /** Seiten des Hosters (inkl. Weiterleitungen beim Start, z. B. firestream.to -> firestream.site). */
         val siteLabels: MutableSet<String> = ConcurrentHashMap.newKeySet<String>().apply { siteLabel(targetUrl)?.let(::add) }
     }
 
     private val sessions = ConcurrentHashMap<CefBrowser, Session>()
 
-    /** Lädt und startet Chromium schon beim App-Start, damit der erste Film nicht darauf warten muss. */
     /** Sichtbare Browserfenster (z. B. die Letterboxd-Anmeldung) bekommen Seitenereignisse und JS-Meldungen. */
     interface PageListener {
         fun onPageLoaded(browser: CefBrowser, url: String) {}
@@ -127,6 +127,7 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
         return org.cef.network.CefCookieManager.getGlobalManager()
     }
 
+    /** Lädt und startet Chromium schon beim App-Start, damit der erste Film nicht darauf warten muss. */
     fun prepareInBackground(scope: CoroutineScope) {
         scope.launch { runCatching { ensureClient() } }
     }
@@ -251,8 +252,8 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
             override fun onBeforeResourceLoad(browser: CefBrowser?, frame: CefFrame?, request: CefRequest?): Boolean {
                 val session = browser?.let { sessions[it] } ?: return false
                 val url = request?.url ?: return false
-                if (DEBUG) AppLog.d(TAG, "Anfrage ${request.resourceType}: ${url.take(160)}")
                 request.setHeaderByName("User-Agent", HttpClient.USER_AGENT, true)
+                if (DEBUG) AppLog.d(TAG, "Anfrage ${request.resourceType}: ${url.take(160)}")
                 if (request.resourceType == CefRequest.ResourceType.RT_MAIN_FRAME) {
                     session.lastPageUrl = url
                     // Wie auf Android: die Hoster-Seite mit Referer laden
@@ -261,8 +262,18 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
                         request.setReferrer(session.referer, CefRequest.ReferrerPolicy.REFERRER_POLICY_DEFAULT)
                     }
                 }
+                if (url.contains("/api/videos/", ignoreCase = true) &&
+                    (url.contains("justplay.", ignoreCase = true) || url.contains("n1mwq.", ignoreCase = true))
+                ) {
+                    val refUrl = session.referer.ifBlank { "https://kissasian.cam/" }
+                    val refHost = runCatching { java.net.URI(refUrl).host }.getOrNull() ?: "kissasian.cam"
+                    request.setHeaderByName("X-Embed-Origin", refHost, true)
+                    request.setHeaderByName("X-Embed-Referer", refUrl, true)
+                    request.setHeaderByName("X-Embed-Parent", session.targetUrl, true)
+                }
                 if (BrowserStreamHooks.isMediaStreamUrl(url)) {
-                    session.onFound(url, session.lastPageUrl)
+                    val pageUrl = frame?.url?.takeIf { it.startsWith("http") } ?: session.lastPageUrl
+                    session.onFound(url, pageUrl)
                     return true
                 }
                 return BrowserStreamHooks.isBlockedAdOrAsset(url)
@@ -349,8 +360,15 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
             repeat(6) {
                 Thread.sleep(1_500L)
                 if (sessions[browser] !== session) return@Thread
-                runCatching { browser.executeJavaScript(PLAY_KICK, session.lastPageUrl, 0) }
-                if (DEBUG) runCatching { browser.executeJavaScript(DEBUG_PROBE, session.lastPageUrl, 0) }
+                runCatching {
+                    browser.executeJavaScript(PLAY_KICK, session.lastPageUrl, 0)
+                    if (DEBUG) browser.executeJavaScript(DEBUG_PROBE, session.lastPageUrl, 0)
+                    for (f in session.frames) {
+                        val fUrl = f.url?.takeIf { it.startsWith("http") } ?: session.lastPageUrl
+                        f.executeJavaScript(PLAY_KICK, fUrl, 0)
+                        if (DEBUG) f.executeJavaScript(DEBUG_PROBE, fUrl, 0)
+                    }
+                }
             }
         }, "chromium-play-kick").apply { isDaemon = true }.start()
     }
@@ -369,9 +387,20 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
     private fun injectHook(browser: CefBrowser?, frame: CefFrame?) {
         val b = browser ?: return
         val session = sessions[b] ?: return
-        if (frame != null && !frame.isMain) return
-        frame?.url?.takeIf { it.startsWith("http") }?.let { session.lastPageUrl = it }
-        b.executeJavaScript(BRIDGE_SHIM + "\n" + BrowserStreamHooks.JS_PLAYER_HOOK, session.lastPageUrl, 0)
+        val frameUrl = frame?.url?.takeIf { it.startsWith("http") }
+        if (frame?.isMain == true && frameUrl != null) {
+            session.lastPageUrl = frameUrl
+        }
+        if (frame != null) {
+            session.frames += frame
+        }
+        val scriptUrl = frameUrl ?: session.lastPageUrl
+        val script = BRIDGE_SHIM + "\n" + BrowserStreamHooks.JS_PLAYER_HOOK
+        if (frame != null) {
+            frame.executeJavaScript(script, scriptUrl, 0)
+        } else {
+            b.executeJavaScript(script, scriptUrl, 0)
+        }
     }
 
     private fun progressText(state: EnumProgress, percent: Float): String {

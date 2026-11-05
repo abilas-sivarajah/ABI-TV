@@ -53,6 +53,14 @@ object BrowserStreamHooks {
         (function() {
             if (window.__awHooked) return;
             window.__awHooked = true;
+            try {
+                if (!document.referrer && location.hostname.indexOf('justplay.') !== -1) {
+                    Object.defineProperty(document, 'referrer', {
+                        get: function() { return 'https://kissasian.cam/'; },
+                        configurable: true
+                    });
+                }
+            } catch (e) {}
             var origJw = window.jwplayer;
             function wrapJw(val) {
                 if (typeof val !== 'function') return val;

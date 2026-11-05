@@ -39,6 +39,7 @@ object TitlePreview {
                 FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
                 HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug)
                 SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug)
+                KissAsianScraper.isKissAsianSlug(slug) -> KissAsianScraper.fetchDetail(slug)
                 else -> AniWorldScraper.fetchAnimeDetail(slug)
             }
         }.getOrNull()?.also { detailCache[slug] = it }
@@ -56,7 +57,7 @@ object TitlePreview {
 
     /** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
     private fun tmdbKind(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Kind = when {
-        anime.isSto -> TmdbArtwork.Kind.TV
+        anime.isSto || anime.isKissAsian -> TmdbArtwork.Kind.TV
         anime.isFilmpalast -> TmdbArtwork.Kind.MOVIE
         anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) TmdbArtwork.Kind.TV else TmdbArtwork.Kind.MOVIE
         else -> TmdbArtwork.Kind.TV // AniWorld: meist Serien
@@ -64,7 +65,7 @@ object TitlePreview {
 
     /** Art des Titels: "Film", "Serie" oder "Anime". */
     fun kindLabel(anime: AnimeCard, detail: AnimeDetail?): String = when {
-        anime.isSto -> "Serie"
+        anime.isSto || anime.isKissAsian -> "Serie"
         anime.isFilmpalast -> "Film"
         anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
         else -> "Anime"
@@ -75,6 +76,7 @@ object TitlePreview {
         val source = when {
             anime.isFilmpalast -> "FILMPALAST HIGHLIGHT"
             anime.isSto -> "SERIENSTREAM HIGHLIGHT"
+            anime.isKissAsian -> "KISSASIAN HIGHLIGHT"
             anime.isHdFilme -> "HD-FILME HIGHLIGHT"
             else -> "ANIWORLD EMPFEHLUNG"
         }

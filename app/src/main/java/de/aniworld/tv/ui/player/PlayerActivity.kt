@@ -78,6 +78,7 @@ import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.LiveTvRepository
@@ -728,6 +729,9 @@ class PlayerActivity : ComponentActivity() {
                     }
                     episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") -> {
                         SerienStreamScraper.fetchEpisodeHosters(episode.path)
+                    }
+                    KissAsianScraper.isKissAsianEpisodePath(episode.path) -> {
+                        KissAsianScraper.fetchEpisodeHosters(episode.path)
                     }
                     episode.path.startsWith("hdfilme_") -> {
                         HdFilmeScraper.fetchHostersForEpisode(episode.path)

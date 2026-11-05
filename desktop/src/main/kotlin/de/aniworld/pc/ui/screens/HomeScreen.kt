@@ -129,6 +129,7 @@ import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
@@ -1062,7 +1063,7 @@ private fun LetterboxdChip(rating: LetterboxdRatings.Rating, large: Boolean = fa
 
 /** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
 private fun guessTmdbKind(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Kind = when {
-    anime.isSto -> TmdbArtwork.Kind.TV
+    anime.isSto || anime.isKissAsian -> TmdbArtwork.Kind.TV
     anime.isFilmpalast -> TmdbArtwork.Kind.MOVIE
     anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) TmdbArtwork.Kind.TV else TmdbArtwork.Kind.MOVIE
     else -> TmdbArtwork.Kind.TV // AniWorld: meist Serien
@@ -1073,12 +1074,13 @@ private suspend fun fetchHeroDetail(slug: String): AnimeDetail = when {
     FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
     HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug)
     SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug)
+    KissAsianScraper.isKissAsianSlug(slug) -> KissAsianScraper.fetchDetail(slug)
     else -> AniWorldScraper.fetchAnimeDetail(slug)
 }
 
 /** Art des Titels für Kacheln und Titelbild: "Film", "Serie" oder "Anime". */
 private fun titleKindLabel(anime: AnimeCard, detail: AnimeDetail?): String = when {
-    anime.isSto -> "Serie"
+    anime.isSto || anime.isKissAsian -> "Serie"
     anime.isFilmpalast -> "Film"
     anime.isHdFilme -> if (detail?.seasons?.isNotEmpty() == true) "Serie" else "Film"
     else -> "Anime"
@@ -1357,6 +1359,7 @@ private fun HeroBanner(
                     text = titleKindLabel(anime, detail).uppercase() + "  ·  " + when {
                         anime.cleanSlug.startsWith("filmpalast:") -> "FILMPALAST HIGHLIGHT"
                         anime.cleanSlug.startsWith("sto:") || anime.cleanSlug.startsWith("/serie/") -> "SERIENSTREAM HIGHLIGHT"
+                        anime.isKissAsian -> "KISSASIAN HIGHLIGHT"
                         anime.cleanSlug.startsWith("hdfilme:") -> "HD-FILME HIGHLIGHT"
                         else -> "ANIWORLD EMPFEHLUNG"
                     },

@@ -10,6 +10,7 @@ import de.aniworld.tv.data.model.ResolvedStream
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HttpClient
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.StreamResolver
 import kotlinx.coroutines.runBlocking
@@ -53,6 +54,21 @@ fun main() {
         val southPark = SerienStreamScraper.fetchDetail("sto:southpark")
         val seasonLabels = southPark.seasons.map { it.label }
         check(southPark.seasons.count { !it.isMovies } >= 29, "${southPark.seasons.size} Staffeln: ${seasonLabels.joinToString(" ")}")
+
+        println("== KissAsian: Katalog & Stream")
+        val kissSections = KissAsianScraper.fetchHomeSections()
+        check(kissSections.isNotEmpty(), "KissAsian-Sektionen geladen: ${kissSections.size}")
+        var kissPlayed: String? = null
+        for (card in kissSections.first().items.take(4)) {
+            val kissDetail = KissAsianScraper.fetchDetail(card.cleanSlug)
+            if (kissDetail.episodes.isEmpty()) continue
+            val kissHosters = KissAsianScraper.fetchEpisodeHosters(kissDetail.episodes.first().path)
+            if (kissHosters.isEmpty()) continue
+            println("  Prüfe ${kissDetail.title} (${kissDetail.episodes.size} Folgen, Hoster: ${kissHosters.joinToString { it.hosterName }})")
+            kissPlayed = playFirstWorking(kissHosters)
+            if (kissPlayed != null) break
+        }
+        check(kissPlayed != null, "VLC spielt KissAsian-Folge über ${kissPlayed ?: "keinen Hoster"}")
 
         println("== Filmpalast: Interstellar")
         val detail = FilmpalastScraper.fetchDetail("filmpalast:/stream/interstellar")

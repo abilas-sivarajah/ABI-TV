@@ -20,6 +20,7 @@ import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.HttpClient
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.StreamResolver
@@ -394,6 +395,7 @@ class PlayerController(private val scope: CoroutineScope) {
             FilmpalastScraper.isFilmpalastSlug(slug) -> FilmpalastScraper.fetchDetail(slug)
             HdFilmeScraper.isHdFilmeSlug(slug) -> HdFilmeScraper.fetchDetail(slug, seasonPath)
             SerienStreamScraper.isStoSlug(slug) -> SerienStreamScraper.fetchDetail(slug, seasonPath)
+            KissAsianScraper.isKissAsianSlug(slug) -> KissAsianScraper.fetchDetail(slug, seasonPath)
             else -> AniWorldScraper.fetchAnimeDetail(slug, seasonPath)
         }
     }
@@ -475,6 +477,8 @@ class PlayerController(private val scope: CoroutineScope) {
                         FilmpalastScraper.isFilmpalastEpisodePath(episode.path) -> FilmpalastScraper.fetchHostersForFilm(episode.path)
                         episode.path.startsWith("sto_") || episode.path.startsWith("/serie/") ->
                             SerienStreamScraper.fetchEpisodeHosters(episode.path)
+                        KissAsianScraper.isKissAsianEpisodePath(episode.path) ->
+                            KissAsianScraper.fetchEpisodeHosters(episode.path)
                         episode.path.startsWith("hdfilme_") -> HdFilmeScraper.fetchHostersForEpisode(episode.path)
                         else -> AniWorldScraper.fetchEpisodeHosters(episode.path)
                     }

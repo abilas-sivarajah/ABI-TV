@@ -10,7 +10,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
 import okio.ByteString.Companion.decodeBase64
 import org.jsoup.Jsoup
 import java.net.URI
@@ -50,7 +52,9 @@ object StreamResolver {
     private fun isDeadLinkPage(html: String): Boolean {
         val title = Regex("""<title>([^<]*)</title>""", RegexOption.IGNORE_CASE)
             .find(html)?.groupValues?.getOrNull(1)?.lowercase().orEmpty()
-        return DEAD_LINK_TITLE_MARKERS.any { title.contains(it) }
+        if (DEAD_LINK_TITLE_MARKERS.any { title.contains(it) }) return true
+        if (title.contains("streamtape") && html.contains("Video not found!", ignoreCase = true)) return true
+        return false
     }
 
     fun invalidateCache(redirectPath: String) {
@@ -87,8 +91,15 @@ object StreamResolver {
         // Der Browser nutzt den DNS des Netzes, in dem S.to per CUII gesperrt ist – deshalb die schon
         // über OkHttp (DNS-over-HTTPS) gefundene Hoster-Seite öffnen statt der S.to-Weiterleitung
         val browserUrl = hosterPage ?: redirectUrl
+        val browserReferer = when {
+            SerienStreamRef.isStoUrl(hoster.redirectPath) -> "${SerienStreamScraper.BASE_URL}/"
+            browserUrl.contains("justplay.", ignoreCase = true) ||
+                browserUrl.contains("n1mwq.", ignoreCase = true) ||
+                browserUrl.contains("strcloud.", ignoreCase = true) -> "${KissAsianScraper.BASE_URL}/"
+            else -> "${HttpClient.BASE_URL}/"
+        }
 
-        val webViewPair = browserExtractor?.extract(browserUrl, "${HttpClient.BASE_URL}/")
+        val webViewPair = browserExtractor?.extract(browserUrl, browserReferer)
             ?: throw IllegalStateException("Stream konnte bei ${hoster.hosterName} nicht extrahiert werden.")
 
         val (streamUrl, pageUrl) = webViewPair
@@ -141,10 +152,13 @@ object StreamResolver {
             }
         }
 
-        val initialReferer = if (SerienStreamRef.isStoUrl(hoster.redirectPath)) {
-            "${SerienStreamScraper.BASE_URL}/"
-        } else {
-            "${HttpClient.BASE_URL}/"
+        val initialReferer = when {
+            SerienStreamRef.isStoUrl(hoster.redirectPath) -> "${SerienStreamScraper.BASE_URL}/"
+            hoster.redirectPath.contains("frstream.", ignoreCase = true) ||
+                hoster.redirectPath.contains("firestream.", ignoreCase = true) ||
+                hoster.redirectPath.contains("strcloud.", ignoreCase = true) ||
+                hoster.redirectPath.contains("justplay.", ignoreCase = true) -> "${KissAsianScraper.BASE_URL}/"
+            else -> "${HttpClient.BASE_URL}/"
         }
         var (currentUrl, html) = HttpClient.getHtml(hoster.redirectPath, initialReferer)
 
@@ -169,6 +183,30 @@ object StreamResolver {
             val u = URI(currentUrl)
             "${u.scheme}://${u.host}/"
         }.getOrDefault(currentUrl)
+
+        // 0c. Firestream (frstream.life / firestream.to): <script id="token-blob"> -> POST /api/videos/<slug>/resolve
+        if (currentUrl.contains("frstream.", ignoreCase = true) ||
+            currentUrl.contains("firestream.", ignoreCase = true) ||
+            html.contains("id=\"token-blob\"")
+        ) {
+            val fireStream = runCatching {
+                resolveFirestreamDirect(currentUrl, originReferer.trimEnd('/'), html, hoster)
+            }.getOrNull()
+            if (fireStream != null) return fireStream
+        }
+
+        // 0d. Streamtape / StrCloud (strcloud.in / streamtape.com): #robotlink / #botlink
+        if (currentUrl.contains("strcloud.", ignoreCase = true) ||
+            currentUrl.contains("streamtape.", ignoreCase = true) ||
+            currentUrl.contains("shavetape.", ignoreCase = true) ||
+            html.contains("getElementById('robotlink')") ||
+            html.contains("getElementById('botlink')")
+        ) {
+            val tapeStream = runCatching {
+                resolveStreamtapeDirect(currentUrl, originReferer.trimEnd('/'), html, hoster)
+            }.getOrNull()
+            if (tapeStream != null) return tapeStream
+        }
 
         // 0b. Dropload / dr0pstream nach Redirect (z.B. über aniworld.to/redirect/...)
         if (currentUrl.contains("dr0pstream", ignoreCase = true) ||
@@ -356,6 +394,126 @@ object StreamResolver {
         }
 
         return null
+    }
+
+    /**
+     * Löst Firestream (frstream.life / firestream.to) direkt über den /api/videos/<slug>/resolve Endpunkt auf.
+     */
+    private fun resolveFirestreamDirect(
+        embedUrl: String,
+        originHost: String,
+        html: String,
+        hoster: HosterLink
+    ): ResolvedStream? {
+        val slug = Regex("""/e/([^/?#]+)""").find(embedUrl)?.groupValues?.getOrNull(1)?.trim()
+            ?: return null
+        val blob = Regex("""<script[^>]+id=["']token-blob["'][^>]*>\s*([^<\s]+)\s*</script>""", RegexOption.IGNORE_CASE)
+            .find(html)?.groupValues?.getOrNull(1)?.trim()
+            ?: Jsoup.parse(html).selectFirst("script#token-blob")?.data()?.trim()
+            ?: return null
+        if (blob.isBlank()) return null
+
+        val resolveUrl = "$originHost/api/videos/$slug/resolve"
+        val jsonPayload = """{"blob":"$blob"}"""
+        val req = Request.Builder()
+            .url(resolveUrl)
+            .post(jsonPayload.toRequestBody("application/json; charset=utf-8".toMediaType()))
+            .header("User-Agent", HttpClient.USER_AGENT)
+            .header("Referer", embedUrl)
+            .header("Origin", originHost)
+            .header("Accept", "application/json")
+            .build()
+
+        val respBody = HttpClient.okHttp.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) return null
+            resp.body?.string().orEmpty()
+        }
+        if (respBody.isBlank()) return null
+
+        val obj = JsonParser.parseString(respBody).asJsonObject
+        val signedHls = obj.get("signedVideoUrl")?.takeIf { !it.isJsonNull }?.asString?.trim().orEmpty()
+        val signedMp4 = obj.get("signedVideoMp4Url")?.takeIf { !it.isJsonNull }?.asString?.trim().orEmpty()
+        val chosen = signedHls.ifBlank { signedMp4 }
+        if (!chosen.startsWith("http")) return null
+
+        return ResolvedStream(
+            streamUrl = chosen,
+            isHls = chosen.contains(".m3u8", ignoreCase = true),
+            hosterName = hoster.hosterName,
+            language = hoster.language,
+            headers = mapOf(
+                "User-Agent" to HttpClient.USER_AGENT,
+                "Referer" to "$originHost/",
+                "Origin" to originHost
+            )
+        )
+    }
+
+    /**
+     * Löst Streamtape / StrCloud (strcloud.in / streamtape.com) über die #robotlink/#botlink Token-Berechnung auf.
+     */
+    private fun resolveStreamtapeDirect(
+        embedUrl: String,
+        originHost: String,
+        html: String,
+        hoster: HosterLink
+    ): ResolvedStream? {
+        val matches = Regex(
+            """getElementById\(['"](?:robotlink|botlink|norobotlink)['"]\)\.innerHTML\s*=\s*['"]([^'"]*get_video\?id=)['"]\s*\+\s*\(['"]([^'"]+)['"]\)((?:\.substring\(\d+\))+)"""
+        ).findAll(html).toList()
+
+        val lastMatch = matches.lastOrNull() ?: return null
+        val prefix = lastMatch.groupValues[1]
+        val rawToken = lastMatch.groupValues[2]
+        val substringChain = lastMatch.groupValues[3]
+
+        val offset = Regex("""\.substring\((\d+)\)""")
+            .findAll(substringChain)
+            .sumOf { it.groupValues[1].toIntOrNull() ?: 0 }
+
+        if (offset < 0 || offset >= rawToken.length) return null
+        val cleanQuery = rawToken.substring(offset)
+
+        val baseGetVideo = when {
+            prefix.startsWith("//") -> "https:$prefix"
+            prefix.startsWith("/") -> "$originHost$prefix"
+            prefix.startsWith("http") -> prefix
+            else -> "$originHost/$prefix"
+        }
+        val getVideoUrl = "$baseGetVideo$cleanQuery&stream=1"
+
+        // Folge dem 302-Redirect von get_video zur direkten tapecontent.net MP4-URL (ohne den Stream herunterzuladen)
+        val noRedirectClient = HttpClient.okHttp.newBuilder()
+            .followRedirects(false)
+            .followSslRedirects(false)
+            .build()
+        val redirectLocation = runCatching {
+            val req = Request.Builder()
+                .url(getVideoUrl)
+                .header("User-Agent", HttpClient.USER_AGENT)
+                .header("Referer", embedUrl)
+                .build()
+            noRedirectClient.newCall(req).execute().use { resp ->
+                resp.header("Location")?.trim()
+            }
+        }.getOrNull()
+
+        val finalUrl = if (!redirectLocation.isNullOrBlank() && redirectLocation.startsWith("http")) {
+            redirectLocation
+        } else {
+            getVideoUrl
+        }
+
+        return ResolvedStream(
+            streamUrl = finalUrl,
+            isHls = false,
+            hosterName = hoster.hosterName,
+            language = hoster.language,
+            headers = mapOf(
+                "User-Agent" to HttpClient.USER_AGENT,
+                "Referer" to "$originHost/"
+            )
+        )
     }
 
     /**

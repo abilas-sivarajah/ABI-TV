@@ -50,6 +50,9 @@ data class AnimeCard(
     val isSto: Boolean
         get() = SerienStreamRef.matches(slug)
 
+    val isKissAsian: Boolean
+        get() = KissAsianRef.matches(slug)
+
     val cleanSlug: String
         get() = when {
             isFilmpalast -> {
@@ -65,6 +68,7 @@ data class AnimeCard(
                 "hdfilme:${if (rel.startsWith("/")) rel else "/$rel"}"
             }
             isSto -> "${SerienStreamRef.PREFIX}${SerienStreamRef.bareSlug(slug)}"
+            isKissAsian -> "${KissAsianRef.PREFIX}${KissAsianRef.bareSlug(slug)}"
             else -> {
                 slug
                     .removePrefix("https://aniworld.to")
@@ -79,6 +83,7 @@ data class AnimeCard(
             isFilmpalast -> cleanSlug
             isHdFilme -> cleanSlug
             isSto -> "/serie/${SerienStreamRef.bareSlug(slug)}"
+            isKissAsian -> "/series/${KissAsianRef.bareSlug(slug)}/"
             else -> "/anime/stream/$cleanSlug"
         }
 }
@@ -107,6 +112,33 @@ object SerienStreamRef {
         val v = value.trim().removePrefix(PREFIX)
         val path = if (isStoUrl(v)) runCatching { URI(v).path }.getOrNull().orEmpty() else v
         return path.removePrefix("/serie/").substringBefore("/").trim()
+    }
+}
+
+/**
+ * Erkennt KissAsian-Slugs und -Adressen (https://kissasian.cam) einheitlich.
+ */
+object KissAsianRef {
+    const val PREFIX = "kissasian:"
+    const val EPISODE_PREFIX = "kissasian_ep:"
+    private val HOSTS = setOf("kissasian.cam")
+
+    fun matches(value: String): Boolean {
+        val v = value.trim()
+        return v.startsWith(PREFIX) || v.startsWith(EPISODE_PREFIX) || v.startsWith("/series/") || isKissAsianUrl(v)
+    }
+
+    fun isKissAsianUrl(url: String): Boolean {
+        if (!url.startsWith("http://", true) && !url.startsWith("https://", true)) return false
+        val host = runCatching { URI(url).host }.getOrNull()?.lowercase()?.removePrefix("www.") ?: return false
+        return host in HOSTS
+    }
+
+    /** "kissasian:love-in-disguise", "/series/love-in-disguise/" oder volle Adresse -> "love-in-disguise" */
+    fun bareSlug(value: String): String {
+        val v = value.trim().removePrefix(PREFIX).removePrefix(EPISODE_PREFIX)
+        val path = if (isKissAsianUrl(v)) runCatching { URI(v).path }.getOrNull().orEmpty() else v
+        return path.removePrefix("/series/").trim('/').substringBefore("/").trim()
     }
 }
 

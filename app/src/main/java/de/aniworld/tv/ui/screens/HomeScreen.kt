@@ -145,6 +145,8 @@ class HomeUiState {
     var seriesOverviewSections by mutableStateOf<List<CatalogSection>>(emptyList())
     var seriesCategoryItems by mutableStateOf<List<AnimeCard>>(emptyList())
     var seriesLoadedPath by mutableStateOf<String?>(null)
+    var seriesPage by mutableStateOf(1)
+    var seriesCanLoadMore by mutableStateOf(true)
     var searchScope by mutableStateOf(SearchScope.ANIMES)
     var searchQuery by mutableStateOf("")
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
@@ -711,6 +713,7 @@ private fun SeriesTabContent(
     onOpenAnime: (AnimeCard) -> Unit
 ) {
     val selectedCategoryPath = uiState.seriesCategoryPath
+    val scope = rememberCoroutineScope()
 
     fun needsLoad(path: String): Boolean = if (path == "OVERVIEW") {
         uiState.seriesOverviewSections.isEmpty()
@@ -720,6 +723,8 @@ private fun SeriesTabContent(
 
     var isLoading by remember { mutableStateOf(needsLoad(selectedCategoryPath)) }
     var reloadKey by remember { mutableStateOf(0) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+    var loadMoreFailed by remember { mutableStateOf(false) }
 
     LaunchedEffect(selectedCategoryPath, reloadKey) {
         val path = selectedCategoryPath
@@ -731,12 +736,37 @@ private fun SeriesTabContent(
         if (path == "OVERVIEW") {
             uiState.seriesOverviewSections = runCatching { SerienStreamScraper.fetchHomeSections() }.getOrDefault(emptyList())
         } else {
-            uiState.seriesCategoryItems = runCatching { SerienStreamScraper.fetchCategory(path) }
-                .getOrDefault(emptyList())
-                .distinctBy { it.cleanSlug }
+            val firstPage = runCatching { SerienStreamScraper.fetchCategory(path) }.getOrDefault(emptyList())
+            uiState.seriesCategoryItems = firstPage.distinctBy { it.cleanSlug }
             uiState.seriesLoadedPath = path
+            uiState.seriesPage = 1
+            uiState.seriesCanLoadMore = firstPage.isNotEmpty()
+            loadMoreFailed = false
         }
         isLoading = false
+    }
+
+    fun loadMoreSeries() {
+        if (isLoadingMore || !uiState.seriesCanLoadMore) return
+        val path = uiState.seriesLoadedPath ?: return
+        val nextPage = uiState.seriesPage + 1
+        isLoadingMore = true
+        loadMoreFailed = false
+        scope.launch {
+            val result = runCatching { SerienStreamScraper.fetchCategory(path, nextPage) }
+            if (uiState.seriesLoadedPath == path) {
+                result.onSuccess { more ->
+                    val known = uiState.seriesCategoryItems.mapTo(HashSet()) { it.cleanSlug }
+                    val fresh = more.filter { known.add(it.cleanSlug) }
+                    uiState.seriesCategoryItems = uiState.seriesCategoryItems + fresh
+                    uiState.seriesPage = nextPage
+                    uiState.seriesCanLoadMore = fresh.isNotEmpty()
+                }.onFailure {
+                    loadMoreFailed = true
+                }
+            }
+            isLoadingMore = false
+        }
     }
 
     CatalogBrowser(
@@ -752,11 +782,33 @@ private fun SeriesTabContent(
         categoryItems = uiState.seriesCategoryItems,
         isLoading = isLoading ||
             (selectedCategoryPath != "OVERVIEW" && uiState.seriesLoadedPath != selectedCategoryPath),
-        loadingText = "Lade Serien von S.to...",
-        emptyText = "Keine Serien gefunden. S.to ist gerade nicht erreichbar.",
+        loadingText = "Lade Serien...",
+        emptyText = "Keine Serien gefunden.",
         onRetry = { reloadKey++ },
         watchlist = watchlist,
-        onOpenAnime = onOpenAnime
+        onOpenAnime = onOpenAnime,
+        gridFooter = {
+            if (uiState.seriesCanLoadMore) {
+                item(key = "load_more_series", span = { GridItemSpan(maxLineSpan) }) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TvFocusableButton(
+                            text = when {
+                                isLoadingMore -> "⏳ Lade weitere Serien..."
+                                loadMoreFailed -> "⚠️ Laden fehlgeschlagen – erneut versuchen"
+                                else -> "⬇️ Mehr Serien laden"
+                            },
+                            isPrimary = true,
+                            onClick = { loadMoreSeries() }
+                        )
+                    }
+                }
+            }
+        }
     )
 }
 

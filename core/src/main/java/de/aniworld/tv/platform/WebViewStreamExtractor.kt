@@ -99,7 +99,10 @@ class WebViewStreamExtractor(context: Context) : BrowserStreamExtractor {
                                 ): WebResourceResponse? {
                                     val reqUrl = request?.url?.toString() ?: return null
                                     if (BrowserStreamHooks.isMediaStreamUrl(reqUrl)) {
-                                        finishWith(reqUrl, lastPageUrl)
+                                        val refHeader = request.requestHeaders?.entries
+                                            ?.firstOrNull { it.key.equals("Referer", ignoreCase = true) }
+                                            ?.value?.takeIf { it.startsWith("http") }
+                                        finishWith(reqUrl, refHeader ?: lastPageUrl)
                                         return emptyResponse()
                                     }
                                     if (BrowserStreamHooks.isBlockedAdOrAsset(reqUrl)) {

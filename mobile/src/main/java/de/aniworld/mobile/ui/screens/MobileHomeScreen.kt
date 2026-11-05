@@ -346,15 +346,15 @@ fun MobileHomeScreen(
                     catalog = state.series,
                     categories = SerienStreamScraper.CATEGORIES,
                     searchLabel = "🔍 Serien suchen",
-                    emptyText = "Keine Serien gefunden. S.to ist gerade nicht erreichbar.",
+                    emptyText = "Keine Serien gefunden.",
                     watchlist = watchlist,
                     onOpenAnime = onOpenAnime,
                     onShowTitle = { sheetTitle = it },
                     onPlayTitle = onPlayTitle,
                     onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
                     loadOverview = { SerienStreamScraper.fetchHomeSections() },
-                    loadCategory = { path, _ -> SerienStreamScraper.fetchCategory(path) },
-                    loadMoreLabel = null
+                    loadCategory = { path, page -> SerienStreamScraper.fetchCategory(path, page) },
+                    loadMoreLabel = "Mehr Serien laden"
                 )
 
                 MobileTab.LIVE_TV -> MobileLiveTvScreen(

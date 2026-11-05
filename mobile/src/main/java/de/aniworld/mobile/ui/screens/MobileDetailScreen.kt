@@ -70,6 +70,7 @@ import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import kotlinx.coroutines.launch
 
@@ -104,6 +105,8 @@ fun MobileDetailScreen(
                 HdFilmeScraper.fetchDetail(animeSlug, selectedSeasonPath)
             } else if (SerienStreamScraper.isStoSlug(animeSlug)) {
                 SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
+            } else if (KissAsianScraper.isKissAsianSlug(animeSlug)) {
+                KissAsianScraper.fetchDetail(animeSlug, selectedSeasonPath)
             } else {
                 AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)
             }

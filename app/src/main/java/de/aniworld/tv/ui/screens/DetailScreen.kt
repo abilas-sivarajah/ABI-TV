@@ -54,6 +54,7 @@ import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.remote.AniWorldScraper
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
+import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.ui.components.LanguageBadge
 import de.aniworld.tv.ui.components.TvFocusableButton
@@ -109,6 +110,9 @@ fun DetailScreen(
                 }
                 SerienStreamScraper.isStoSlug(animeSlug) -> {
                     SerienStreamScraper.fetchDetail(animeSlug, selectedSeasonPath)
+                }
+                KissAsianScraper.isKissAsianSlug(animeSlug) -> {
+                    KissAsianScraper.fetchDetail(animeSlug, selectedSeasonPath)
                 }
                 else -> {
                     AniWorldScraper.fetchAnimeDetail(animeSlug, selectedSeasonPath)
@@ -269,7 +273,12 @@ fun DetailScreen(
                         // Filmquellen (HD-Filme, Filmpalast) haben nur deutschen Ton und keine Folgen
                         val isMovieSource = HdFilmeScraper.isHdFilmeSlug(animeSlug) ||
                             FilmpalastScraper.isFilmpalastSlug(animeSlug)
-                        val langChoices = if (isMovieSource) listOf(LanguageOption.GER_DUB) else LanguageOption.entries
+                        val isKissAsian = KissAsianScraper.isKissAsianSlug(animeSlug)
+                        val langChoices = when {
+                            isMovieSource -> listOf(LanguageOption.GER_DUB)
+                            isKissAsian -> listOf(LanguageOption.ENG_SUB)
+                            else -> LanguageOption.entries
+                        }
 
                         LazyRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
