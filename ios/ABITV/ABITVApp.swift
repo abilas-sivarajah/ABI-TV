@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct ABITVApp: App {
+    // Liefert die erlaubten Ausrichtungen (Player: Querformat, sonst frei)
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     init() {
         #if canImport(WebKit)
         StreamResolver.browserExtractor = WebKitStreamExtractor()
@@ -168,6 +171,10 @@ struct RootContainerView: View {
                 )
                 .presentationDetents([.medium, .large])
             }
+        }
+        // Player immer im Querformat (auch mit Ausrichtungssperre), danach zurück ins Hochformat
+        .onChange(of: activePlayback != nil) { playing in
+            if playing { OrientationManager.enterPlayer() } else { OrientationManager.leavePlayer() }
         }
         .task {
             castManager.initialize()
