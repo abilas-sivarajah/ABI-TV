@@ -65,6 +65,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.draw.alpha
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -430,8 +431,14 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
                 SwingPanel(
                     background = Color.Black,
                     factory = { controller.videoCanvas },
-                    // Erst verkleinern, wenn das Standbild dahinter schon gezeichnet ist (kein Schwarzblitz)
-                    modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
+                    // Erst wegnehmen, wenn das Standbild dahinter schon gezeichnet ist (kein Schwarzblitz).
+                    // Nicht nur verkleinern: ein 1-Pixel-Fenster bliebe als heller Punkt in der Mitte stehen –
+                    // darum aus dem sichtbaren Bereich hinausschieben.
+                    modifier = if (showVideo) {
+                        Modifier.fillMaxSize()
+                    } else {
+                        Modifier.size(1.dp).offset(x = (-4000).dp, y = (-4000).dp)
+                    }
                 )
 
                 if (isLoading && controller.errorMessage == null) {
