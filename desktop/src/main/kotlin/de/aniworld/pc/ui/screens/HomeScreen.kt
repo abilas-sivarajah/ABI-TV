@@ -114,8 +114,8 @@ import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.pc.platform.LetterboxdAccount
 import de.aniworld.pc.platform.LetterboxdUsers
 import de.aniworld.tv.data.remote.LetterboxdLists
-import de.aniworld.pc.platform.withoutStoAnime
-import de.aniworld.pc.platform.StoAnimeFilter
+import de.aniworld.tv.data.remote.withoutStoAnime
+import de.aniworld.tv.data.remote.StoAnimeFilter
 import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage

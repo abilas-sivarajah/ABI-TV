@@ -84,7 +84,9 @@ import de.aniworld.tv.data.model.LanguageOption
 import de.aniworld.tv.data.model.WatchProgressEntry
 import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
+import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.tv.data.remote.TitlePreview
+import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.ui.components.TvAnimeCard
 import de.aniworld.tv.ui.components.TvContinueWatchingCard
 import de.aniworld.tv.ui.components.TvFocusableButton
@@ -114,7 +116,7 @@ internal class ExpandedTitleState {
 internal val LocalExpandedTitle = staticCompositionLocalOf { ExpandedTitleState() }
 
 /** Höhe des Info-Felds in der Reihe = Höhe eines Karten-Covers (152 dp breit, 2:3). */
-private val TitleTileHeight = 228.dp
+internal val TitleTileHeight = 228.dp
 
 // ------------------- Startseite -------------------
 
@@ -459,7 +461,7 @@ private fun HeroBanner(
         if (artwork == null) artwork = TitlePreview.loadArtwork(anime, detail)
     }
 
-    // Hintergrund: TMDB, sonst das Bild der Seite – aber nur, wenn es wirklich querformatig ist.
+    // Hintergrund: gefundenes Breitbild (TVmaze, Kitsu, Letterboxd), sonst das Bild der Seite – aber nur, wenn es wirklich querformatig ist.
     // Ein gestrecktes Hochformat-Poster wäre unscharf.
     val backdropUrl = artwork?.backdropUrl
         ?: detail?.backdropUrl?.takeIf { it.isNotBlank() && it != anime.coverUrl }
@@ -589,7 +591,7 @@ private fun HeroBanner(
 
                 val heroTitle = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
                 if (logoUrl != null) {
-                    // Titel-Logo von TMDB statt Schrift (wie bei Streaming-Apps)
+                    // Titel-Logo statt Schrift (wie bei Streaming-Apps), wenn eins gefunden wurde
                     AsyncImage(
                         model = logoUrl,
                         contentDescription = heroTitle,
@@ -617,16 +619,24 @@ private fun HeroBanner(
                 }
 
                 val meta = TitlePreview.metaLine(anime, detail)
-                if (meta.isNotEmpty()) {
+                val letterboxd = rememberLetterboxdRating(artwork)
+                if (meta.isNotEmpty() || letterboxd != null) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = meta.joinToString("  •  "),
-                        color = TextPrimary.copy(alpha = 0.9f),
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (meta.isNotEmpty()) {
+                            Text(
+                                text = meta.joinToString("  •  "),
+                                color = TextPrimary.copy(alpha = 0.9f),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                        }
+                        letterboxd?.takeIf { it.average != null }?.let { LetterboxdChip(it, large = true) }
+                    }
                 }
 
                 detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
@@ -661,7 +671,7 @@ private fun HeroBanner(
                         onClick = onOpenDetail
                     )
                     HeroButton(
-                        text = if (isBookmarked) "Auf der Merkliste" else "Merkliste",
+                        text = if (isBookmarked) "Auf der Watchlist" else "Watchlist",
                         icon = if (isBookmarked) Icons.Filled.Check else Icons.Filled.Add,
                         primary = false,
                         onClick = onToggleWatchlist
@@ -811,7 +821,7 @@ internal fun CatalogRowSection(
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun TitleInfoPanel(
+internal fun TitleInfoPanel(
     anime: AnimeCard,
     isBookmarked: Boolean,
     onOpenDetail: () -> Unit,
@@ -821,9 +831,13 @@ private fun TitleInfoPanel(
 ) {
     val slug = anime.cleanSlug
     var detail by remember(slug) { mutableStateOf(TitlePreview.cachedDetail(slug)) }
+    var artwork by remember(slug) { mutableStateOf(TitlePreview.cachedArtwork(slug)) }
     LaunchedEffect(slug) {
         if (detail == null) detail = TitlePreview.loadDetail(slug)
+        // Für die Letterboxd-Bewertung von Filmen
+        if (artwork == null) artwork = TitlePreview.loadArtwork(anime, detail)
     }
+    val letterboxd = rememberLetterboxdRating(artwork)
 
     val playFocus = remember { FocusRequester() }
     var hasFocusInside by remember { mutableStateOf(false) }
@@ -893,8 +907,12 @@ private fun TitleInfoPanel(
                     .padding(end = 36.dp),
                 verticalArrangement = Arrangement.Center
             ) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TitlePreview.chips(anime, detail).forEach { chip ->
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    val chips = TitlePreview.chips(anime, detail)
+                    // Bei Filmen die Letterboxd-Bewertung direkt hinter Art und Jahr
+                    val lbAfter = if (chips.firstOrNull() == "Film") minOf(2, chips.size) else -1
+                    chips.forEachIndexed { index, chip ->
+                        if (index == lbAfter) letterboxd?.takeIf { it.average != null }?.let { LetterboxdChip(it) }
                         Box(
                             modifier = Modifier
                                 .clip(RoundedCornerShape(6.dp))
@@ -912,6 +930,7 @@ private fun TitleInfoPanel(
                             )
                         }
                     }
+                    if (lbAfter == chips.size) letterboxd?.takeIf { it.average != null }?.let { LetterboxdChip(it) }
                 }
                 Spacer(modifier = Modifier.height(8.dp))
 
@@ -966,7 +985,7 @@ private fun TitleInfoPanel(
                     )
                     TileIconButton(
                         icon = if (isBookmarked) Icons.Filled.Check else Icons.Filled.Add,
-                        description = if (isBookmarked) "Auf der Merkliste" else "Zur Merkliste",
+                        description = if (isBookmarked) "Auf der Watchlist" else "Zur Watchlist",
                         onClick = onToggleWatchlist
                     )
                     TileIconButton(icon = Icons.Outlined.Info, description = "Details", onClick = onOpenDetail)
@@ -1002,4 +1021,39 @@ private fun TileIconButton(icon: ImageVector, description: String, onClick: () -
         selected = true,
         onClick = onClick
     )
+}
+
+/** Letterboxd-Bewertung eines Films (über TMDB- oder IMDb-Nummer); Serien und Anime: keine. */
+@Composable
+private fun rememberLetterboxdRating(artwork: TmdbArtwork.Artwork?): LetterboxdRatings.Rating? {
+    var rating by remember(artwork) { mutableStateOf<LetterboxdRatings.Rating?>(null) }
+    LaunchedEffect(artwork) { rating = TitlePreview.loadLetterboxdRating(artwork) }
+    return rating
+}
+
+private val LetterboxdGreen = Color(0xFF00E054)
+
+/** Kleines Kästchen "LB ★ 3,9" (Letterboxd-Bewertung) – nur Anzeige. */
+@Composable
+private fun LetterboxdChip(rating: LetterboxdRatings.Rating, large: Boolean = false) {
+    val shape = RoundedCornerShape(6.dp)
+    Row(
+        modifier = Modifier
+            .clip(shape)
+            .background(BgElevated)
+            .border(1.dp, LetterboxdGreen.copy(alpha = 0.45f), shape)
+            .padding(horizontal = if (large) 12.dp else 10.dp, vertical = if (large) 5.dp else 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(LetterboxdGreen))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = "LB" + (rating.shortLabel?.let { " ★ $it" } ?: ""),
+            color = TextPrimary,
+            fontSize = if (large) 13.sp else 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
+            softWrap = false
+        )
+    }
 }

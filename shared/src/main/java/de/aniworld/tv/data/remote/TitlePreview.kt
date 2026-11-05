@@ -45,14 +45,37 @@ object TitlePreview {
         }.getOrNull()?.also { detailCache[slug] = it }
     }
 
-    /** Bilder von TMDB; null, wenn TMDB nicht eingerichtet ist oder den Titel nicht kennt. */
+    /**
+     * Breites Hintergrundbild (und ggf. Logo) zu einem Titel. Mit TMDB-Schlüssel von TMDB, sonst ohne
+     * Schlüssel: TVmaze (Serien), Kitsu/AniList (Anime), Wikidata + Letterboxd (Filme). Null, wenn
+     * nichts passt. Bei Filmen enthält das Ergebnis die TMDB- bzw. IMDb-Nummer für die Letterboxd-Bewertung.
+     */
     suspend fun loadArtwork(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Artwork? {
-        if (!TmdbArtwork.isConfigured) return null
         val slug = anime.cleanSlug
         artworkCache[slug]?.let { return it }
         val title = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
         val year = detail?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
-        return TmdbArtwork.find(title, year, tmdbKind(anime, detail))?.also { artworkCache[slug] = it }
+        val found = if (TmdbArtwork.isConfigured) {
+            TmdbArtwork.find(title, year, tmdbKind(anime, detail))
+        } else {
+            val kind = when {
+                kindLabel(anime, detail) == "Anime" -> KeylessArtwork.Kind.ANIME
+                tmdbKind(anime, detail) == TmdbArtwork.Kind.MOVIE -> KeylessArtwork.Kind.MOVIE
+                else -> KeylessArtwork.Kind.TV
+            }
+            KeylessArtwork.find(title, year, kind)
+        }
+        return found?.also { artworkCache[slug] = it }
+    }
+
+    /** Letterboxd-Bewertung eines Films (über TMDB- oder IMDb-Nummer); Serien und Anime: null. */
+    suspend fun loadLetterboxdRating(artwork: TmdbArtwork.Artwork?): LetterboxdRatings.Rating? {
+        if (artwork?.kind != TmdbArtwork.Kind.MOVIE) return null
+        return when {
+            artwork.tmdbId != null -> LetterboxdRatings.rating(artwork.tmdbId)
+            artwork.imdbId != null -> LetterboxdRatings.byImdb(artwork.imdbId)
+            else -> null
+        }
     }
 
     /** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
@@ -83,20 +106,40 @@ object TitlePreview {
         return kindLabel(anime, detail).uppercase() + "  ·  " + source
     }
 
+    /**
+     * Untertitel einer Karte nur, wenn er wirklich ein Genre ist – Anbieter-Kennzeichen wie
+     * "Serie • S.to" oder "HD Stream • Deutsch" sagen nichts aus und werden ausgeblendet.
+     */
+    fun realGenre(anime: AnimeCard): String {
+        val text = anime.genreOrSubtitle.trim()
+        val markers = listOf("S.to", "HD Stream", "HD-Filme", "Deutsch", "Serie •", "Film •")
+        return if (markers.any { text.contains(it, ignoreCase = true) }) "" else text
+    }
+
     /** Eckdaten wie "Action", "Fantasy", "2023", "FSK 12". */
     fun metaLine(anime: AnimeCard, detail: AnimeDetail?): List<String> = buildList {
         val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(2)
-        if (genres.isNotEmpty()) addAll(genres) else anime.genreOrSubtitle.takeIf { it.isNotBlank() }?.let { add(it) }
+        if (genres.isNotEmpty()) addAll(genres) else realGenre(anime).takeIf { it.isNotBlank() }?.let { add(it) }
         detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
         detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(ageLabel(it)) }
     }
 
-    /** Eckdaten als kleine Kästchen im Info-Feld: Art, Jahr, Bewertung, FSK. */
+    /**
+     * Eckdaten als kleine Kästchen im Info-Feld: Art, Jahr, Bewertung, FSK. Bei Filmen keine Bewertung
+     * der Streaming-Seite – dort zeigen die Apps die Letterboxd-Bewertung ("LB ★ 3,9").
+     */
     fun chips(anime: AnimeCard, detail: AnimeDetail?): List<String> = buildList {
-        add(kindLabel(anime, detail))
+        val kind = kindLabel(anime, detail)
+        add(kind)
         detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
-        detail?.rating?.takeIf { it.isNotBlank() }?.let { add("★ $it") }
+        if (kind != "Film") formatSiteRating(detail?.rating)?.let { add(it) }
         detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(ageLabel(it)) }
+    }
+
+    /** Bewertung der Seite einheitlich als "★ 7,2"; null, wenn keine Zahl drinsteht. */
+    private fun formatSiteRating(raw: String?): String? {
+        val number = raw?.let { Regex("""\d+(?:[.,]\d+)?""").find(it)?.value } ?: return null
+        return "★ " + number.replace('.', ',')
     }
 
     private fun ageLabel(raw: String): String = if (raw.all(Char::isDigit)) "FSK $raw" else raw
@@ -104,7 +147,7 @@ object TitlePreview {
     /** Genres für das Info-Feld; ohne Details der Untertitel der Karte. */
     fun genreLine(anime: AnimeCard, detail: AnimeDetail?): String {
         val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(3)
-        return if (genres.isNotEmpty()) genres.joinToString(", ") else anime.genreOrSubtitle
+        return if (genres.isNotEmpty()) genres.joinToString(", ") else realGenre(anime)
     }
 
     /** Zufällige Titel fürs Titelbild (nur mit Cover, ohne Doppelte). */

@@ -9,7 +9,15 @@ import de.aniworld.core.BuildConfig
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.StreamResolver
+import de.aniworld.tv.data.remote.KeylessArtwork
+import de.aniworld.tv.data.remote.LetterboxdLists
+import de.aniworld.tv.data.remote.LetterboxdRatings
+import de.aniworld.tv.data.remote.StoAnimeFilter
 import de.aniworld.tv.data.remote.TmdbArtwork
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 import de.aniworld.tv.platform.AppLog
 import de.aniworld.tv.platform.SharedPrefsStore
 import de.aniworld.tv.platform.WebViewStreamExtractor
@@ -35,8 +43,15 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
         }
         LocalStorage.init(SharedPrefsStore(this, LocalStorage.PREFS_NAME))
         StreamResolver.browserExtractor = WebViewStreamExtractor(this)
-        // Auf Handy und TV reicht 1280 Pixel Breite, das volle Original wäre unnötig groß
-        TmdbArtwork.configure(BuildConfig.TMDB_API_KEY, cacheDir, backdropSize = "w1280")
+        // TMDB wird nicht mehr benutzt (wie am PC): Bilder kommen ohne Schlüssel von TVmaze,
+        // Kitsu/AniList und Letterboxd, Bewertungen von Letterboxd
+        TmdbArtwork.configure("", cacheDir, backdropSize = "w1280")
+        KeylessArtwork.configure(cacheDir)
+        LetterboxdRatings.configure(cacheDir)
+        LetterboxdLists.configure(cacheDir)
+        // Liste der Anime auf S.to, damit der Serien-Bereich ohne Anime auskommt
+        StoAnimeFilter.configure(cacheDir)
+        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { runCatching { StoAnimeFilter.load() } }
     }
 
     // Cover von Filmpalast und S.to brauchen das DNS-over-HTTPS des gemeinsamen Clients,

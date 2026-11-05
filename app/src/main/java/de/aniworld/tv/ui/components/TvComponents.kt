@@ -154,7 +154,7 @@ fun TvAnimeCard(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "★ MERKLISTE",
+                        text = "★ WATCHLIST",
                         color = Color.White,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold
@@ -175,9 +175,10 @@ fun TvAnimeCard(
             modifier = Modifier.padding(horizontal = 2.dp)
         )
 
-        if (anime.genreOrSubtitle.isNotBlank()) {
+        val subtitle = de.aniworld.tv.data.remote.TitlePreview.realGenre(anime)
+        if (subtitle.isNotBlank()) {
             Text(
-                text = anime.genreOrSubtitle,
+                text = subtitle,
                 color = TextMuted,
                 fontSize = 11.sp,
                 maxLines = 1,

@@ -1,8 +1,7 @@
-package de.aniworld.pc.platform
+package de.aniworld.tv.data.remote
 
 import com.google.gson.Gson
 import de.aniworld.tv.data.model.AnimeCard
-import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
@@ -29,7 +28,13 @@ object StoAnimeFilter {
     private data class Cache(val time: Long, val slugs: List<String>)
 
     private val gson = Gson()
-    private val cacheFile by lazy { File(AppDirs.cacheDir, "sto-anime-slugs.json") }
+    @Volatile
+    private var cacheFile: File? = null
+
+    /** Beim Start aufrufen: Ordner für die gespeicherte Liste (ohne Aufruf wird jedes Mal neu geladen). */
+    fun configure(cacheDir: File) {
+        cacheFile = File(cacheDir, "sto-anime-slugs.json")
+    }
 
     private val _slugs = MutableStateFlow<Set<String>>(emptySet())
     /** Kurzname (Slug) aller S.to-Serien mit Genre "Anime". */
@@ -37,8 +42,9 @@ object StoAnimeFilter {
 
     /** Beim Start einmal aufrufen: gespeicherte Liste sofort nutzen, bei Bedarf neu laden. */
     suspend fun load() = withContext(Dispatchers.IO) {
+        val file = cacheFile
         val cached = runCatching {
-            if (cacheFile.isFile) gson.fromJson(cacheFile.readText(Charsets.UTF_8), Cache::class.java) else null
+            if (file != null && file.isFile) gson.fromJson(file.readText(Charsets.UTF_8), Cache::class.java) else null
         }.getOrNull()
         val cachedSlugs = cached?.slugs.orEmpty().toSet()
         if (cachedSlugs.isNotEmpty()) _slugs.value = cachedSlugs
@@ -47,12 +53,13 @@ object StoAnimeFilter {
         val (fresh, complete) = crawl(cachedSlugs)
         if (complete && fresh.isNotEmpty()) {
             _slugs.value = fresh
-            runCatching {
-                val tmp = File(cacheFile.parentFile, "${cacheFile.name}.tmp")
+            if (file != null) runCatching {
+                file.parentFile?.mkdirs()
+                val tmp = File(file.parentFile, "${file.name}.tmp")
                 tmp.writeText(gson.toJson(Cache(System.currentTimeMillis(), fresh.sorted())), Charsets.UTF_8)
-                if (!tmp.renameTo(cacheFile)) {
-                    cacheFile.delete()
-                    tmp.renameTo(cacheFile)
+                if (!tmp.renameTo(file)) {
+                    file.delete()
+                    tmp.renameTo(file)
                 }
             }
             AppLog.i(TAG, "${fresh.size} Anime-Serien von S.to geladen")
