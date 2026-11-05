@@ -61,6 +61,10 @@ import androidx.compose.ui.graphics.toComposeImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.runtime.withFrameNanos
+import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -302,16 +306,35 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
 
     // Pausen-Ansicht wie bei Netflix: nach kurzer Pause ein Standbild mit Titel und Beschreibung.
     // (Über das laufende VLC-Bild kann Compose nicht zeichnen – darum wird es durch das Standbild ersetzt.)
+    // Ablauf ohne Flackern: Standbild erst hinter dem (noch sichtbaren) Video zeichnen, dann das Video
+    // ausblenden – nicht verkleinern, das ließe kurz Schwarz durchblitzen. Beim Weiterspielen umgekehrt.
     var pauseFrame by remember { mutableStateOf<ImageBitmap?>(null) }
+    var videoHidden by remember { mutableStateOf(false) }
     LaunchedEffect(controller.isPlaying, videoReady, controller.currentEpisode?.path) {
-        if (controller.isPlaying || !videoReady || (controller.durationMs <= 0L && !controller.isLiveStream)) {
+        val paused = !controller.isPlaying && videoReady && (controller.durationMs > 0L || controller.isLiveStream)
+        if (!paused) {
+            if (videoHidden) {
+                controller.videoCanvas.isVisible = true
+                videoHidden = false
+                // Standbild noch kurz liegen lassen, bis VLC wieder Bilder liefert
+                delay(250)
+            }
             pauseFrame = null
             return@LaunchedEffect
         }
         delay(PAUSE_INFO_DELAY_MS)
-        pauseFrame = withContext(Dispatchers.IO) { controller.snapshot() }?.toComposeImageBitmap()
+        val frame = withContext(Dispatchers.IO) { controller.snapshot() }?.toComposeImageBitmap() ?: return@LaunchedEffect
+        pauseFrame = frame
+        // Zwei Bilder abwarten, damit das Standbild sicher gezeichnet ist
+        withFrameNanos { }
+        withFrameNanos { }
+        controller.videoCanvas.isVisible = false
+        videoHidden = true
     }
-    val showVideo = videoReady && pauseFrame == null
+    DisposableEffect(Unit) {
+        onDispose { controller.videoCanvas.isVisible = true }
+    }
+    val showVideo = videoReady && !videoHidden
 
     // Lage des Videobilds auf dem Bildschirm – für die Knöpfe über dem Bild (eigenes kleines Fenster)
     val density = LocalDensity.current.density
@@ -394,19 +417,22 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
                     .onGloballyPositioned { videoCoords[0] = it; updateVideoBounds() },
                 contentAlignment = Alignment.Center
             ) {
-                SwingPanel(
-                    background = Color.Black,
-                    factory = { controller.videoCanvas },
-                    modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
-                )
-
+                // Standbild liegt hinter dem Video und wird sichtbar, sobald das Video ausgeblendet ist
                 pauseFrame?.let { frame ->
                     PauseInfo(
                         frame = frame,
+                        revealed = videoHidden,
                         controller = controller,
                         onResume = { controller.togglePause(); keepControlsAlive() }
                     )
                 }
+
+                SwingPanel(
+                    background = Color.Black,
+                    factory = { controller.videoCanvas },
+                    // Erst verkleinern, wenn das Standbild dahinter schon gezeichnet ist (kein Schwarzblitz)
+                    modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
+                )
 
                 if (isLoading && controller.errorMessage == null) {
                     StatusCard {
@@ -486,7 +512,13 @@ private const val CREDITS_WINDOW_MS = 100_000L
  * Folge und Beschreibung, rechts unten "Angehalten". Klick spielt weiter.
  */
 @Composable
-private fun PauseInfo(frame: ImageBitmap, controller: PlayerController, onResume: () -> Unit) {
+private fun PauseInfo(frame: ImageBitmap, revealed: Boolean, controller: PlayerController, onResume: () -> Unit) {
+    // Abdunkeln und Texte sanft einblenden (das Standbild selbst gleicht dem letzten Videobild)
+    val reveal by animateFloatAsState(
+        targetValue = if (revealed) 1f else 0f,
+        animationSpec = tween(durationMillis = 600),
+        label = "pauseReveal"
+    )
     val episode = controller.currentEpisode
     val isLive = controller.isLiveStream
     val isSeries = !isLive && (controller.seasonEpisodes.size > 1 || controller.seasons.size > 1)
@@ -505,6 +537,7 @@ private fun PauseInfo(frame: ImageBitmap, controller: PlayerController, onResume
         Box(
             modifier = Modifier
                 .fillMaxSize()
+                .alpha(reveal)
                 .background(
                     Brush.horizontalGradient(
                         0f to Color.Black.copy(alpha = 0.80f),
@@ -517,6 +550,7 @@ private fun PauseInfo(frame: ImageBitmap, controller: PlayerController, onResume
         Column(
             modifier = Modifier
                 .align(Alignment.CenterStart)
+                .alpha(reveal)
                 .padding(start = 96.dp, end = 48.dp)
                 .widthIn(max = 900.dp)
         ) {
@@ -577,6 +611,7 @@ private fun PauseInfo(frame: ImageBitmap, controller: PlayerController, onResume
             fontSize = 18.sp,
             modifier = Modifier
                 .align(Alignment.BottomEnd)
+                .alpha(reveal)
                 .padding(end = 72.dp, bottom = 48.dp)
         )
     }
