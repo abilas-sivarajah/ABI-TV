@@ -448,10 +448,26 @@ public struct LiveTvChannel: Codable, Hashable, Identifiable, Sendable {
 public struct LiveTvLoadResult: Sendable {
     public let channels: [LiveTvChannel]
     public let customError: String?
+    /// Reiter: die festen Kategorien plus je ein Reiter pro Ordner der eigenen M3U-Sammlung.
+    public let categories: [LiveTvCategory]
 
-    public init(channels: [LiveTvChannel], customError: String? = nil) {
+    public init(channels: [LiveTvChannel], customError: String? = nil, categories: [LiveTvCategory] = []) {
         self.channels = channels
         self.customError = customError
+        self.categories = categories
+    }
+}
+
+/// Eine M3U-Datei aus dem eigenen Ordner; `dir` ist der Unterordner relativ zum gewählten Ordner ("" = oberste Ebene).
+public struct M3uFolderFile: Hashable, Sendable {
+    public let dir: String
+    public let fileName: String
+    public let content: String
+
+    public init(dir: String, fileName: String, content: String) {
+        self.dir = dir
+        self.fileName = fileName
+        self.content = content
     }
 }
 

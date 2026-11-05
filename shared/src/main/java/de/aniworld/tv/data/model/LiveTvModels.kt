@@ -15,7 +15,16 @@ data class LiveTvChannel(
 /** Senderliste plus ggf. Fehler beim Laden der eigenen M3U-Liste (die festen Sender gibt es immer). */
 data class LiveTvLoadResult(
     val channels: List<LiveTvChannel>,
-    val customError: String? = null
+    val customError: String? = null,
+    /** Reiter: die festen Kategorien plus je ein Reiter pro Ordner der eigenen M3U-Sammlung. */
+    val categories: List<LiveTvCategory> = emptyList()
+)
+
+/** Eine M3U-Datei aus dem eigenen Ordner; [dir] ist der Unterordner relativ zum gewählten Ordner ("" = oberste Ebene, Trenner "/"). */
+data class M3uFolderFile(
+    val dir: String,
+    val fileName: String,
+    val content: String
 )
 
 data class LiveTvCategory(

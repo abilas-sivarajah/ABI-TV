@@ -308,30 +308,167 @@ public enum LiveTvRepository {
     private static let nonHlsExtensions = [".ts", ".mp4", ".mkv", ".mp3", ".aac", ".flv", ".mpd"]
 
     public static func loadChannels(forceRefresh: Bool = false) async -> LiveTvLoadResult {
+        var errors: [String] = []
+        let custom = await loadCustomList(forceRefresh: forceRefresh)
+        if let error = custom.error { errors.append(error) }
+        let folder = loadFolder(forceRefresh: forceRefresh)
+        if let error = folder.error { errors.append(error) }
+        return LiveTvLoadResult(
+            channels: presetChannels + custom.channels + folder.channels,
+            customError: errors.isEmpty ? nil : errors.joined(separator: " "),
+            categories: categories + folder.categories
+        )
+    }
+
+    private static func loadCustomList(forceRefresh: Bool) async -> (channels: [LiveTvChannel], error: String?) {
         let customUrl = LocalStorage.shared.customM3uUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !customUrl.isEmpty else {
-            return LiveTvLoadResult(channels: presetChannels)
-        }
+        guard !customUrl.isEmpty else { return ([], nil) }
 
         let cached = lock.withLock { customCache }
-        if !forceRefresh, let cached, cached.url == customUrl {
-            return LiveTvLoadResult(channels: presetChannels + cached.channels)
-        }
+        if !forceRefresh, let cached, cached.url == customUrl { return (cached.channels, nil) }
 
         do {
             let (_, body) = try await HttpClient.getHtml(customUrl, referer: customUrl)
             let custom = parseM3u(body)
             lock.withLock { customCache = (customUrl, custom) }
-            return LiveTvLoadResult(
-                channels: presetChannels + custom,
-                customError: custom.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil
-            )
+            return (custom, custom.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil)
         } catch {
-            return LiveTvLoadResult(
-                channels: presetChannels,
-                customError: "Eigene Liste nicht erreichbar (\(error.localizedDescription))."
-            )
+            return ([], "Eigene Liste nicht erreichbar (\(error.localizedDescription)).")
         }
+    }
+
+    // MARK: - Eigener Ordner mit M3U-Dateien
+
+    public static let folderMaxFiles = 500
+    public static let folderMaxDepth = 8
+    public static let folderMaxFileBytes = 8 * 1024 * 1024
+    private static let folderPrefix = "folder:"
+    private static var folderCache: (key: String, categories: [LiveTvCategory], channels: [LiveTvChannel])?
+
+    public enum FolderError: LocalizedError {
+        case unreadable
+        public var errorDescription: String? { "Ordner nicht lesbar" }
+    }
+
+    private static func loadFolder(forceRefresh: Bool) -> (categories: [LiveTvCategory], channels: [LiveTvChannel], error: String?) {
+        let bookmark = LocalStorage.shared.m3uFolderBookmark
+        guard !bookmark.isEmpty else { return ([], [], nil) }
+
+        let cached = lock.withLock { folderCache }
+        if !forceRefresh, let cached, cached.key == bookmark { return (cached.categories, cached.channels, nil) }
+
+        guard let data = Data(base64Encoded: bookmark), let url = resolveFolderBookmark(data) else {
+            return ([], [], "Ordner nicht mehr erreichbar – bitte neu auswählen.")
+        }
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let files = try? readFolder(url) else {
+            return ([], [], "Ordner nicht lesbar – bitte neu auswählen.")
+        }
+        let rootName = LocalStorage.shared.m3uFolderName.isEmpty ? "Eigener Ordner" : LocalStorage.shared.m3uFolderName
+        let result = buildFolderChannels(rootName: rootName, files: files)
+        lock.withLock { folderCache = (bookmark, result.categories, result.channels) }
+        let error: String?
+        if files.isEmpty {
+            error = "Im Ordner wurden keine M3U-Dateien gefunden."
+        } else if result.channels.isEmpty {
+            error = "Die M3U-Dateien im Ordner enthalten keine abspielbaren Sender."
+        } else {
+            error = nil
+        }
+        return (result.categories, result.channels, error)
+    }
+
+    private static func resolveFolderBookmark(_ data: Data) -> URL? {
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [], relativeTo: nil, bookmarkDataIsStale: &stale) else { return nil }
+        // Veraltetes Lesezeichen (Ordner verschoben/umbenannt) gleich erneuern
+        if stale, let fresh = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) {
+            LocalStorage.shared.m3uFolderBookmark = fresh.base64EncodedString()
+        }
+        return url
+    }
+
+    /// Gewählten Ordner merken (die Freigabe aus der Dateien-App muss dabei aktiv sein). false = ging nicht.
+    @discardableResult
+    public static func saveM3uFolder(_ url: URL) -> Bool {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard let data = try? url.bookmarkData(options: [], includingResourceValuesForKeys: nil, relativeTo: nil) else { return false }
+        LocalStorage.shared.m3uFolderBookmark = data.base64EncodedString()
+        LocalStorage.shared.m3uFolderName = url.lastPathComponent
+        lock.withLock { folderCache = nil }
+        return true
+    }
+
+    public static func removeM3uFolder() {
+        LocalStorage.shared.m3uFolderBookmark = ""
+        LocalStorage.shared.m3uFolderName = ""
+        lock.withLock { folderCache = nil }
+    }
+
+    public static func isM3uFileName(_ name: String) -> Bool {
+        let lower = name.lowercased()
+        return lower.hasSuffix(".m3u") || lower.hasSuffix(".m3u8")
+    }
+
+    /// Ordner samt Unterordnern lesen (versteckte Dateien und Ordner ausgelassen).
+    public static func readFolder(_ root: URL) throws -> [M3uFolderFile] {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: root.path, isDirectory: &isDir), isDir.boolValue else { throw FolderError.unreadable }
+        var result: [M3uFolderFile] = []
+
+        func walk(_ dir: URL, _ relative: String, _ depth: Int) {
+            guard depth <= folderMaxDepth, result.count < folderMaxFiles else { return }
+            let keys: [URLResourceKey] = [.isDirectoryKey, .fileSizeKey]
+            guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: keys, options: []) else { return }
+            let sorted = entries.sorted { $0.lastPathComponent.lowercased() < $1.lastPathComponent.lowercased() }
+            var subdirs: [URL] = []
+            for entry in sorted {
+                let name = entry.lastPathComponent
+                // iCloud-Dateien, die noch nicht auf dem Gerät sind, heißen ".Name.m3u.icloud": herunterladen lassen
+                if name.hasPrefix(".") && name.hasSuffix(".icloud") {
+                    try? fm.startDownloadingUbiquitousItem(at: entry)
+                    continue
+                }
+                if name.hasPrefix(".") { continue }
+                let values = try? entry.resourceValues(forKeys: Set(keys))
+                if values?.isDirectory == true {
+                    subdirs.append(entry)
+                } else if isM3uFileName(name), (values?.fileSize ?? 0) <= folderMaxFileBytes, result.count < folderMaxFiles,
+                          let data = try? Data(contentsOf: entry) {
+                    let text = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+                    result.append(M3uFolderFile(dir: relative, fileName: name, content: text))
+                }
+            }
+            for sub in subdirs {
+                walk(sub, relative.isEmpty ? sub.lastPathComponent : "\(relative)/\(sub.lastPathComponent)", depth + 1)
+            }
+        }
+
+        walk(root, "", 0)
+        return result
+    }
+
+    /// Je Ordner ein Reiter ("Sport › DAZN") mit den Sendern aller M3U-Dateien darin; die oberste Ebene heißt wie der Ordner.
+    public static func buildFolderChannels(rootName: String, files: [M3uFolderFile]) -> (categories: [LiveTvCategory], channels: [LiveTvChannel]) {
+        var cats: [LiveTvCategory] = []
+        var channels: [LiveTvChannel] = []
+        let groups = Dictionary(grouping: files) { $0.dir.trimmingCharacters(in: CharacterSet(charactersIn: "/")) }
+        for dir in groups.keys.sorted(by: { $0.lowercased() < $1.lowercased() }) {
+            let categoryId = folderPrefix + dir
+            let before = channels.count
+            for file in (groups[dir] ?? []).sorted(by: { $0.fileName.lowercased() < $1.fileName.lowercased() }) {
+                let base = (file.fileName as NSString).deletingPathExtension
+                channels += parseM3u(file.content, category: categoryId, idPrefix: "folder_\(channels.count)_", fallbackName: base)
+            }
+            if channels.count > before {
+                let title = dir.isEmpty ? rootName : dir.split(separator: "/").joined(separator: " › ")
+                cats.append(LiveTvCategory(id: categoryId, title: title, icon: "📁"))
+            }
+        }
+        return (cats, channels)
     }
 
     /// Speichert die Adresse der eigenen M3U-Liste (leer = entfernen).
@@ -374,7 +511,8 @@ public enum LiveTvRepository {
         return true
     }
 
-    public static func parseM3u(_ content: String) -> [LiveTvChannel] {
+    /// Sender aus einer M3U-Liste; `fallbackName` benennt Adressen ohne #EXTINF-Zeile (Datei mit nur einem Sender).
+    public static func parseM3u(_ content: String, category: String = "custom", idPrefix: String = "custom_", fallbackName: String = "") -> [LiveTvChannel] {
         var channels: [LiveTvChannel] = []
         var currentName = ""
         var currentLogo = ""
@@ -402,14 +540,18 @@ public enum LiveTvRepository {
                 default: break
                 }
             } else if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
-                if !currentName.isEmpty {
+                var name = currentName
+                if name.isEmpty && !fallbackName.isEmpty {
+                    name = channels.contains(where: { $0.name == fallbackName }) ? "\(fallbackName) \(channels.count + 1)" : fallbackName
+                }
+                if !name.isEmpty {
                     channels.append(
                         LiveTvChannel(
-                            id: "custom_\(channels.count)",
-                            name: currentName,
+                            id: "\(idPrefix)\(channels.count)",
+                            name: name,
                             logoUrl: currentLogo,
                             streamUrl: trimmed,
-                            category: "custom",
+                            category: category,
                             qualityBadge: "M3U",
                             headers: currentHeaders
                         )

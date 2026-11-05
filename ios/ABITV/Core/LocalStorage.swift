@@ -107,6 +107,8 @@ public final class LocalStorage: ObservableObject {
     private static let keyIgnoredUpdateTag = "ignored_update_tag"
     private static let keyUpdateSnoozedUntil = "update_snoozed_until"
     private static let keyCustomM3uUrl = "custom_m3u_url_v1"
+    private static let keyM3uFolderBookmark = "m3u_folder_bookmark_v1"
+    private static let keyM3uFolderName = "m3u_folder_name_v1"
     private static let keyLetterboxdUsers = "letterboxd_users_v1"
 
     private let encoder = JSONEncoder()
@@ -190,6 +192,18 @@ public final class LocalStorage: ObservableObject {
     public var customM3uUrl: String {
         get { store.getString(Self.keyCustomM3uUrl, default: "") ?? "" }
         set { store.putString(Self.keyCustomM3uUrl, value: newValue) }
+    }
+
+    /// Eigener Ordner mit M3U-Dateien als Lesezeichen (Base64), damit die App ihn nach Neustarts weiter lesen darf.
+    public var m3uFolderBookmark: String {
+        get { store.getString(Self.keyM3uFolderBookmark, default: "") ?? "" }
+        set { store.putString(Self.keyM3uFolderBookmark, value: newValue) }
+    }
+
+    /// Anzeigename des Ordners (z. B. "IPTV").
+    public var m3uFolderName: String {
+        get { store.getString(Self.keyM3uFolderName, default: "") ?? "" }
+        set { store.putString(Self.keyM3uFolderName, value: newValue) }
     }
 
     // ------------------- Merkliste (Watchlist) -------------------

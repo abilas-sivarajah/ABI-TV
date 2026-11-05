@@ -4,11 +4,14 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvCategory
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.LiveTvLoadResult
+import de.aniworld.tv.data.model.M3uFolderFile
+import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Request
+import java.io.File
 import java.io.IOException
 
 object LiveTvRepository {
@@ -320,30 +323,144 @@ object LiveTvRepository {
     private val nameAttr = Regex("""tvg-name="([^"]*)"""", RegexOption.IGNORE_CASE)
     private val nonHlsExtensions = listOf(".ts", ".mp4", ".mkv", ".mp3", ".aac", ".flv", ".mpd")
 
+    // ------------------- Eigener Ordner mit M3U-Dateien -------------------
+
+    /** Grenzen beim Lesen eines Ordners (gelten auch für den Android-Leser). */
+    const val FOLDER_MAX_FILES = 500
+    const val FOLDER_MAX_DEPTH = 8
+    const val FOLDER_MAX_FILE_BYTES = 8L * 1024 * 1024
+
+    private const val TAG = "LiveTvRepository"
+    private const val FOLDER_PREFIX = "folder:"
+
+    /**
+     * Liest den eigenen M3U-Ordner samt Unterordnern. Standard (PC): normaler Dateipfad;
+     * Android setzt einen Leser für die Ordner-Freigabe (content://…).
+     */
+    @Volatile
+    var folderReader: (folder: String) -> List<M3uFolderFile> = ::readFolderFromDisk
+
+    /** Reiter und Sender aus dem eigenen Ordner. */
+    data class FolderChannels(val categories: List<LiveTvCategory>, val channels: List<LiveTvChannel>)
+
+    // Gemerkt, bis "Liste aktualisieren" oder ein anderer Ordner kommt
+    @Volatile
+    private var folderCache: Pair<String, FolderChannels>? = null
+
     suspend fun loadChannels(forceRefresh: Boolean = false): LiveTvLoadResult = withContext(Dispatchers.IO) {
+        val errors = mutableListOf<String>()
+        val custom = loadCustomList(forceRefresh, errors)
+        val folder = loadFolder(forceRefresh, errors)
+        LiveTvLoadResult(
+            channels = PRESET_CHANNELS + custom + folder.channels,
+            customError = errors.joinToString(" ").ifBlank { null },
+            categories = CATEGORIES + folder.categories
+        )
+    }
+
+    private fun loadCustomList(forceRefresh: Boolean, errors: MutableList<String>): List<LiveTvChannel> {
         val customUrl = LocalStorage.customM3uUrl.trim()
-        if (customUrl.isBlank()) return@withContext LiveTvLoadResult(PRESET_CHANNELS)
+        if (customUrl.isBlank()) return emptyList()
 
         val cached = customCache
-        if (!forceRefresh && cached != null && cached.first == customUrl) {
-            return@withContext LiveTvLoadResult(PRESET_CHANNELS + cached.second)
-        }
+        if (!forceRefresh && cached != null && cached.first == customUrl) return cached.second
 
-        try {
+        return try {
             val custom = fetchM3u(customUrl)
             customCache = customUrl to custom
-            LiveTvLoadResult(
-                channels = PRESET_CHANNELS + custom,
-                customError = if (custom.isEmpty()) "Die eigene Liste enthält keine abspielbaren Sender." else null
-            )
+            if (custom.isEmpty()) errors += "Die eigene Liste enthält keine abspielbaren Sender."
+            custom
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            LiveTvLoadResult(
-                channels = PRESET_CHANNELS,
-                customError = "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
-            )
+            errors += "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
+            emptyList()
         }
+    }
+
+    private fun loadFolder(forceRefresh: Boolean, errors: MutableList<String>): FolderChannels {
+        val folder = LocalStorage.m3uFolder.trim()
+        if (folder.isBlank()) return FolderChannels(emptyList(), emptyList())
+
+        val cached = folderCache
+        if (!forceRefresh && cached != null && cached.first == folder) return cached.second
+
+        return try {
+            val files = folderReader(folder)
+            val result = buildFolderChannels(LocalStorage.m3uFolderName.ifBlank { "Eigener Ordner" }, files)
+            folderCache = folder to result
+            if (files.isEmpty()) {
+                errors += "Im Ordner wurden keine M3U-Dateien gefunden."
+            } else if (result.channels.isEmpty()) {
+                errors += "Die M3U-Dateien im Ordner enthalten keine abspielbaren Sender."
+            }
+            result
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            AppLog.w(TAG, "M3U-Ordner nicht lesbar", e)
+            errors += "Ordner nicht lesbar (${e.message ?: e.javaClass.simpleName}) – bitte neu auswählen."
+            FolderChannels(emptyList(), emptyList())
+        }
+    }
+
+    /**
+     * Je Ordner ein Reiter ("Sport › DAZN"), darin die Sender aller M3U-Dateien dieses Ordners.
+     * Dateien direkt im gewählten Ordner landen im Reiter mit dessen Namen ([rootName]).
+     */
+    fun buildFolderChannels(rootName: String, files: List<M3uFolderFile>): FolderChannels {
+        val categories = mutableListOf<LiveTvCategory>()
+        val channels = mutableListOf<LiveTvChannel>()
+        files.groupBy { it.dir.trim('/') }
+            .toSortedMap(String.CASE_INSENSITIVE_ORDER)
+            .forEach { (dir, dirFiles) ->
+                val categoryId = FOLDER_PREFIX + dir
+                val before = channels.size
+                dirFiles.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName }).forEach { file ->
+                    channels += parseM3u(
+                        content = file.content,
+                        category = categoryId,
+                        idPrefix = "folder_${channels.size}_",
+                        fallbackName = file.fileName.substringBeforeLast('.')
+                    )
+                }
+                if (channels.size > before) {
+                    val title = if (dir.isEmpty()) rootName else dir.split('/').joinToString(" › ")
+                    categories += LiveTvCategory(categoryId, title, "📁")
+                }
+            }
+        return FolderChannels(categories, channels)
+    }
+
+    /** Merkt sich den eigenen M3U-Ordner ([folder] leer = entfernen); [name] wird in der App angezeigt. */
+    fun saveM3uFolder(folder: String, name: String) {
+        LocalStorage.m3uFolder = folder.trim()
+        LocalStorage.m3uFolderName = if (folder.isBlank()) "" else name.trim()
+        folderCache = null
+    }
+
+    fun isM3uFileName(name: String): Boolean =
+        name.endsWith(".m3u", ignoreCase = true) || name.endsWith(".m3u8", ignoreCase = true)
+
+    /** PC: Ordner samt Unterordnern lesen (versteckte Dateien und Ordner ausgelassen). */
+    private fun readFolderFromDisk(folder: String): List<M3uFolderFile> {
+        val root = if (folder.startsWith("file:", true)) File(java.net.URI(folder)) else File(folder)
+        if (!root.isDirectory) throw IOException("Ordner nicht gefunden: ${root.name.ifBlank { folder }}")
+        val result = mutableListOf<M3uFolderFile>()
+        fun walk(dir: File, relative: String, depth: Int) {
+            if (depth > FOLDER_MAX_DEPTH || result.size >= FOLDER_MAX_FILES) return
+            val entries = dir.listFiles()?.filterNot { it.name.startsWith(".") }?.sortedBy { it.name.lowercase() } ?: return
+            entries.filter { it.isFile && isM3uFileName(it.name) && it.length() <= FOLDER_MAX_FILE_BYTES }.forEach { file ->
+                if (result.size < FOLDER_MAX_FILES) {
+                    result += M3uFolderFile(relative, file.name, file.readText(Charsets.UTF_8))
+                }
+            }
+            entries.filter { it.isDirectory }.forEach { sub ->
+                walk(sub, if (relative.isEmpty()) sub.name else "$relative/${sub.name}", depth + 1)
+            }
+        }
+        walk(root, "", 0)
+        return result
     }
 
     /**
@@ -391,7 +508,16 @@ object LiveTvRepository {
         }
     }
 
-    fun parseM3u(content: String): List<LiveTvChannel> {
+    /**
+     * Sender aus einer M3U-Liste. [fallbackName] benennt Adressen ohne #EXTINF-Zeile
+     * (z. B. Dateien mit nur einem Sender, die nach ihm benannt sind).
+     */
+    fun parseM3u(
+        content: String,
+        category: String = "custom",
+        idPrefix: String = "custom_",
+        fallbackName: String = ""
+    ): List<LiveTvChannel> {
         val channels = mutableListOf<LiveTvChannel>()
         var currentName = ""
         var currentLogo = ""
@@ -422,14 +548,21 @@ object LiveTvRepository {
                 }
 
                 trimmed.startsWith("http://", ignoreCase = true) || trimmed.startsWith("https://", ignoreCase = true) -> {
-                    if (currentName.isNotBlank()) {
+                    val name = currentName.ifBlank {
+                        when {
+                            fallbackName.isBlank() -> ""
+                            channels.none { it.name == fallbackName } -> fallbackName
+                            else -> "$fallbackName ${channels.size + 1}"
+                        }
+                    }
+                    if (name.isNotBlank()) {
                         channels.add(
                             LiveTvChannel(
-                                id = "custom_" + channels.size,
-                                name = currentName,
+                                id = idPrefix + channels.size,
+                                name = name,
                                 logoUrl = currentLogo,
                                 streamUrl = trimmed,
-                                category = "custom",
+                                category = category,
                                 qualityBadge = "M3U",
                                 headers = HashMap(currentHeaders)
                             )

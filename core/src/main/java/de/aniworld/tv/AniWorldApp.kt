@@ -20,6 +20,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 import de.aniworld.tv.platform.AppLog
+import de.aniworld.tv.platform.M3uFolderAndroid
 import de.aniworld.tv.platform.SharedPrefsStore
 import de.aniworld.tv.platform.WebViewStreamExtractor
 
@@ -44,6 +45,8 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
         }
         LocalStorage.init(SharedPrefsStore(this, LocalStorage.PREFS_NAME))
         StreamResolver.browserExtractor = WebViewStreamExtractor(this)
+        // Eigener M3U-Ordner für Live TV (über die Ordnerauswahl freigegeben)
+        M3uFolderAndroid.install(this)
         // TMDB wird nicht mehr benutzt (wie am PC): Bilder kommen ohne Schlüssel von TVmaze,
         // Kitsu/AniList und Letterboxd, Bewertungen von Letterboxd
         TmdbArtwork.configure("", cacheDir, backdropSize = "w1280")

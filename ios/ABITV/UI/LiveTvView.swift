@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 public struct LiveTvView: View {
     public let onPlayChannel: (LiveTvChannel) -> Void
@@ -11,6 +12,11 @@ public struct LiveTvView: View {
     @State private var customM3uDraft = LocalStorage.shared.customM3uUrl
     @State private var savedM3uUrl = LocalStorage.shared.customM3uUrl
     @State private var m3uInputError: String?
+    @State private var categories: [LiveTvCategory] = LiveTvRepository.categories
+    @State private var folderName = LocalStorage.shared.m3uFolderName
+    @State private var hasFolder = !LocalStorage.shared.m3uFolderBookmark.isEmpty
+    @State private var showFolderPicker = false
+    @State private var folderError: String?
 
     public init(onPlayChannel: @escaping (LiveTvChannel) -> Void) {
         self.onPlayChannel = onPlayChannel
@@ -64,7 +70,7 @@ public struct LiveTvView: View {
                 // Kategorien
                 ScrollView(.horizontal, showsIndicators: false) {
                     HStack(spacing: 8) {
-                        ForEach(LiveTvRepository.categories) { cat in
+                        ForEach(categories) { cat in
                             let isSelected = selectedCategory == cat.id
                             Button {
                                 selectedCategory = cat.id
@@ -141,6 +147,8 @@ public struct LiveTvView: View {
                     .background(AbiTheme.bgElevated)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .padding(.horizontal, 16)
+
+                    folderCard
                 }
 
                 if let err = customError, selectedCategory == "custom" || selectedCategory == "all" {
@@ -196,6 +204,69 @@ public struct LiveTvView: View {
         .task {
             reload(force: false)
         }
+        .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
+            switch result {
+            case .success(let url):
+                if LiveTvRepository.saveM3uFolder(url) {
+                    folderError = nil
+                    hasFolder = true
+                    folderName = LocalStorage.shared.m3uFolderName
+                    reload(force: true)
+                } else {
+                    folderError = "Der Ordner konnte nicht übernommen werden."
+                }
+            case .failure:
+                folderError = "Der Ordner konnte nicht geöffnet werden."
+            }
+        }
+    }
+
+    /// Eigener Ordner mit M3U-Dateien (Dateien-App, iCloud Drive …): Unterordner werden eigene Reiter.
+    private var folderCard: some View {
+        let folderChannels = allChannels.filter { $0.category.hasPrefix("folder:") }.count
+        let folderTabs = categories.filter { $0.id.hasPrefix("folder:") }.count
+        return VStack(alignment: .leading, spacing: 8) {
+            Text(hasFolder ? "📁 Ordner: \(folderName)" : "📁 Eigener Ordner")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(AbiTheme.textPrimary)
+            Text(hasFolder
+                 ? "\(folderChannels) Sender in \(folderTabs) Reitern · neue Dateien mit ↻ laden"
+                 : "Ordner mit M3U-Dateien aus der Dateien-App wählen. Unterordner werden eigene Reiter, die Dateien darin ihre Sender.")
+                .font(.system(size: 12))
+                .foregroundColor(AbiTheme.textSecondary)
+            if let folderError {
+                Text(folderError)
+                    .font(.system(size: 12))
+                    .foregroundColor(AbiTheme.liveRed)
+            }
+            HStack {
+                Spacer()
+                if hasFolder {
+                    Button("Entfernen") {
+                        LiveTvRepository.removeM3uFolder()
+                        hasFolder = false
+                        folderName = ""
+                        reload(force: true)
+                    }
+                    .font(.system(size: 13))
+                    .foregroundColor(AbiTheme.textSecondary)
+                }
+                Button(hasFolder ? "Anderer Ordner" : "Ordner hinzufügen") {
+                    folderError = nil
+                    showFolderPicker = true
+                }
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(AbiTheme.onAccent)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(AbiTheme.accentCyan)
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+            }
+        }
+        .padding(14)
+        .background(AbiTheme.bgElevated)
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .padding(.horizontal, 16)
     }
 
     private func reload(force: Bool) {
@@ -204,6 +275,9 @@ public struct LiveTvView: View {
             let result = await LiveTvRepository.loadChannels(forceRefresh: force)
             allChannels = result.channels
             customError = result.customError
+            categories = result.categories.isEmpty ? LiveTvRepository.categories : result.categories
+            // Reiter eines entfernten Ordners gibt es nicht mehr
+            if !categories.contains(where: { $0.id == selectedCategory }) { selectedCategory = "custom" }
             isLoading = false
         }
     }

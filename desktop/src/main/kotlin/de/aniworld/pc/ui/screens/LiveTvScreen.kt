@@ -72,12 +72,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.tv.data.local.LocalStorage
+import de.aniworld.tv.data.model.LiveTvCategory
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.pc.ui.components.TvFocusableButton
 import de.aniworld.pc.platform.AppDirs
 import de.aniworld.pc.ui.compat.LocalComposeWindow
 import java.awt.FileDialog
+import javax.swing.JFileChooser
 import java.io.File
 import java.net.URI
 import de.aniworld.pc.ui.theme.AccentCyan
@@ -101,6 +103,7 @@ fun LiveTvScreen(
 ) {
     var allChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
     var customError by remember { mutableStateOf<String?>(null) }
+    var categories by remember { mutableStateOf(LiveTvRepository.CATEGORIES) }
     var selectedCategory by remember { mutableStateOf("all") }
     var isLoading by remember { mutableStateOf(true) }
     var focusedChannel by remember { mutableStateOf<LiveTvChannel?>(null) }
@@ -112,6 +115,9 @@ fun LiveTvScreen(
             val result = LiveTvRepository.loadChannels(forceRefresh = force)
             allChannels = result.channels
             customError = result.customError
+            categories = result.categories.ifEmpty { LiveTvRepository.CATEGORIES }
+            // Reiter eines entfernten Ordners gibt es nicht mehr
+            if (categories.none { it.id == selectedCategory }) selectedCategory = CUSTOM_CATEGORY
             isLoading = false
         }
     }
@@ -179,7 +185,7 @@ fun LiveTvScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
-            items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
+            items(categories, key = { it.id }) { cat ->
                 val isSelected = selectedCategory == cat.id
                 TvFocusableButton(
                     text = "${cat.icon} ${cat.title}",
@@ -194,6 +200,12 @@ fun LiveTvScreen(
         if (selectedCategory == CUSTOM_CATEGORY) {
             Spacer(modifier = Modifier.height(12.dp))
             CustomM3uInput(onSaved = { reload(force = true) })
+            Spacer(modifier = Modifier.height(10.dp))
+            M3uFolderRow(
+                folderCategories = categories.filter { it.id.startsWith("folder:") },
+                folderChannelCount = allChannels.count { it.category.startsWith("folder:") },
+                onChanged = { reload(force = true) }
+            )
         }
         if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all")) {
             Spacer(modifier = Modifier.height(8.dp))
@@ -241,6 +253,86 @@ fun LiveTvScreen(
                     )
                 }
             }
+        }
+    }
+}
+
+/**
+ * Eigener Ordner mit M3U-Dateien (auch in Unterordnern): Jeder Ordner wird ein eigener Reiter.
+ * Gelesen wird direkt vom Ordner, neue Dateien erscheinen nach "Liste aktualisieren".
+ */
+@Composable
+private fun M3uFolderRow(
+    folderCategories: List<LiveTvCategory>,
+    folderChannelCount: Int,
+    onChanged: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var folder by remember { mutableStateOf(LocalStorage.m3uFolder) }
+    var folderName by remember { mutableStateOf(LocalStorage.m3uFolderName) }
+
+    fun pickFolder() {
+        scope.launch {
+            // Swing-Dialog: Der Windows-Dateidialog von AWT kann keine Ordner auswählen
+            val chosen = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                var picked: File? = null
+                javax.swing.SwingUtilities.invokeAndWait {
+                    val chooser = JFileChooser(folder.ifBlank { null }?.let { File(it).parentFile }).apply {
+                        dialogTitle = "Ordner mit M3U-Dateien auswählen"
+                        fileSelectionMode = JFileChooser.DIRECTORIES_ONLY
+                        isAcceptAllFileFilterUsed = false
+                    }
+                    if (chooser.showOpenDialog(null) == JFileChooser.APPROVE_OPTION) picked = chooser.selectedFile
+                }
+                picked
+            } ?: return@launch
+            LiveTvRepository.saveM3uFolder(chosen.absolutePath, chosen.name)
+            folder = LocalStorage.m3uFolder
+            folderName = LocalStorage.m3uFolderName
+            onChanged()
+        }
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = if (folder.isBlank()) "📁 Eigener Ordner mit M3U-Dateien" else "📁 Ordner: $folderName",
+                color = if (folder.isBlank()) TextMuted else TextPrimary,
+                fontSize = 14.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            Text(
+                text = if (folder.isBlank()) {
+                    "Unterordner werden eigene Reiter, die Dateien darin ihre Sender."
+                } else {
+                    "$folderChannelCount Sender in ${folderCategories.size} Reitern · neue Dateien mit „Liste aktualisieren“ laden"
+                },
+                color = TextSecondary,
+                fontSize = 12.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        TvFocusableButton(
+            text = if (folder.isBlank()) "📁 Ordner hinzufügen" else "📁 Anderen Ordner",
+            isPrimary = folder.isBlank(),
+            onClick = { pickFolder() }
+        )
+        if (folder.isNotBlank()) {
+            TvFocusableButton(
+                text = "✕ Ordner entfernen",
+                onClick = {
+                    LiveTvRepository.saveM3uFolder("", "")
+                    folder = ""
+                    folderName = ""
+                    onChanged()
+                }
+            )
         }
     }
 }

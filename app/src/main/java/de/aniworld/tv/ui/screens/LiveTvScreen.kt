@@ -67,6 +67,11 @@ import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvChannel
+import de.aniworld.tv.data.model.LiveTvCategory
+import de.aniworld.tv.platform.M3uFolderAndroid
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.ui.platform.LocalContext
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.tv.ui.components.TvFocusableButton
 import de.aniworld.tv.ui.theme.AccentCyan
@@ -90,6 +95,7 @@ fun LiveTvScreen(
 ) {
     var allChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
     var customError by remember { mutableStateOf<String?>(null) }
+    var categories by remember { mutableStateOf(LiveTvRepository.CATEGORIES) }
     var selectedCategory by remember { mutableStateOf("all") }
     var isLoading by remember { mutableStateOf(true) }
     var focusedChannel by remember { mutableStateOf<LiveTvChannel?>(null) }
@@ -101,6 +107,9 @@ fun LiveTvScreen(
             val result = LiveTvRepository.loadChannels(forceRefresh = force)
             allChannels = result.channels
             customError = result.customError
+            categories = result.categories.ifEmpty { LiveTvRepository.CATEGORIES }
+            // Reiter eines entfernten Ordners gibt es nicht mehr
+            if (categories.none { it.id == selectedCategory }) selectedCategory = CUSTOM_CATEGORY
             isLoading = false
         }
     }
@@ -168,7 +177,7 @@ fun LiveTvScreen(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
-            items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
+            items(categories, key = { it.id }) { cat ->
                 val isSelected = selectedCategory == cat.id
                 TvFocusableButton(
                     text = "${cat.icon} ${cat.title}",
@@ -183,6 +192,12 @@ fun LiveTvScreen(
         if (selectedCategory == CUSTOM_CATEGORY) {
             Spacer(modifier = Modifier.height(12.dp))
             CustomM3uInput(onSaved = { reload(force = true) })
+            Spacer(modifier = Modifier.height(10.dp))
+            M3uFolderRow(
+                folderCategories = categories.filter { it.id.startsWith("folder:") },
+                folderChannelCount = allChannels.count { it.category.startsWith("folder:") },
+                onChanged = { reload(force = true) }
+            )
         }
         if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all")) {
             Spacer(modifier = Modifier.height(8.dp))
@@ -235,6 +250,84 @@ fun LiveTvScreen(
 }
 
 /** Eingabefeld für den Link zur eigenen M3U-Liste (Bedienung wie das Suchfeld: OK zum Tippen). */
+/**
+ * Eigener Ordner mit M3U-Dateien (auch in Unterordnern, z. B. auf einem USB-Stick):
+ * Jeder Ordner wird ein eigener Reiter. Neue Dateien erscheinen nach "Liste aktualisieren".
+ */
+@Composable
+private fun M3uFolderRow(
+    folderCategories: List<LiveTvCategory>,
+    folderChannelCount: Int,
+    onChanged: () -> Unit
+) {
+    val context = LocalContext.current
+    var folder by remember { mutableStateOf(LocalStorage.m3uFolder) }
+    var folderName by remember { mutableStateOf(LocalStorage.m3uFolderName) }
+    var pickerError by remember { mutableStateOf<String?>(null) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            M3uFolderAndroid.onFolderPicked(context, uri)
+            folder = LocalStorage.m3uFolder
+            folderName = LocalStorage.m3uFolderName
+            onChanged()
+        }
+    }
+
+    Column {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = if (folder.isBlank()) "📁 Eigener Ordner mit M3U-Dateien" else "📁 Ordner: $folderName",
+                    color = if (folder.isBlank()) TextMuted else TextPrimary,
+                    fontSize = 14.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = if (folder.isBlank()) {
+                        "Unterordner werden eigene Reiter, die Dateien darin ihre Sender."
+                    } else {
+                        "$folderChannelCount Sender in ${folderCategories.size} Reitern · neue Dateien mit „Liste aktualisieren“ laden"
+                    },
+                    color = TextSecondary,
+                    fontSize = 12.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+            TvFocusableButton(
+                text = if (folder.isBlank()) "📁 Ordner hinzufügen" else "📁 Anderer Ordner",
+                isPrimary = folder.isBlank(),
+                onClick = {
+                    pickerError = null
+                    runCatching { picker.launch(null) }.onFailure {
+                        pickerError = "Auf diesem Gerät gibt es keine Ordnerauswahl."
+                    }
+                }
+            )
+            if (folder.isNotBlank()) {
+                TvFocusableButton(
+                    text = "✕ Ordner entfernen",
+                    onClick = {
+                        M3uFolderAndroid.remove(context)
+                        folder = ""
+                        folderName = ""
+                        onChanged()
+                    }
+                )
+            }
+        }
+        pickerError?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(text = it, color = LiveRed, fontSize = 13.sp)
+        }
+    }
+}
+
 @Composable
 private fun CustomM3uInput(onSaved: () -> Unit) {
     val keyboardController = LocalSoftwareKeyboardController.current

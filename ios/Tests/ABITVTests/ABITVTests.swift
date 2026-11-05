@@ -533,4 +533,26 @@ final class ABITVTests: XCTestCase {
     func testHttpClientRewriteUrlAcceptsUnencodedAddresses() {
         XCTAssertNotNil(HttpClient.rewriteUrl("https://example.com/Köln Film.html"))
     }
+
+    // MARK: - Eigener M3U-Ordner
+
+    func testM3uFolderBecomesTabsPerSubfolder() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent("abi-m3u-\(UUID().uuidString)/IPTV")
+        try fm.createDirectory(at: root.appendingPathComponent("Sport/DAZN"), withIntermediateDirectories: true)
+        try fm.createDirectory(at: root.appendingPathComponent(".hidden"), withIntermediateDirectories: true)
+        try "#EXTM3U\n#EXTINF:-1,Das Erste\nhttps://a/1.m3u8\n".write(to: root.appendingPathComponent("Haupt.m3u"), atomically: true, encoding: .utf8)
+        try "#EXTINF:-1,Red Bull TV\nhttps://a/2.m3u8\n#EXTINF:-1,DF1\nhttps://a/3.m3u8\n".write(to: root.appendingPathComponent("Sport/sport.m3u"), atomically: true, encoding: .utf8)
+        try "https://a/4.m3u8\n".write(to: root.appendingPathComponent("Sport/DAZN/Combat.m3u8"), atomically: true, encoding: .utf8)
+        try "#EXTINF:-1,Versteckt\nhttps://a/5.m3u8\n".write(to: root.appendingPathComponent(".hidden/x.m3u"), atomically: true, encoding: .utf8)
+        try "nix".write(to: root.appendingPathComponent("readme.txt"), atomically: true, encoding: .utf8)
+
+        let files = try LiveTvRepository.readFolder(root)
+        XCTAssertEqual(files.map(\.dir), ["", "Sport", "Sport/DAZN"])
+        let result = LiveTvRepository.buildFolderChannels(rootName: "IPTV", files: files)
+        XCTAssertEqual(result.categories.map(\.title), ["IPTV", "Sport", "Sport › DAZN"])
+        XCTAssertEqual(result.channels.map(\.name), ["Das Erste", "Red Bull TV", "DF1", "Combat"])
+        XCTAssertEqual(result.channels.last?.category, "folder:Sport/DAZN")
+        XCTAssertEqual(Set(result.channels.map(\.id)).count, 4)
+    }
 }

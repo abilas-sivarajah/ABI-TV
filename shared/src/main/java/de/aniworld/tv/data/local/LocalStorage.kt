@@ -22,6 +22,8 @@ object LocalStorage {
     private const val KEY_IGNORED_UPDATE_TAG = "ignored_update_tag"
     private const val KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
     private const val KEY_CUSTOM_M3U_URL = "custom_m3u_url_v1"
+    private const val KEY_M3U_FOLDER = "m3u_folder_v1"
+    private const val KEY_M3U_FOLDER_NAME = "m3u_folder_name_v1"
     private const val KEY_LETTERBOXD_USERS = "letterboxd_users_v1"
 
     private val gson = Gson()
@@ -101,6 +103,16 @@ object LocalStorage {
     var customM3uUrl: String
         get() = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
         set(value) = prefs.putString(KEY_CUSTOM_M3U_URL, value)
+
+    /** Eigener Ordner mit M3U-Dateien (PC: Pfad, Android: Ordner-Freigabe content://…); leer = keiner. */
+    var m3uFolder: String
+        get() = prefs.getString(KEY_M3U_FOLDER, "") ?: ""
+        set(value) = prefs.putString(KEY_M3U_FOLDER, value)
+
+    /** Anzeigename des Ordners (z. B. "IPTV"). */
+    var m3uFolderName: String
+        get() = prefs.getString(KEY_M3U_FOLDER_NAME, "") ?: ""
+        set(value) = prefs.putString(KEY_M3U_FOLDER_NAME, value)
 
     // ------------------- Merkliste (Watchlist) -------------------
 

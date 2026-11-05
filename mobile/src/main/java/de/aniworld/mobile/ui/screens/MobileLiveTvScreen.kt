@@ -52,6 +52,11 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import de.aniworld.tv.data.model.LiveTvCategory
+import de.aniworld.tv.platform.M3uFolderAndroid
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -83,6 +88,7 @@ fun MobileLiveTvScreen(
     val connectedDevice by MobileCastManager.connectedDevice.collectAsState()
     var allChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
     var customError by remember { mutableStateOf<String?>(null) }
+    var categories by remember { mutableStateOf(LiveTvRepository.CATEGORIES) }
     var isLoading by remember { mutableStateOf(true) }
     var selectedCategory by rememberSaveable { mutableStateOf("all") }
 
@@ -92,6 +98,9 @@ fun MobileLiveTvScreen(
             val result = LiveTvRepository.loadChannels(forceRefresh = force)
             allChannels = result.channels
             customError = result.customError
+            categories = result.categories.ifEmpty { LiveTvRepository.CATEGORIES }
+            // Reiter eines entfernten Ordners gibt es nicht mehr
+            if (categories.none { it.id == selectedCategory }) selectedCategory = CUSTOM_CATEGORY
             isLoading = false
         }
     }
@@ -156,7 +165,7 @@ fun MobileLiveTvScreen(
         // Kategorien
         item(span = { GridItemSpan(maxLineSpan) }) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
+                items(categories, key = { it.id }) { cat ->
                     val isSelected = selectedCategory == cat.id
                     Box(
                         modifier = Modifier
@@ -184,6 +193,13 @@ fun MobileLiveTvScreen(
         if (selectedCategory == CUSTOM_CATEGORY) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 CustomM3uCard(onSaved = { reload(force = true) })
+            }
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                M3uFolderCard(
+                    folderCategories = categories.filter { it.id.startsWith("folder:") },
+                    folderChannelCount = allChannels.count { it.category.startsWith("folder:") },
+                    onChanged = { reload(force = true) }
+                )
             }
         }
 
@@ -225,6 +241,76 @@ fun MobileLiveTvScreen(
                     onClick = { onPlayChannel(channel) },
                     onPlayOnTv = { scope.launch { MobileCastManager.playLiveOnTv(channel) } }
                 )
+            }
+        }
+    }
+}
+
+/**
+ * Eigener Ordner mit M3U-Dateien (auch in Unterordnern): Jeder Ordner wird ein eigener Reiter.
+ * Gelesen wird direkt aus dem Ordner, neue Dateien erscheinen nach "Liste aktualisieren".
+ */
+@Composable
+private fun M3uFolderCard(
+    folderCategories: List<LiveTvCategory>,
+    folderChannelCount: Int,
+    onChanged: () -> Unit
+) {
+    val context = LocalContext.current
+    var folder by remember { mutableStateOf(LocalStorage.m3uFolder) }
+    var folderName by remember { mutableStateOf(LocalStorage.m3uFolderName) }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            M3uFolderAndroid.onFolderPicked(context, uri)
+            folder = LocalStorage.m3uFolder
+            folderName = LocalStorage.m3uFolderName
+            onChanged()
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(BgElevated)
+            .padding(14.dp)
+    ) {
+        Text(
+            text = if (folder.isBlank()) "📁 Eigener Ordner" else "📁 Ordner: $folderName",
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = if (folder.isBlank()) {
+                "Ordner mit M3U-Dateien wählen. Unterordner werden eigene Reiter, die Dateien darin ihre Sender."
+            } else {
+                "$folderChannelCount Sender in ${folderCategories.size} Reitern · neue Dateien mit ↻ laden"
+            },
+            color = TextSecondary,
+            fontSize = 12.sp,
+            lineHeight = 16.sp
+        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.End,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (folder.isNotBlank()) {
+                TextButton(onClick = {
+                    M3uFolderAndroid.remove(context)
+                    folder = ""
+                    folderName = ""
+                    onChanged()
+                }) {
+                    Text("Entfernen", color = TextSecondary, fontSize = 13.sp)
+                }
+            }
+            Button(
+                onClick = { runCatching { picker.launch(null) } },
+                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = BgPrimary)
+            ) {
+                Text(if (folder.isBlank()) "Ordner hinzufügen" else "Anderer Ordner", fontWeight = FontWeight.Bold)
             }
         }
     }

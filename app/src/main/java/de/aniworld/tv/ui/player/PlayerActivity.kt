@@ -1150,18 +1150,43 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun loadSeasonsIfNeeded() {
-        if (isLiveStream || animeSlug.isBlank() || seasonsLoadedFor == animeSlug) return
-        seasonsLoadedFor = animeSlug
-        seasons = emptyList()
-        titleDescription = ""
+        if (isLiveStream || animeSlug.isBlank()) return
         val slug = animeSlug
+        val needSeasons = seasonsLoadedFor != slug
+        // Aus "Weiterschauen" oder vom Handy kommt nur die eine Folge: die ganze Staffel dazuladen,
+        // sonst fehlen Folgenliste und "Nächste Folge"
+        val needEpisodes = needsSeasonEpisodes()
+        if (!needSeasons && !needEpisodes) return
+        if (needSeasons) {
+            seasonsLoadedFor = slug
+            seasons = emptyList()
+            titleDescription = ""
+        }
         lifecycleScope.launch {
             val detail = runCatching { fetchDetailFor(slug, null) }.getOrNull() ?: return@launch
-            if (animeSlug == slug) {
+            if (animeSlug != slug) return@launch
+            if (needSeasons) {
                 seasons = detail.seasons
                 titleDescription = detail.description
             }
+            val episode = currentEpisode ?: return@launch
+            if (!needsSeasonEpisodes()) return@launch
+            val episodes = if (detail.episodes.any { it.path == episode.path }) {
+                detail.episodes
+            } else {
+                val season = detail.seasons.firstOrNull { it.label == episode.seasonLabel } ?: return@launch
+                runCatching { fetchDetailFor(slug, season.path).episodes }.getOrDefault(emptyList())
+            }
+            if (animeSlug == slug && currentEpisode?.path == episode.path && episodes.any { it.path == episode.path }) {
+                seasonEpisodes = ArrayList(episodes)
+            }
         }
+    }
+
+    /** Fehlt die Staffel zur laufenden Folge (nur die Folge selbst bekannt)? */
+    private fun needsSeasonEpisodes(): Boolean {
+        val episode = currentEpisode ?: return false
+        return seasonEpisodes.size <= 1 || seasonEpisodes.none { it.path == episode.path }
     }
 
     /** Staffel der laufenden Folge. */
