@@ -66,6 +66,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.offset
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -909,8 +910,8 @@ private fun SidePanel(title: String, onClose: () -> Unit, content: @Composable (
 }
 
 /**
- * Folgen mit Staffelwahl oben (falls es mehrere Staffeln gibt). Die laufende Folge ist
- * hervorgehoben; ein Klick spielt die gewählte, auch aus einer anderen Staffel.
+ * Folgen-Leiste wie bei Netflix: oben "‹ Staffel N", darunter die Folgen. Ein Klick auf "‹"
+ * zeigt alle Staffeln (und "Filme & Specials") untereinander; die gewählte trägt ein Häkchen.
  */
 @Composable
 private fun EpisodesPanel(
@@ -920,8 +921,10 @@ private fun EpisodesPanel(
 ) {
     val scope = rememberCoroutineScope()
     val currentPath = controller.currentEpisode?.path
+    val seasons = controller.seasons
     var viewSeason by remember { mutableStateOf(controller.currentSeason) }
     var viewEpisodes by remember { mutableStateOf(controller.seasonEpisodes) }
+    var choosingSeason by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     LaunchedEffect(Unit) {
@@ -929,10 +932,21 @@ private fun EpisodesPanel(
         if (index > 2) listState.scrollToItem(index - 2)
     }
 
+    fun seasonLabel(season: SeasonLink?): String = when {
+        season == null -> "Folgen"
+        season.isMovies -> "Filme & Specials"
+        else -> "Staffel ${season.label}"
+    }
+
     fun showSeason(season: SeasonLink) {
+        choosingSeason = false
         viewSeason = season
         if (season == controller.currentSeason) {
             viewEpisodes = controller.seasonEpisodes
+            scope.launch {
+                val index = viewEpisodes.indexOfFirst { it.path == currentPath }
+                listState.scrollToItem((index - 2).coerceAtLeast(0))
+            }
             return
         }
         scope.launch {
@@ -943,32 +957,94 @@ private fun EpisodesPanel(
         }
     }
 
-    SidePanel(title = "Folgen", onClose = onClose) {
-        val seasons = controller.seasons
-        if (seasons.size > 1) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-                seasons.forEach { season ->
-                    SeasonChip(
-                        label = if (season.isMovies) "Filme" else "Staffel ${season.label}",
-                        selected = season == viewSeason,
-                        onClick = { showSeason(season) }
+    Column(
+        modifier = Modifier
+            .width(380.dp)
+            .fillMaxHeight()
+            .background(BgSurface)
+            .padding(16.dp)
+    ) {
+        // ---------- Kopf ----------
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (choosingSeason) {
+                Text(
+                    text = controller.animeTitle,
+                    color = TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.ExtraBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+            } else {
+                val canChoose = seasons.size > 1
+                Row(
+                    modifier = Modifier
+                        .weight(1f)
+                        .clip(RoundedCornerShape(10.dp))
+                        .then(
+                            if (canChoose) {
+                                Modifier
+                                    .pointerHoverIcon(PointerIcon.Hand)
+                                    .clickable { choosingSeason = true }
+                            } else Modifier
+                        )
+                        .padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    if (canChoose) {
+                        Icon(
+                            imageVector = Icons.AutoMirrored.Filled.KeyboardArrowLeft,
+                            contentDescription = "Staffel wählen",
+                            tint = Color.White,
+                            modifier = Modifier.size(32.dp)
+                        )
+                        Spacer(modifier = Modifier.width(4.dp))
+                    }
+                    Text(
+                        text = seasonLabel(viewSeason),
+                        color = TextPrimary,
+                        fontSize = 22.sp,
+                        fontWeight = FontWeight.ExtraBold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            PlayerIconButton(icon = Icons.Filled.Close, description = "Schließen", onClick = onClose)
         }
+        Spacer(modifier = Modifier.height(12.dp))
 
-        if (loading) {
-            Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
+        // ---------- Inhalt ----------
+        when {
+            choosingSeason -> LazyColumn(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                items(seasons, key = { it.path }) { season ->
+                    val selected = season == viewSeason
+                    PanelRow(selected = selected, onClick = { showSeason(season) }) {
+                        Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.CenterStart) {
+                            if (selected) {
+                                Icon(imageVector = Icons.Filled.Check, contentDescription = "Gewählt", tint = Color.White, modifier = Modifier.size(22.dp))
+                            }
+                        }
+                        Text(
+                            text = seasonLabel(season),
+                            color = TextPrimary,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f)
+                        )
+                        if (season == controller.currentSeason) {
+                            Text(text = "läuft", color = AccentCyan, fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            loading -> Box(modifier = Modifier.fillMaxWidth().padding(24.dp), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AccentCyan)
             }
-        } else {
-            LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+
+            else -> LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(viewEpisodes, key = { it.path }) { episode ->
                     val isCurrent = episode.path == currentPath
                     PanelRow(selected = isCurrent, onClick = { if (!isCurrent) onPick(episode, viewEpisodes) }) {
@@ -994,40 +1070,6 @@ private fun EpisodesPanel(
                 }
             }
         }
-    }
-}
-
-/** Staffel-Kästchen oben in der Folgen-Leiste. */
-@Composable
-private fun SeasonChip(label: String, selected: Boolean, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val hovered by interaction.collectIsHoveredAsState()
-    var focused by remember { mutableStateOf(false) }
-    val shape = RoundedCornerShape(50)
-    Box(
-        modifier = Modifier
-            .clip(shape)
-            .background(
-                when {
-                    selected -> Color.White
-                    hovered || focused -> Color.White.copy(alpha = 0.16f)
-                    else -> Color.White.copy(alpha = 0.08f)
-                }
-            )
-            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
-            .hoverable(interaction)
-            .pointerHoverIcon(PointerIcon.Hand)
-            .onFocusChanged { focused = it.isFocused }
-            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 14.dp, vertical = 7.dp)
-    ) {
-        Text(
-            text = label,
-            color = if (selected) Color(0xFF0B0E14) else TextPrimary,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1
-        )
     }
 }
 
