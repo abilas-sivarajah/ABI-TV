@@ -225,10 +225,16 @@ class PlayerController(private val scope: CoroutineScope) {
         currentPositionMs = target
     }
 
-    fun changeVolume(delta: Int) {
-        val mp = mediaPlayer ?: return
-        volume = (volume + delta).coerceIn(0, 150)
-        mp.audio().setVolume(volume)
+    fun changeVolume(delta: Int) = setVolumeLevel(volume + delta)
+
+    /** Lautstärke an VLC geben; 0 als "Stumm", damit Windows keine 0 für das Programm behält. */
+    private fun pushVolume(mp: EmbeddedMediaPlayer, level: Int) = runCatching {
+        if (level == 0) {
+            mp.audio().setMute(true)
+        } else {
+            mp.audio().setMute(false)
+            mp.audio().setVolume(level)
+        }
     }
 
     /** Sprachen, in denen es die aktuelle Folge gibt (aus den Hostern). */
@@ -272,29 +278,60 @@ class PlayerController(private val scope: CoroutineScope) {
      */
     private fun applyVolume() {
         val mp = mediaPlayer ?: return
-        runCatching {
-            mp.audio().setMute(false)
-            mp.audio().setVolume(volume)
+        volumeJob?.cancel()
+        // Die Tonausgabe ist beim Start oft noch nicht bereit (VLC meldet dann -1). Sobald sie da ist,
+        // die angezeigte Lautstärke aktiv neu setzen – auch wenn VLC schon "100" meldet, kann Windows
+        // den Ton für das Programm noch auf 0 halten. Darum kurz verstellen und zurück.
+        volumeJob = scope.launch {
+            repeat(25) {
+                val ready = withContext(Dispatchers.IO) { runCatching { mp.audio().volume() }.getOrDefault(-1) } >= 0
+                if (ready) {
+                    val wanted = volume
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            if (wanted == 0) {
+                                mp.audio().setMute(true)
+                            } else {
+                                mp.audio().setMute(false)
+                                mp.audio().setVolume(if (wanted > 1) wanted - 1 else wanted + 1)
+                                mp.audio().setVolume(wanted)
+                            }
+                        }
+                    }
+                    val (actual, muted) = withContext(Dispatchers.IO) {
+                        runCatching { mp.audio().volume() to mp.audio().isMute }.getOrDefault(-1 to false)
+                    }
+                    AppLog.i(TAG, "Lautstärke gesetzt: gewünscht $wanted, VLC $actual${if (muted) " (stumm)" else ""}")
+                    return@launch
+                }
+                delay(200)
+            }
+            AppLog.w(TAG, "Tonausgabe nicht bereit – Lautstärke nicht gesetzt")
         }
     }
+    private var volumeJob: Job? = null
 
-    /** Ton aus/an (Lautstärke-Symbol im Player). */
+    /** Ton aus/an (Lautstärke-Symbol im Player). Über "Stumm", damit Windows keine 0 als Lautstärke behält. */
     fun toggleMute() {
         val mp = mediaPlayer ?: return
         if (volume > 0) {
             volumeBeforeMute = volume
             volume = 0
+            runCatching { mp.audio().setMute(true) }
         } else {
             volume = volumeBeforeMute.coerceAtLeast(10)
+            runCatching {
+                mp.audio().setMute(false)
+                mp.audio().setVolume(volume)
+            }
         }
-        mp.audio().setVolume(volume)
     }
 
     /** Lautstärke direkt setzen (Regler im Player). */
     fun setVolumeLevel(level: Int) {
         val mp = mediaPlayer ?: return
         volume = level.coerceIn(0, 150)
-        mp.audio().setVolume(volume)
+        pushVolume(mp, volume)
     }
 
     // ------------------- Staffeln -------------------
