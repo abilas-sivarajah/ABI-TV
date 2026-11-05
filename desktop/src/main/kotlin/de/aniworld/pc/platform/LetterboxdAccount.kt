@@ -50,13 +50,8 @@ import javax.swing.WindowConstants
  */
 object LetterboxdAccount {
 
-    /** Feste Empfehlungsliste im Watchlist-Reiter; [lid] ist Letterboxds Kurzkennung (boxd.it/Ys36y). */
-    object FeaturedList {
-        const val NAME = "Ilkems Empfehlungen"
-        const val OWNER = "nerofreyz"
-        const val PATH = "/nerofreyz/list/ilkems-empfehlungen-1/"
-        const val LID = "Ys36y"
-    }
+    /** Feste Empfehlungsliste im Watchlist-Reiter (gemeinsam mit Handy und TV). */
+    val FeaturedList = de.aniworld.tv.data.remote.LetterboxdLists.FeaturedList
 
     private const val TAG = "LetterboxdAccount"
     private const val HOME_URL = "https://letterboxd.com/"

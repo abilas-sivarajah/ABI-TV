@@ -29,6 +29,25 @@ object LetterboxdLists {
     /** Eine Liste, z. B. "feeling lost in your 20's" von adaydreaming. */
     data class ListInfo(val name: String, val owner: String, val path: String)
 
+    /** Feste Empfehlungsliste im Watchlist-Reiter; [LID] ist Letterboxds Kurzkennung (boxd.it/Ys36y). */
+    object FeaturedList {
+        const val NAME = "Ilkems Empfehlungen"
+        const val OWNER = "nerofreyz"
+        const val PATH = "/nerofreyz/list/ilkems-empfehlungen-1/"
+        const val LID = "Ys36y"
+    }
+
+    /** Benutzernamen wie bei Letterboxd (Buchstaben, Ziffern, Unterstrich); auch ein Profil-Link wird akzeptiert. */
+    fun normalizeUsername(input: String): String? {
+        val raw = input.trim()
+            .removePrefix("https://").removePrefix("http://").removePrefix("www.")
+            .removePrefix("letterboxd.com/")
+            .trim('/', '@', ' ')
+            .substringBefore('/')
+            .lowercase()
+        return raw.takeIf { it.isNotBlank() && it.all { c -> c.isLetterOrDigit() || c == '_' } }
+    }
+
     class UserNotFoundException(user: String) : IOException("Letterboxd-Benutzer \"$user\" nicht gefunden")
 
     private const val TAG = "LetterboxdLists"

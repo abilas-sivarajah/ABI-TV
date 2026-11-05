@@ -22,6 +22,7 @@ object LocalStorage {
     private const val KEY_IGNORED_UPDATE_TAG = "ignored_update_tag"
     private const val KEY_UPDATE_SNOOZED_UNTIL = "update_snoozed_until"
     private const val KEY_CUSTOM_M3U_URL = "custom_m3u_url_v1"
+    private const val KEY_LETTERBOXD_USERS = "letterboxd_users_v1"
 
     private val gson = Gson()
 
@@ -41,12 +42,33 @@ object LocalStorage {
     private val _watchedEpisodesFlow = MutableStateFlow<Set<String>>(emptySet())
     val watchedEpisodesFlow: StateFlow<Set<String>> = _watchedEpisodesFlow.asStateFlow()
 
+    private val _letterboxdUsersFlow = MutableStateFlow<List<String>>(emptyList())
+    /** Letterboxd-Benutzer, deren Watchlists im Reiter "Watchlist" erscheinen (Handy und TV). */
+    val letterboxdUsersFlow: StateFlow<List<String>> = _letterboxdUsersFlow.asStateFlow()
+
     /** Muss beim App-Start vor dem ersten Zugriff aufgerufen werden. */
     fun init(store: KeyValueStore) {
         storeRef = store
         _watchlistFlow.value = readWatchlist()
         _progressFlow.value = readProgressList()
         _watchedEpisodesFlow.value = readWatchedEpisodes()
+        _letterboxdUsersFlow.value = runCatching {
+            gson.fromJson<List<String>>(prefs.getString(KEY_LETTERBOXD_USERS, "[]") ?: "[]", object : TypeToken<List<String>>() {}.type)
+        }.getOrNull().orEmpty()
+    }
+
+    // ------------------- Letterboxd-Benutzer -------------------
+
+    fun addLetterboxdUser(name: String) {
+        if (name in _letterboxdUsersFlow.value) return
+        saveLetterboxdUsers(_letterboxdUsersFlow.value + name)
+    }
+
+    fun removeLetterboxdUser(name: String) = saveLetterboxdUsers(_letterboxdUsersFlow.value - name)
+
+    private fun saveLetterboxdUsers(list: List<String>) {
+        _letterboxdUsersFlow.value = list
+        prefs.putString(KEY_LETTERBOXD_USERS, gson.toJson(list))
     }
 
     // ------------------- Bevorzugte Sprache -------------------

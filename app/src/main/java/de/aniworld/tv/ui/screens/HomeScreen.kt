@@ -1,5 +1,8 @@
 package de.aniworld.tv.ui.screens
 
+import de.aniworld.tv.data.remote.LetterboxdLists
+import androidx.compose.runtime.mutableStateMapOf
+import androidx.compose.foundation.shape.CircleShape
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Search
@@ -89,7 +92,6 @@ import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.TitlePreview
 import de.aniworld.tv.data.remote.withoutStoAnime
 import de.aniworld.tv.data.remote.StoAnimeFilter
-import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
@@ -99,6 +101,7 @@ import de.aniworld.tv.ui.components.TvAnimeCard
 import de.aniworld.tv.ui.components.TvContinueWatchingCard
 import de.aniworld.tv.ui.components.TvFocusableButton
 import de.aniworld.tv.ui.theme.AccentBlue
+import de.aniworld.tv.ui.theme.AccentAmber
 import de.aniworld.tv.ui.theme.AccentCyan
 import de.aniworld.tv.ui.theme.BgElevated
 import de.aniworld.tv.ui.theme.BgPrimary
@@ -707,17 +710,24 @@ internal fun SectionHeader(title: String, subtitle: String = "") {
         verticalAlignment = Alignment.Bottom,
         horizontalArrangement = Arrangement.SpaceBetween
     ) {
+        // Lange Titel (z. B. Letterboxd-Listen) kürzen, damit die Angabe rechts in einer Zeile bleibt
         Text(
             text = title,
             color = TextPrimary,
             fontSize = 19.sp,
-            fontWeight = FontWeight.Bold
+            fontWeight = FontWeight.Bold,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false)
         )
         if (subtitle.isNotBlank()) {
+            Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = subtitle,
                 color = TextMuted,
-                fontSize = 12.sp
+                fontSize = 12.sp,
+                maxLines = 1,
+                softWrap = false
             )
         }
     }
@@ -1674,39 +1684,33 @@ private fun WatchlistTabContent(
     onResumeWatch: (WatchProgressEntry) -> Unit
 ) {
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    val letterboxdUsers by LocalStorage.letterboxdUsersFlow.collectAsState()
+    // Empfehlungsliste bei jedem Öffnen des Reiters frisch laden (sie ändert sich, wenn Ilkem am PC etwas hinzufügt)
+    val featuredKey = remember {
+        letterboxdFilmsCache.keys.removeIf { it.startsWith("list:${LetterboxdLists.FeaturedList.PATH}#") }
+        "list:${LetterboxdLists.FeaturedList.PATH}#${System.currentTimeMillis()}"
+    }
 
-    if (watchlist.isEmpty() && continueWatching.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = "Deine Merkliste & dein Verlauf sind noch leer",
-                    color = TextPrimary,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Bold
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    text = "Füge Animes über „+ Zur Merkliste“ hinzu oder starte eine Folge.",
-                    color = TextSecondary,
-                    fontSize = 14.sp
-                )
-            }
-        }
-        return
+    // Beliebte Letterboxd-Listen (einmal pro App-Start laden)
+    var popularLists by remember { mutableStateOf(letterboxdPopularListsCache) }
+    var popularError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(Unit) {
+        if (popularLists != null) return@LaunchedEffect
+        // Eine mehr laden, falls die eigene Empfehlungsliste darunter ist (sie steht ohnehin oben)
+        runCatching { LetterboxdLists.popularLists(limit = 5).filter { it.path != LetterboxdLists.FeaturedList.PATH }.take(4) }
+            .onSuccess { popularLists = it; letterboxdPopularListsCache = it }
+            .onFailure { popularError = "Letterboxd-Listen nicht erreichbar (${it.message})." }
     }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 48.dp),
-        verticalArrangement = Arrangement.spacedBy(28.dp)
+        contentPadding = PaddingValues(top = 16.dp, bottom = 48.dp),
+        verticalArrangement = Arrangement.spacedBy(26.dp)
     ) {
         if (continueWatching.isNotEmpty()) {
-            item {
+            item(key = "wl_continue") {
                 Column {
-                    SectionHeader(
-                        title = "▶️ Zuletzt geschaut (Weiterschauen)",
-                        subtitle = "${continueWatching.size} Animes"
-                    )
+                    SectionHeader(title = "▶️ Weiterschauen", subtitle = "${continueWatching.size} Titel")
                     LazyRow(
                         contentPadding = PaddingValues(horizontal = 36.dp, vertical = 10.dp),
                         horizontalArrangement = Arrangement.spacedBy(16.dp)
@@ -1716,13 +1720,7 @@ private fun WatchlistTabContent(
                                 entry = entry,
                                 onClick = { onResumeWatch(entry) },
                                 onDetailClick = {
-                                    onOpenAnime(
-                                        AnimeCard(
-                                            slug = entry.animeSlug,
-                                            title = entry.animeTitle,
-                                            coverUrl = entry.coverUrl
-                                        )
-                                    )
+                                    onOpenAnime(AnimeCard(slug = entry.animeSlug, title = entry.animeTitle, coverUrl = entry.coverUrl))
                                 }
                             )
                         }
@@ -1731,27 +1729,227 @@ private fun WatchlistTabContent(
             }
         }
 
-        if (watchlist.isNotEmpty()) {
-            item {
-                SectionHeader(
-                    title = "★ Gespeicherte Animes auf deiner Merkliste",
-                    subtitle = "${watchlist.size} Titel"
+        item(key = "wl_own") {
+            if (watchlist.isNotEmpty()) {
+                CatalogRowSection(
+                    title = "★ Meine Watchlist",
+                    items = watchlist,
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenAnime = onOpenAnime
                 )
+            } else {
+                Column {
+                    SectionHeader(title = "★ Meine Watchlist")
+                    Text(
+                        text = "Noch leer – füge Titel über „+“ in der Info-Kachel oder „+ Watchlist“ hinzu.",
+                        color = TextSecondary,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(horizontal = 36.dp, vertical = 8.dp)
+                    )
+                }
             }
-            item {
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 36.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(18.dp)
-                ) {
-                    items(watchlist, key = { it.cleanSlug }) { anime ->
-                        TvAnimeCard(
-                            anime = anime,
-                            isBookmarked = anime.cleanSlug in watchlistSlugs,
-                            onClick = { onOpenAnime(anime) }
-                        )
+        }
+
+        // ------------------- Letterboxd -------------------
+        item(key = "wl_lb_header") {
+            Column(modifier = Modifier.padding(horizontal = 36.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(LetterboxdGreen))
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(text = "Letterboxd-Watchlists", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                }
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = "Gib deinen oder einen anderen Letterboxd-Benutzernamen ein. Angezeigt werden die Filme " +
+                        "der Watchlist, die es bei Filmpalast zum Streamen gibt.",
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LetterboxdUserInput()
+                if (letterboxdUsers.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        letterboxdUsers.forEach { user ->
+                            NavTextTab(label = "@$user  ✕", selected = false, onClick = { LocalStorage.removeLetterboxdUser(user) })
+                        }
                     }
                 }
             }
+        }
+
+        letterboxdUsers.forEach { user ->
+            item(key = "wl_lb_user_$user") {
+                LetterboxdFilmsRow(
+                    cacheKey = "user:$user",
+                    title = "🎬 Watchlist von @$user",
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenAnime = onOpenAnime,
+                    load = { LetterboxdLists.watchlist(user, maxPages = 3) }
+                )
+            }
+        }
+
+        item(key = "wl_lb_lists_header") {
+            Column(modifier = Modifier.padding(horizontal = 36.dp)) {
+                Text(text = "Interessante Letterboxd-Listen", color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold)
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = popularError ?: if (popularLists == null) "Lade beliebte Listen …" else "Beliebte Listen der Letterboxd-Community – nur Filme, die es hier gibt.",
+                    color = if (popularError != null) AccentAmber else TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
+        }
+
+        // Eigene Empfehlungsliste immer zuerst
+        item(key = "wl_lb_featured") {
+            LetterboxdFilmsRow(
+                cacheKey = featuredKey,
+                title = "⭐ ${LetterboxdLists.FeaturedList.NAME}",
+                watchlistSlugs = watchlistSlugs,
+                onOpenAnime = onOpenAnime,
+                load = { LetterboxdLists.listFilms(LetterboxdLists.FeaturedList.PATH, maxPages = 2).take(100) }
+            )
+        }
+
+        popularLists.orEmpty().forEach { list ->
+            item(key = "wl_lb_list_${list.path}") {
+                LetterboxdFilmsRow(
+                    cacheKey = "list:${list.path}",
+                    title = "📋 ${list.name} · von ${list.owner}",
+                    watchlistSlugs = watchlistSlugs,
+                    onOpenAnime = onOpenAnime,
+                    load = { LetterboxdLists.listFilms(list.path, maxPages = 1).take(60) }
+                )
+            }
+        }
+    }
+}
+
+private val LetterboxdGreen = Color(0xFF00E054)
+
+/** Beliebte Listen und geladene Letterboxd-Filme pro Sitzung merken (Reiterwechsel lädt nicht neu). */
+private var letterboxdPopularListsCache: List<LetterboxdLists.ListInfo>? = null
+private val letterboxdFilmsCache = java.util.concurrent.ConcurrentHashMap<String, List<LetterboxdLists.Film>>()
+
+/** Eingabe für einen Letterboxd-Benutzernamen (oder Profil-Link); OK öffnet die Bildschirmtastatur. */
+@Composable
+private fun LetterboxdUserInput() {
+    var text by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var focused by remember { mutableStateOf(false) }
+    fun submit() {
+        val name = LetterboxdLists.normalizeUsername(text)
+        if (name == null) {
+            error = "Bitte einen Letterboxd-Benutzernamen eingeben (z. B. dave) oder den Profil-Link."
+            return
+        }
+        LocalStorage.addLetterboxdUser(name)
+        text = ""
+        error = null
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Box(
+            modifier = Modifier
+                .width(380.dp)
+                .height(44.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(BgSurface)
+                .border(if (focused) 2.dp else 1.dp, if (focused) FocusBorder else Color.White.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+                .padding(horizontal = 14.dp),
+            contentAlignment = Alignment.CenterStart
+        ) {
+            if (text.isEmpty()) {
+                Text(text = "Letterboxd-Benutzername, z. B. dave", color = TextMuted, fontSize = 14.sp)
+            }
+            BasicTextField(
+                value = text,
+                onValueChange = { text = it; error = null },
+                singleLine = true,
+                textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
+                cursorBrush = SolidColor(AccentCyan),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                keyboardActions = KeyboardActions(onDone = { submit() }),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onFocusChanged { focused = it.isFocused }
+            )
+        }
+        TvFocusableButton(text = "+ Hinzufügen", isPrimary = true, onClick = { submit() })
+    }
+    error?.let {
+        Spacer(modifier = Modifier.height(6.dp))
+        Text(text = it, color = AccentAmber, fontSize = 13.sp)
+    }
+}
+
+/**
+ * Reihe mit Filmen einer Letterboxd-Liste/-Watchlist. Lädt die Liste, gleicht jeden Film mit
+ * Filmpalast ab und zeigt nach und nach die, die sich streamen lassen.
+ */
+@Composable
+private fun LetterboxdFilmsRow(
+    cacheKey: String,
+    title: String,
+    watchlistSlugs: Set<String>,
+    onOpenAnime: (AnimeCard) -> Unit,
+    load: suspend () -> List<LetterboxdLists.Film>
+) {
+    var films by remember(cacheKey) { mutableStateOf(letterboxdFilmsCache[cacheKey]) }
+    var error by remember(cacheKey) { mutableStateOf<String?>(null) }
+    // Abgleich-Ergebnisse in Listen-Reihenfolge (null = noch offen oder nicht vorhanden)
+    val matches = remember(cacheKey) { mutableStateMapOf<String, AnimeCard?>() }
+    var checked by remember(cacheKey) { mutableStateOf(0) }
+
+    LaunchedEffect(cacheKey) {
+        val list = films ?: runCatching { load() }
+            .onSuccess { letterboxdFilmsCache[cacheKey] = it }
+            .getOrElse {
+                error = when (it) {
+                    is LetterboxdLists.UserNotFoundException -> "Diesen Letterboxd-Benutzer gibt es nicht."
+                    else -> "Letterboxd nicht erreichbar (${it.message})."
+                }
+                return@LaunchedEffect
+            }
+        films = list
+        coroutineScope {
+            list.forEach { film ->
+                launch {
+                    matches[film.slug] = LetterboxdLists.findOnFilmpalast(film)
+                    checked++
+                }
+            }
+        }
+    }
+
+    val available = films.orEmpty().mapNotNull { matches[it.slug] }.distinctBy { it.cleanSlug }
+    val total = films?.size ?: 0
+    val status = when {
+        error != null -> error!!
+        films == null -> "Lade Liste …"
+        total == 0 -> "Die Liste ist leer oder nicht öffentlich."
+        checked < total -> "${available.size} von $total bei Filmpalast · prüfe ${total - checked} weitere …"
+        else -> "${available.size} von $total bei Filmpalast verfügbar"
+    }
+
+    if (available.isNotEmpty()) {
+        CatalogRowSection(
+            title = title,
+            items = available,
+            watchlistSlugs = watchlistSlugs,
+            onOpenAnime = onOpenAnime,
+            subtitle = status
+        )
+    } else {
+        Column {
+            SectionHeader(title = title)
+            Text(
+                text = if (error == null && checked >= total && total > 0) "Keiner dieser Filme ist bei Filmpalast verfügbar." else status,
+                color = if (error != null) AccentAmber else TextSecondary,
+                fontSize = 14.sp,
+                modifier = Modifier.padding(horizontal = 36.dp, vertical = 8.dp)
+            )
         }
     }
 }
@@ -2025,14 +2223,10 @@ private fun SettingsTabContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+        // Quellen der Bilder und Bewertungen (TVmaze verlangt die Nennung)
         Text(
-            text = if (TmdbArtwork.isConfigured) {
-                "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
-                    "ist aber nicht von TMDB unterstützt oder zertifiziert."
-            } else {
-                "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
-            },
+            text = "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
+                "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd.",
             color = TextMuted,
             fontSize = 12.sp,
             modifier = Modifier.fillMaxWidth(0.92f)

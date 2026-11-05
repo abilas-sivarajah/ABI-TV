@@ -743,7 +743,8 @@ internal fun CatalogRowSection(
     title: String,
     items: List<AnimeCard>,
     watchlistSlugs: Set<String>,
-    onOpenAnime: (AnimeCard) -> Unit
+    onOpenAnime: (AnimeCard) -> Unit,
+    subtitle: String = "${items.size} Titel"
 ) {
     // OK auf einer Karte: an ihrer Stelle in der Reihe erscheint ein breites Info-Feld,
     // die übrigen Titel reihen sich dahinter an und bleiben auswählbar
@@ -768,7 +769,7 @@ internal fun CatalogRowSection(
     }
 
     Column {
-        SectionHeader(title = title, subtitle = "${items.size} Titel")
+        SectionHeader(title = title, subtitle = subtitle)
         BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
             // Ein Viertel der Reihenbreite, aber nie so schmal, dass Text und Knöpfe nicht mehr passen
             val panelWidth = ((maxWidth - 72.dp) / 4).coerceAtLeast(560.dp)

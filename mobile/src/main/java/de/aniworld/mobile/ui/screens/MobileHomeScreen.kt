@@ -101,7 +101,6 @@ import de.aniworld.tv.data.remote.FilmpalastScraper
 import de.aniworld.tv.data.remote.HdFilmeScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.TitlePreview
-import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.data.update.AppRelease
 import de.aniworld.tv.data.update.UpdateCheckResult
 import de.aniworld.tv.data.update.UpdateManager
@@ -559,14 +558,10 @@ fun MobileHomeScreen(
                 }
 
                 Spacer(modifier = Modifier.height(12.dp))
-                // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+                // Quellen der Bilder und Bewertungen (TVmaze verlangt die Nennung)
                 Text(
-                    text = if (TmdbArtwork.isConfigured) {
-                        "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
-                            "ist aber nicht von TMDB unterstützt oder zertifiziert."
-                    } else {
-                        "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
-                    },
+                    text = "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
+                        "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd.",
                     color = TextMuted,
                     fontSize = 11.sp
                 )
