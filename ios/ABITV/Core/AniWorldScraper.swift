@@ -79,7 +79,8 @@ public enum AniWorldScraper {
         return sections
     }
 
-    public static func fetchCategoryOrGenre(_ categoryKey: String) async throws -> [AnimeCard] {
+    /// Titel einer Kategorie bzw. eines Genres; Genres blättern mit "/genre/action/2" …
+    public static func fetchCategoryOrGenre(_ categoryKey: String, page: Int = 1) async throws -> [AnimeCard] {
         let lower = categoryKey.lowercased()
         let path: String
         switch lower {
@@ -88,7 +89,8 @@ public enum AniWorldScraper {
         case "isekai": path = "/genre/fantasy"
         default: path = "/genre/\(lower)"
         }
-        let (_, html) = try await HttpClient.getHtml(path)
+        let pagedPath = page > 1 && path.hasPrefix("/genre/") ? "\(path)/\(page)" : path
+        let (_, html) = try await HttpClient.getHtml(pagedPath)
         return parseCoverListItems(html)
     }
 

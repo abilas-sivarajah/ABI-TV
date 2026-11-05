@@ -65,8 +65,10 @@ public enum SerienStreamScraper {
         return sections
     }
 
-    public static func fetchCategory(_ categoryPath: String) async throws -> [AnimeCard] {
-        let fullUrl = categoryPath.hasPrefix("http") ? categoryPath : "\(baseUrl)\(categoryPath)"
+    /// Titel einer Kategorie/eines Genres; S.to blättert mit "?page=2", "?page=3" …
+    public static func fetchCategory(_ categoryPath: String, page: Int = 1) async throws -> [AnimeCard] {
+        let base = categoryPath.hasPrefix("http") ? categoryPath : "\(baseUrl)\(categoryPath)"
+        let fullUrl = page > 1 ? base + (base.contains("?") ? "&" : "?") + "page=\(page)" : base
         let (_, html) = try await HttpClient.getHtml(fullUrl, referer: "\(baseUrl)/")
         return parseSeriesCards(html)
     }
