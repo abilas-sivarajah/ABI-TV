@@ -619,6 +619,10 @@ public struct PlayerView: View {
     // MARK: - Auf dem TV abspielen
 
     private func handOffToTv() {
+        // Stelle merken, bevor das iPhone anhält: Fernseher/PC setzen genau dort fort
+        let positionMs = player.map { Int64(max(0, CMTimeGetSeconds($0.currentTime())) * 1000) } ?? -1
+        let durationMs = Int64(max(0, durationSec) * 1000)
+        saveCurrentProgress()
         player?.pause()
         guard castManager.connectedDevice != nil else {
             castManager.startDiscovery()
@@ -638,7 +642,9 @@ public struct PlayerView: View {
                     episodeNumber: item.episodeNumber,
                     seasonLabel: item.seasonLabel,
                     titleDe: item.episodeTitle,
-                    preferredLangKey: item.language.langKey
+                    preferredLangKey: item.language.langKey,
+                    positionMs: positionMs,
+                    durationMs: durationMs
                 )
             }
             if ok {

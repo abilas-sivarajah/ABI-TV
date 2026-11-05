@@ -1,5 +1,6 @@
 package de.aniworld.mobile.cast
 
+import de.aniworld.tv.data.local.LocalStorage
 import android.content.Context
 import android.content.SharedPreferences
 import android.net.wifi.WifiManager
@@ -369,7 +370,10 @@ object MobileCastManager {
         episodeNumber: Int,
         seasonLabel: String,
         titleDe: String,
-        preferredLangKey: Int
+        preferredLangKey: Int,
+        /** Aktuelle Stelle; ohne Angabe die auf dem Handy gespeicherte Stelle dieser Folge. */
+        positionMs: Long = -1L,
+        durationMs: Long = 0L
     ): Boolean = withContext(Dispatchers.IO) {
         var device = _connectedDevice.value ?: _discoveredDevices.value.firstOrNull { isUsable(it) }
 
@@ -397,6 +401,9 @@ object MobileCastManager {
                 addProperty("seasonLabel", seasonLabel)
                 addProperty("titleDe", titleDe)
                 addProperty("preferredLangKey", preferredLangKey)
+                // Der Fernseher bzw. PC setzt genau hier fort
+                addProperty("positionMs", if (positionMs >= 0) positionMs else LocalStorage.getSavedPositionForEpisode(episodePath))
+                addProperty("durationMs", durationMs)
             }.toString()
 
             val req = authorizedRequest(device, "/play")

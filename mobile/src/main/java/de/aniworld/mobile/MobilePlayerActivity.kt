@@ -316,7 +316,9 @@ class MobilePlayerActivity : ComponentActivity() {
                                             episodeNumber = ep.number,
                                             seasonLabel = ep.seasonLabel,
                                             titleDe = ep.displayTitle,
-                                            preferredLangKey = selectedLangKey
+                                            preferredLangKey = selectedLangKey,
+                                            positionMs = exoPlayer?.currentPosition ?: -1L,
+                                            durationMs = exoPlayer?.duration?.coerceAtLeast(0L) ?: 0L
                                         )
                                         if (ok) {
                                             exoPlayer?.pause()

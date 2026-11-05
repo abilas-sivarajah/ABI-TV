@@ -10,7 +10,9 @@ data class PlayCommand(
     val episodeNumber: Int,
     val seasonLabel: String,
     val titleDe: String,
-    val preferredLangKey: Int
+    val preferredLangKey: Int,
+    /** Stelle, an der das Handy gerade war (0 = eigene gespeicherte Stelle bzw. von vorn). */
+    val positionMs: Long = 0L
 )
 
 data class CastStatus(

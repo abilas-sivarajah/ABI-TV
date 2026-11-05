@@ -351,7 +351,9 @@ public final class IosCastManager: ObservableObject {
         episodeNumber: Int,
         seasonLabel: String,
         titleDe: String,
-        preferredLangKey: Int
+        preferredLangKey: Int,
+        positionMs: Int64 = -1,
+        durationMs: Int64 = 0
     ) async -> Bool {
         var device = connectedDevice
         // Nach "Trennen" nicht selbst irgendein gekoppeltes Gerät (z. B. den PC) nehmen – der Nutzer wählt
@@ -380,7 +382,10 @@ public final class IosCastManager: ObservableObject {
             "episodeNumber": episodeNumber,
             "seasonLabel": seasonLabel,
             "titleDe": titleDe,
-            "preferredLangKey": preferredLangKey
+            "preferredLangKey": preferredLangKey,
+            // Fernseher bzw. PC setzen genau dort fort, wo man auf dem iPhone war
+            "positionMs": positionMs >= 0 ? positionMs : LocalStorage.shared.getSavedPositionForEpisode(episodePath),
+            "durationMs": durationMs
         ]
         guard var req = authorizedRequest(device: target, path: "/play"),
               let body = try? JSONSerialization.data(withJSONObject: payload) else {

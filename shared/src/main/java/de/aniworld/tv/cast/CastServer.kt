@@ -1,5 +1,7 @@
 package de.aniworld.tv.cast
 
+import de.aniworld.tv.data.local.LocalStorage
+import de.aniworld.tv.data.model.WatchProgressEntry
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import de.aniworld.tv.platform.AppLog
@@ -288,8 +290,28 @@ object CastServer {
                             episodeNumber = obj.get("episodeNumber")?.asInt ?: 1,
                             seasonLabel = obj.get("seasonLabel")?.asString ?: "1",
                             titleDe = obj.get("titleDe")?.asString.orEmpty(),
-                            preferredLangKey = obj.get("preferredLangKey")?.asInt ?: 1
+                            preferredLangKey = obj.get("preferredLangKey")?.asInt ?: 1,
+                            positionMs = obj.get("positionMs")?.asLong ?: 0L
                         )
+                        // Vom Handy mitgeschickte Stelle merken: Der Player (TV und PC) setzt dort fort,
+                        // wo man auf dem Handy war, statt bei seiner eigenen gespeicherten Stelle
+                        if (cmd.positionMs > 5_000L && cmd.episodePath.isNotBlank()) {
+                            LocalStorage.saveWatchProgress(
+                                WatchProgressEntry(
+                                    animeSlug = cmd.animeSlug,
+                                    animeTitle = cmd.animeTitle,
+                                    coverUrl = cmd.coverUrl,
+                                    seasonLabel = cmd.seasonLabel,
+                                    episodeNumber = cmd.episodeNumber,
+                                    episodeTitle = cmd.titleDe,
+                                    episodePath = cmd.episodePath,
+                                    preferredLangKey = cmd.preferredLangKey,
+                                    positionMs = cmd.positionMs,
+                                    durationMs = obj.get("durationMs")?.asLong ?: 0L,
+                                    updatedAt = System.currentTimeMillis()
+                                )
+                            )
+                        }
                         host.handlePlayCommand(cmd)
                         val resp = JsonObject().apply {
                             addProperty("success", true)
