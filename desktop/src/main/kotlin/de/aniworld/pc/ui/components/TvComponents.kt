@@ -189,9 +189,10 @@ fun TvAnimeCard(
             modifier = Modifier.padding(horizontal = 2.dp)
         )
 
-        if (anime.genreOrSubtitle.isNotBlank()) {
+        val subtitle = anime.realGenreOrEmpty()
+        if (subtitle.isNotBlank()) {
             Text(
-                text = anime.genreOrSubtitle,
+                text = subtitle,
                 color = TextMuted,
                 fontSize = 11.sp,
                 maxLines = 1,
@@ -422,4 +423,14 @@ fun LanguageBadge(language: LanguageOption, modifier: Modifier = Modifier) {
             fontWeight = FontWeight.Bold
         )
     }
+}
+
+/**
+ * Untertitel einer Karte nur, wenn er wirklich ein Genre ist – Anbieter-Kennzeichen wie
+ * "Serie • S.to" oder "HD Stream • Deutsch" sagen nichts aus und werden ausgeblendet.
+ */
+fun de.aniworld.tv.data.model.AnimeCard.realGenreOrEmpty(): String {
+    val text = genreOrSubtitle.trim()
+    val markers = listOf("S.to", "HD Stream", "HD-Filme", "Deutsch", "Serie •", "Film •")
+    return if (markers.any { text.contains(it, ignoreCase = true) }) "" else text
 }

@@ -128,6 +128,7 @@ import de.aniworld.pc.update.UpdateManager
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import de.aniworld.pc.ui.components.TvAnimeCard
+import de.aniworld.pc.ui.components.realGenreOrEmpty
 import de.aniworld.pc.ui.components.TvContinueWatchingCard
 import de.aniworld.pc.ui.components.TvFocusableButton
 import de.aniworld.pc.ui.theme.AccentBlue
@@ -996,7 +997,27 @@ private fun rememberLetterboxdRating(artwork: TmdbArtwork.Artwork?): LetterboxdR
 
 private val LetterboxdGreen = Color(0xFF00E054)
 
-/** Kleines Kästchen "Letterboxd ★ 3,9 ↗" – Klick öffnet die Filmseite im Browser. */
+/** Graues Kästchen für Eckdaten in der Info-Kachel. */
+@Composable
+private fun TileChip(text: String) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(BgElevated)
+            .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
+            .padding(horizontal = 10.dp, vertical = 4.dp)
+    ) {
+        Text(text = text, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+    }
+}
+
+/** Bewertung der Seite einheitlich als "★ 7,2" (ohne doppelte Sterne/Emojis); null wenn keine Zahl drinsteht. */
+private fun formatSiteRating(raw: String?): String? {
+    val number = raw?.let { Regex("""\d+(?:[.,]\d+)?""").find(it)?.value } ?: return null
+    return "★ " + number.replace('.', ',')
+}
+
+/** Kleines Kästchen "LB ★ 3,9" (Letterboxd) – Klick öffnet die Filmseite im Browser. */
 @Composable
 private fun LetterboxdChip(rating: LetterboxdRatings.Rating, large: Boolean = false) {
     val interaction = remember { MutableInteractionSource() }
@@ -1020,7 +1041,7 @@ private fun LetterboxdChip(rating: LetterboxdRatings.Rating, large: Boolean = fa
         Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(LetterboxdGreen))
         Spacer(modifier = Modifier.width(6.dp))
         Text(
-            text = "Letterboxd" + (rating.shortLabel?.let { " ★ $it" } ?: "") + "  ↗",
+            text = "LB" + (rating.shortLabel?.let { " ★ $it" } ?: ""),
             color = TextPrimary,
             fontSize = if (large) 13.sp else 12.sp,
             fontWeight = FontWeight.SemiBold,
@@ -1371,7 +1392,7 @@ private fun HeroBanner(
                 // Eckdaten wie "Action • Fantasy • 2023 • FSK 12"
                 val meta = buildList {
                     val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(2)
-                    if (genres.isNotEmpty()) addAll(genres) else anime.genreOrSubtitle.takeIf { it.isNotBlank() }?.let { add(it) }
+                    if (genres.isNotEmpty()) addAll(genres) else anime.realGenreOrEmpty().takeIf { it.isNotBlank() }?.let { add(it) }
                     detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
                     detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
                 }
@@ -1391,7 +1412,7 @@ private fun HeroBanner(
                             )
                             Spacer(modifier = Modifier.width(12.dp))
                         }
-                        letterboxd?.let { LetterboxdChip(it, large = true) }
+                        letterboxd?.takeIf { it.average != null }?.let { LetterboxdChip(it, large = true) }
                     }
                 }
 
@@ -1644,29 +1665,20 @@ private fun TitleInfoPanel(
                 verticalArrangement = Arrangement.Center
             ) {
                 // Eckdaten als kleine Kästchen: Art (Film/Serie/Anime), Jahr, Bewertung, FSK
-                val chips = buildList {
-                    add(titleKindLabel(anime, detail))
-                    detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
-                    detail?.rating?.takeIf { it.isNotBlank() }?.let { add("★ $it") }
-                    detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
+                // Eckdaten: Art · Jahr · Bewertung · FSK. Bei Filmen die Letterboxd-Bewertung ("LB ★ 3,9")
+                // statt der Bewertung der Streaming-Seite.
+                val kind = titleKindLabel(anime, detail)
+                val year = detail?.years?.takeIf { it.isNotBlank() }
+                val siteRating = if (kind == "Film") null else formatSiteRating(detail?.rating)
+                val fsk = detail?.ageRating?.takeIf { it.isNotBlank() }?.let { if (it.all(Char::isDigit)) "FSK $it" else it }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    TileChip(kind)
+                    year?.let { TileChip(it) }
+                    if (kind == "Film") letterboxd?.takeIf { it.average != null }?.let { LetterboxdChip(it) }
+                    siteRating?.let { TileChip(it) }
+                    fsk?.let { TileChip(it) }
                 }
-                if (chips.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                        letterboxd?.let { LetterboxdChip(it) }
-                        chips.forEach { chip ->
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(6.dp))
-                                    .background(BgElevated)
-                                    .border(1.dp, Color.White.copy(alpha = 0.10f), RoundedCornerShape(6.dp))
-                                    .padding(horizontal = 10.dp, vertical = 4.dp)
-                            ) {
-                                Text(text = chip, color = TextSecondary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
-                            }
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(8.dp))
-                }
+                Spacer(modifier = Modifier.height(8.dp))
 
                 Text(
                     text = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title,
@@ -1678,7 +1690,7 @@ private fun TitleInfoPanel(
                 )
 
                 val genres = detail?.genres.orEmpty().filter { it.isNotBlank() }.take(3)
-                val genreLine = if (genres.isNotEmpty()) genres.joinToString(", ") else anime.genreOrSubtitle
+                val genreLine = if (genres.isNotEmpty()) genres.joinToString(", ") else anime.realGenreOrEmpty()
                 if (genreLine.isNotBlank()) {
                     Spacer(modifier = Modifier.height(4.dp))
                     // "Genre:" ausdrücklich davor, die Genres selbst in Cyan

@@ -249,16 +249,24 @@ object SerienStreamScraper {
                 )
             }
 
+            // Echte Angaben der Serienseite statt fester Platzhalter (früher immer "16+", "⭐ 8.5", "Serie, S.to")
+            val genres = doc.select("a.link-light[href^=\"/genre/\"]")
+                .map { it.text().trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+            val startYear = doc.selectFirst("a[href^=\"/jahr/\"]")?.text()?.trim().orEmpty()
+            val fsk = Regex("""\bFSK\s?(\d{1,2})\b""").find(doc.body()?.text().orEmpty())?.groupValues?.get(1)
+
             val detail = AnimeDetail(
                 slug = "$PREFIX$cleanSlug",
                 title = title,
                 description = description,
                 coverUrl = coverUrl,
                 backdropUrl = backdropUrl,
-                years = "",
-                ageRating = "16+",
-                rating = "⭐ 8.5",
-                genres = listOf("Serie", "S.to"),
+                years = startYear,
+                ageRating = fsk.orEmpty(),
+                rating = "",
+                genres = genres,
                 seasons = seasons,
                 currentSeasonPath = currentUrl.removePrefix(BASE_URL),
                 episodes = episodes
