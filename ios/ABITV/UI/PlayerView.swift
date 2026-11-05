@@ -228,6 +228,7 @@ public struct PlayerView: View {
                 currentEpisodes: seasonEpisodes,
                 currentPath: item.episodePath,
                 loadSeason: { season in await fetchSeasonEpisodes(season) },
+                onClose: { showEpisodes = false },
                 onPick: { episode, episodes in
                     showEpisodes = false
                     switchTo(episode: episode)
@@ -240,6 +241,7 @@ public struct PlayerView: View {
             LanguageSheet(
                 languages: hosterLanguages,
                 active: resolvedStream?.language,
+                onClose: { showLanguages = false },
                 onPick: { language in
                     showLanguages = false
                     switchLanguage(language)
@@ -271,7 +273,9 @@ public struct PlayerView: View {
                         Image(systemName: "chevron.left")
                             .font(.system(size: 18, weight: .bold))
                             .foregroundColor(.white)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 48, height: 48)
+                            // Ohne das reagiert ein schlichter Knopf nur auf das gezeichnete Symbol
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
 
@@ -292,7 +296,8 @@ public struct PlayerView: View {
                         Image(systemName: "tv")
                             .font(.system(size: 16, weight: .bold))
                             .foregroundColor(.white)
-                            .frame(width: 40, height: 40)
+                            .frame(width: 48, height: 48)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -383,6 +388,7 @@ public struct PlayerView: View {
                 .font(.system(size: size, weight: .bold))
                 .foregroundColor(.white)
                 .frame(width: size + 30, height: size + 30)
+                .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -397,7 +403,8 @@ public struct PlayerView: View {
                 Text(label).font(.system(size: 13, weight: .semibold))
             }
             .foregroundColor(.white)
-            .padding(.vertical, 6)
+            .padding(.vertical, 8)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
     }
@@ -942,6 +949,7 @@ private struct EpisodesSheet: View {
     let currentEpisodes: [EpisodeItem]
     let currentPath: String
     let loadSeason: (SeasonLink) async -> [EpisodeItem]
+    let onClose: () -> Void
     let onPick: (EpisodeItem, [EpisodeItem]) -> Void
 
     @State private var viewSeason: SeasonLink?
@@ -957,10 +965,14 @@ private struct EpisodesSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             if choosingSeason {
-                Text(title)
-                    .font(.system(size: 20, weight: .heavy))
-                    .foregroundColor(AbiTheme.textPrimary)
-                    .lineLimit(1)
+                HStack {
+                    Text(title)
+                        .font(.system(size: 20, weight: .heavy))
+                        .foregroundColor(AbiTheme.textPrimary)
+                        .lineLimit(1)
+                    Spacer()
+                    SheetCloseButton(action: onClose)
+                }
                 ScrollView {
                     VStack(spacing: 4) {
                         ForEach(seasons) { season in
@@ -987,16 +999,21 @@ private struct EpisodesSheet: View {
                     }
                 }
             } else {
-                Button {
-                    if seasons.count > 1 { choosingSeason = true }
-                } label: {
-                    HStack(spacing: 4) {
-                        if seasons.count > 1 { Image(systemName: "chevron.left").font(.system(size: 18, weight: .bold)) }
-                        Text(label(viewSeason)).font(.system(size: 20, weight: .heavy))
+                HStack {
+                    Button {
+                        if seasons.count > 1 { choosingSeason = true }
+                    } label: {
+                        HStack(spacing: 4) {
+                            if seasons.count > 1 { Image(systemName: "chevron.left").font(.system(size: 18, weight: .bold)) }
+                            Text(label(viewSeason)).font(.system(size: 20, weight: .heavy))
+                        }
+                        .foregroundColor(AbiTheme.textPrimary)
+                        .contentShape(Rectangle())
                     }
-                    .foregroundColor(AbiTheme.textPrimary)
+                    .buttonStyle(.plain)
+                    Spacer()
+                    SheetCloseButton(action: onClose)
                 }
-                .buttonStyle(.plain)
 
                 if loading {
                     ProgressView().tint(AbiTheme.accentCyan).frame(maxWidth: .infinity).padding(24)
@@ -1073,13 +1090,18 @@ private struct EpisodesSheet: View {
 private struct LanguageSheet: View {
     let languages: [LanguageOption]
     let active: LanguageOption?
+    let onClose: () -> Void
     let onPick: (LanguageOption) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Sprache")
-                .font(.system(size: 20, weight: .heavy))
-                .foregroundColor(AbiTheme.textPrimary)
+            HStack {
+                Text("Sprache")
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundColor(AbiTheme.textPrimary)
+                Spacer()
+                SheetCloseButton(action: onClose)
+            }
             ForEach(languages, id: \.self) { language in
                 Button {
                     onPick(language)
@@ -1111,6 +1133,25 @@ private struct LanguageSheet: View {
         .padding(18)
         .background(AbiTheme.bgSurface.ignoresSafeArea())
         .preferredColorScheme(.dark)
+    }
+}
+
+/// Rundes "X" oben rechts in den Blättern (statt nur Herunterwischen).
+private struct SheetCloseButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 14, weight: .bold))
+                .foregroundColor(AbiTheme.textPrimary)
+                .frame(width: 34, height: 34)
+                .background(Color.white.opacity(0.12))
+                .clipShape(Circle())
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Schließen")
     }
 }
 

@@ -250,12 +250,29 @@ struct TitleInfoSheet: View {
     @ObservedObject var storage: LocalStorage
     let onPlay: () -> Void
     let onDetail: () -> Void
+    let onClose: () -> Void
 
     @StateObject private var model = TitlePreviewModel()
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 12) {
+                HStack {
+                    Spacer()
+                    // Schließen auch ohne Herunterwischen
+                    Button(action: onClose) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 14, weight: .bold))
+                            .foregroundColor(AbiTheme.textPrimary)
+                            .frame(width: 34, height: 34)
+                            .background(Color.white.opacity(0.12))
+                            .clipShape(Circle())
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Schließen")
+                }
+                .padding(.bottom, -6)
                 HStack(alignment: .top, spacing: 14) {
                     RemoteImage(url: model.detail?.coverUrl.nilIfEmpty ?? card.coverUrl)
                         .frame(width: 110, height: 165)

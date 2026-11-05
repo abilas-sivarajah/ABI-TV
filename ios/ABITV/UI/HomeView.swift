@@ -88,7 +88,8 @@ public struct HomeView: View {
     @State private var searchResults: [AnimeCard] = []
     @State private var isSearching: Bool = false
     @State private var searchTask: Task<Void, Never>? = nil
-    @State private var suggestionSeed = 0
+    /// Vorschläge bei leerer Suche – einmal ausgewürfelt, damit sie beim Neuzeichnen nicht wechseln.
+    @State private var suggestionList: [AnimeCard] = []
 
     // Watchlist: Letterboxd
     @State private var letterboxdInput = ""
@@ -150,6 +151,11 @@ public struct HomeView: View {
         .task { await StoAnimeFilter.shared.load() }
         .onChange(of: selectedTab) { newTab in
             if newTab == .watchlist { featuredVisit += 1 }
+            if newTab == .search { refreshSuggestions() }
+        }
+        .onChange(of: movieSections.count + seriesSections.count + animeSections.count) { _ in
+            // Kataloge nachgeladen: Vorschläge füllen, falls die Suche gerade leer war
+            if suggestionList.isEmpty { refreshSuggestions() }
         }
         .sheet(item: $infoCard) { card in
             TitleInfoSheet(
@@ -159,7 +165,8 @@ public struct HomeView: View {
                 onDetail: {
                     infoCard = nil
                     onSelectItem(card)
-                }
+                },
+                onClose: { infoCard = nil }
             )
             .presentationDetents([.medium, .large])
         }
@@ -624,6 +631,7 @@ public struct HomeView: View {
                     let selected = searchScope == scope
                     Button {
                         searchScope = scope
+                        refreshSuggestions()
                         triggerSearch(query: searchQuery, scope: scope)
                     } label: {
                         Text(label)
@@ -651,7 +659,7 @@ public struct HomeView: View {
                             .font(.system(size: 17, weight: .bold))
                             .foregroundColor(AbiTheme.textPrimary)
                             .padding(.horizontal, 16)
-                        resultGrid(suggestions)
+                        resultGrid(suggestionList)
                     } else if searchResults.isEmpty {
                         Text("Keine Treffer für „\(trimmed)“.")
                             .font(.system(size: 14))
@@ -679,9 +687,13 @@ public struct HomeView: View {
         }
     }
 
+    /// Neue zufällige Vorschläge (beim Öffnen der Suche und beim Wechsel des Filters).
+    private func refreshSuggestions() {
+        suggestionList = makeSuggestions()
+    }
+
     /// Zufällige Vorschläge bei leerer Suche (aus den geladenen Übersichten).
-    private var suggestions: [AnimeCard] {
-        _ = suggestionSeed
+    private func makeSuggestions() -> [AnimeCard] {
         let movies = movieSections.flatMap(\.items).shuffled()
         let series = seriesSections.flatMap(\.items).withoutStoAnime(stoFilter.slugs).shuffled()
         let anime = animeSections.flatMap(\.items).shuffled()
