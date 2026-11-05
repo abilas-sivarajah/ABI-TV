@@ -3386,15 +3386,10 @@ private fun SettingsTabContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        // Von TMDB vorgeschriebener Hinweis, sobald ihre Daten genutzt werden
+        // Quellen der Bilder und Bewertungen (TVmaze verlangt die Nennung)
         Text(
-            text = if (TmdbArtwork.isConfigured) {
-                "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
-                    "ist aber nicht von TMDB unterstützt oder zertifiziert."
-            } else {
-                "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
-                    "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd."
-            },
+            text = "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
+                "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd.",
             color = TextMuted,
             fontSize = 12.sp,
             modifier = Modifier.fillMaxWidth(0.92f)

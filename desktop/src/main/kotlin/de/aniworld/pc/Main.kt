@@ -55,21 +55,10 @@ import java.io.File
 import java.io.PrintStream
 import java.time.LocalTime
 import java.time.format.DateTimeFormatter
-import java.util.Properties
 import javax.swing.SwingUtilities
 import kotlin.system.exitProcess
 
 private val backgroundScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-
-/** TMDB-Schlüssel aus der Umgebungsvariable oder der beim Bauen eingebauten abi-tmdb.properties. */
-private fun tmdbApiKey(): String =
-    System.getenv("TMDB_API_KEY")?.trim()?.takeIf { it.isNotEmpty() }
-        ?: runCatching {
-            AppDirs.javaClass.classLoader.getResourceAsStream("abi-tmdb.properties")?.use { input ->
-                Properties().apply { load(input) }.getProperty("apiKey")?.trim()
-            }
-        }.getOrNull()
-        ?: ""
 
 fun main() {
     setupLogging()
@@ -81,7 +70,8 @@ fun main() {
     val chromium = ChromiumStreamExtractor(File(AppDirs.cacheDir, "jcef"))
     StreamResolver.browserExtractor = chromium
     LetterboxdAccount.chromium = chromium
-    TmdbArtwork.configure(tmdbApiKey(), AppDirs.cacheDir)
+    // TMDB wird nicht mehr benutzt: Bilder kommen ohne Schlüssel von TVmaze, Kitsu/AniList und Letterboxd
+    TmdbArtwork.configure("", AppDirs.cacheDir)
     LetterboxdRatings.configure(AppDirs.cacheDir)
     LetterboxdLists.configure(AppDirs.cacheDir)
     KeylessArtwork.configure(AppDirs.cacheDir)
