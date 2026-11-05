@@ -20,6 +20,7 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -2053,6 +2054,27 @@ private fun GenreBrowsePage(
     switcher: @Composable () -> Unit,
     gridFooter: LazyGridScope.() -> Unit = {}
 ) {
+    // Klick auf einen Titel: an seiner Stelle im Raster erscheint die Info-Kachel (wie in den Reihen)
+    val expandedState = LocalExpandedTitle.current
+    val expandedSlug = expandedState.key?.takeIf { it.startsWith("genre|") }?.removePrefix("genre|")
+    val gridState = rememberLazyGridState()
+    // Anderes Genre gewählt: Kachel schließen und oben beginnen
+    LaunchedEffect(selectedPath) {
+        if (expandedState.key?.startsWith("genre|") == true) expandedState.key = null
+        gridState.scrollToItem(0)
+    }
+    // Kachel ins Bild holen, falls sie unten oder oben abgeschnitten ist
+    LaunchedEffect(expandedSlug) {
+        val index = items.indexOfFirst { it.cleanSlug == expandedSlug }
+        if (index < 0) return@LaunchedEffect
+        delay(60)
+        val info = gridState.layoutInfo
+        val visible = info.visibleItemsInfo.firstOrNull { it.index == index }
+        if (visible == null || visible.offset.y < 0 || visible.offset.y + visible.size.height > info.viewportEndOffset) {
+            gridState.animateScrollToItem(index)
+        }
+    }
+
     Column(modifier = Modifier.fillMaxSize()) {
         Spacer(modifier = Modifier.height(12.dp))
         switcher()
@@ -2089,18 +2111,37 @@ private fun GenreBrowsePage(
                     isLoading -> CatalogLoading(loadingText)
                     items.isEmpty() -> CatalogEmpty(emptyText, onRetry)
                     else -> LazyVerticalGrid(
+                        state = gridState,
                         columns = GridCells.Adaptive(minSize = 148.dp),
                         contentPadding = PaddingValues(start = 24.dp, end = 36.dp, top = 4.dp, bottom = 36.dp),
                         horizontalArrangement = Arrangement.spacedBy(18.dp),
                         verticalArrangement = Arrangement.spacedBy(20.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(items, key = { it.cleanSlug }) { card ->
-                            TvAnimeCard(
-                                anime = card,
-                                isBookmarked = card.cleanSlug in watchlistSlugs,
-                                onClick = { onOpenAnime(card) }
-                            )
+                        items(
+                            items,
+                            key = { it.cleanSlug },
+                            // Die Kachel ist 4 Karten breit (bei schmalem Fenster entsprechend weniger)
+                            span = { card -> GridItemSpan(if (card.cleanSlug == expandedSlug) minOf(4, maxLineSpan) else 1) }
+                        ) { card ->
+                            if (card.cleanSlug == expandedSlug) {
+                                TitleInfoPanel(
+                                    anime = card,
+                                    isBookmarked = card.cleanSlug in watchlistSlugs,
+                                    onOpenDetail = { onOpenAnime(card) },
+                                    onToggleWatchlist = { LocalStorage.toggleWatchlist(card) },
+                                    onClose = { expandedState.key = null },
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(TitleTileHeight)
+                                )
+                            } else {
+                                TvAnimeCard(
+                                    anime = card,
+                                    isBookmarked = card.cleanSlug in watchlistSlugs,
+                                    onClick = { expandedState.key = "genre|${card.cleanSlug}" }
+                                )
+                            }
                         }
                         gridFooter()
                     }
