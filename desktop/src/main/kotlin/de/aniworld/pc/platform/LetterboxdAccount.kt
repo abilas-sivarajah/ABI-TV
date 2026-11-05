@@ -5,10 +5,7 @@ import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.AnimeCard
-import de.aniworld.tv.data.remote.HdFilmeScraper
-import de.aniworld.tv.data.remote.KeylessArtwork
-import de.aniworld.tv.data.remote.TitlePreview
-import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.tv.data.remote.LetterboxdListSync
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -264,7 +261,13 @@ object LetterboxdAccount {
                 // Beim Start nur den Stand merken; danach zählen nur neu hinzugefügte Titel
                 if (before == null || !isListOwner) return@collect
                 list.filter { it.cleanSlug !in before }.forEach { card ->
-                    scope.launch { addToFeaturedList(card) }
+                    scope.launch {
+                        // Fehler nie still schlucken: in den Einstellungen anzeigen und protokollieren
+                        runCatching { addToFeaturedList(card) }.onFailure {
+                            AppLog.e(TAG, "„${card.title}“ nicht zur Empfehlungsliste hinzugefügt", it)
+                            _status.value = "„${card.title}“ nicht hinzugefügt: ${it.message ?: it.javaClass.simpleName}"
+                        }
+                    }
                 }
             }
         }
@@ -273,80 +276,28 @@ object LetterboxdAccount {
     private val syncMutex = Mutex()
 
     private suspend fun addToFeaturedList(card: AnimeCard) = syncMutex.withLock {
-        val detail = TitlePreview.loadDetail(card.cleanSlug)
-        val isMovie = card.isFilmpalast || (card.isHdFilme && detail?.seasons.isNullOrEmpty())
-        if (!isMovie) return@withLock // Letterboxd kennt nur Filme
-
-        val title = detail?.title?.takeIf { it.isNotBlank() } ?: card.title
-        val year = detail?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
-        val artwork = if (TmdbArtwork.isConfigured) {
-            TmdbArtwork.find(title, year, TmdbArtwork.Kind.MOVIE)
-        } else {
-            KeylessArtwork.find(title, year, KeylessArtwork.Kind.MOVIE)
-        }?.takeIf { it.kind == TmdbArtwork.Kind.MOVIE }
-        val filmPath = artwork?.tmdbId?.let { "/tmdb/$it/" } ?: artwork?.imdbId?.let { "/imdb/$it/" }
-        if (filmPath == null) {
-            AppLog.w(TAG, "„$title“: kein Letterboxd-Film gefunden")
-            _status.value = "„$title“ wurde auf Letterboxd nicht gefunden."
-            return@withLock
+        val (title, filmPath) = when (val lookup = LetterboxdListSync.lookupFilm(card)) {
+            LetterboxdListSync.Lookup.NotAMovie -> return@withLock // Letterboxd kennt nur Filme
+            is LetterboxdListSync.Lookup.NotFound -> {
+                AppLog.w(TAG, "„${lookup.title}“: kein Letterboxd-Film gefunden")
+                _status.value = "„${lookup.title}“ wurde auf Letterboxd nicht gefunden."
+                return@withLock
+            }
+            is LetterboxdListSync.Lookup.Found -> lookup.title to lookup.path
         }
 
-        val result = runInLetterboxd(addScript(filmPath))
-        when {
-            result == null -> _status.value = "Letterboxd nicht erreichbar – „$title“ wurde nicht hinzugefügt."
-            result.get("loggedOut")?.asBoolean == true -> {
+        val outcome = LetterboxdListSync.parseResult(runInLetterboxd(LetterboxdListSync.addScript(filmPath))?.toString(), title)
+        _status.value = LetterboxdListSync.message(outcome, title)
+        AppLog.i(TAG, "Empfehlungsliste: ${_status.value}")
+        when (outcome) {
+            LetterboxdListSync.Outcome.LoggedOut -> {
                 _username.value = null
                 runCatching { sessionFile.delete() }
-                _status.value = "Bei Letterboxd abgemeldet – bitte neu anmelden."
             }
-            result.get("ok")?.asBoolean == true -> {
-                val added = result.get("added")?.asInt ?: 0
-                val name = result.get("name")?.asString?.takeIf { it.isNotBlank() } ?: title
-                _status.value = if (added > 0) "„$name“ zu „${FeaturedList.NAME}“ hinzugefügt."
-                else "„$name“ ist schon in „${FeaturedList.NAME}“."
-                AppLog.i(TAG, "Empfehlungsliste: $name (hinzugefügt: $added)")
-                if (added > 0) _listVersion.value++
-            }
-            else -> _status.value = "„$title“ nicht hinzugefügt: ${result.get("error")?.asString}"
+            is LetterboxdListSync.Outcome.Added -> _listVersion.value++
+            else -> Unit
         }
     }
-
-    /**
-     * Film über /tmdb/… bzw. /imdb/… öffnen, seine Kurzkennung (boxd.it/…) lesen und ihn über dieselbe
-     * Schnittstelle zur Liste hinzufügen, die die Letterboxd-Seite selbst benutzt.
-     */
-    private fun addScript(filmPath: String): String = """
-        (async () => {
-            const p = window.person || {};
-            if (!p.loggedIn) return { ok: false, loggedOut: true };
-            const film = await fetch(${gson.toJson(filmPath)}, { credentials: 'include' });
-            if (!film.ok) return { ok: false, error: 'Film nicht auf Letterboxd (HTTP ' + film.status + ')' };
-            const html = await film.text();
-            const lid = (html.match(/https:\/\/boxd\.it\/([A-Za-z0-9]+)/) || [])[1];
-            if (!lid) return { ok: false, error: 'keine Letterboxd-Kennung gefunden' };
-            const name = ((html.match(/<meta property="og:title" content="([^"]+)"/) || [])[1] || '').replace(/&amp;/g, '&');
-            // Steht der Film schon in der Liste? ("position" ist dann gesetzt) – keine doppelten Einträge
-            const lists = await fetch('/s/load-lists', {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                body: new URLSearchParams({ listableLid: lid, __csrf: window.supermodelCSRF })
-            }).then(x => x.json()).catch(() => null);
-            const target = lists && [...(lists.publicLists || []), ...(lists.privateLists || [])]
-                .find(l => l.boxdItCode === ${gson.toJson(FeaturedList.LID)});
-            if (target && target.position != null) return { ok: true, added: 0, name };
-            const r = await fetch('/api/v0/lists', {
-                method: 'PATCH',
-                credentials: 'include',
-                headers: { 'Content-Type': 'application/json; charset=UTF-8', Accept: 'application/json', 'X-CSRF-TOKEN': window.supermodelCSRF },
-                body: JSON.stringify({ lists: [${gson.toJson(FeaturedList.LID)}], listables: [lid] })
-            });
-            if (r.status !== 200) return { ok: false, error: 'Letterboxd antwortet mit HTTP ' + r.status };
-            const body = await r.json();
-            const added = (body.items || []).reduce((n, i) => n + (i.additions || 0), 0);
-            return { ok: true, added, name };
-        })()
-    """.trimIndent()
 
     /** Führt ein Skript in einem unsichtbaren, angemeldeten Letterboxd-Fenster aus und liefert sein Ergebnis. */
     private suspend fun runInLetterboxd(script: String): JsonObject? {

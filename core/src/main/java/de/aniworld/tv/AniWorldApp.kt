@@ -14,6 +14,7 @@ import de.aniworld.tv.data.remote.LetterboxdLists
 import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.tv.data.remote.StoAnimeFilter
 import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.tv.platform.LetterboxdAccountAndroid
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -51,7 +52,10 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
         LetterboxdLists.configure(cacheDir)
         // Liste der Anime auf S.to, damit der Serien-Bereich ohne Anime auskommt
         StoAnimeFilter.configure(cacheDir)
-        CoroutineScope(SupervisorJob() + Dispatchers.IO).launch { runCatching { StoAnimeFilter.load() } }
+        val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        appScope.launch { runCatching { StoAnimeFilter.load() } }
+        // Gemerkte Letterboxd-Anmeldung; Watchlist-Filme des Listenbesitzers in die Empfehlungsliste
+        LetterboxdAccountAndroid.start(this, appScope)
     }
 
     // Cover von Filmpalast und S.to brauchen das DNS-over-HTTPS des gemeinsamen Clients,

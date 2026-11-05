@@ -1,5 +1,7 @@
 package de.aniworld.tv.ui.screens
 
+import androidx.compose.foundation.focusable
+import de.aniworld.tv.platform.LetterboxdAccountAndroid
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.awaitAll
@@ -1805,7 +1807,8 @@ private fun WatchlistTabContent(
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
     val letterboxdUsers by LocalStorage.letterboxdUsersFlow.collectAsState()
     // Empfehlungsliste bei jedem Öffnen des Reiters frisch laden (sie ändert sich, wenn Ilkem am PC etwas hinzufügt)
-    val featuredKey = remember {
+    val featuredListVersion by LetterboxdAccountAndroid.listVersion.collectAsState()
+    val featuredKey = remember(featuredListVersion) {
         letterboxdFilmsCache.keys.removeIf { it.startsWith("list:${LetterboxdLists.FeaturedList.PATH}#") }
         "list:${LetterboxdLists.FeaturedList.PATH}#${System.currentTimeMillis()}"
     }
@@ -2105,12 +2108,62 @@ private fun SettingsTabContent(
             fontWeight = FontWeight.Bold
         )
         Text(
-            text = "App-Informationen, Sprache und manuelle Update-Prüfung",
+            text = "Letterboxd, App-Informationen und manuelle Update-Prüfung",
             color = TextSecondary,
             fontSize = 14.sp
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Karte: Letterboxd-Konto (Anmeldung auf der echten Letterboxd-Seite)
+        val lbUser by LetterboxdAccountAndroid.username.collectAsState()
+        val lbStatus by LetterboxdAccountAndroid.status.collectAsState()
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(BgElevated)
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "🎬 Letterboxd", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = lbUser?.let { "Angemeldet als $it" } ?: "Nicht angemeldet",
+                        color = if (lbUser != null) AccentCyan else TextSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = lbStatus ?: if (lbUser != null && LetterboxdAccountAndroid.isListOwner) {
+                            "Filme, die du auf die Watchlist setzt, kommen auch in „${LetterboxdLists.FeaturedList.NAME}“."
+                        } else {
+                            "Die Anmeldung läuft auf der echten Letterboxd-Seite; die App sieht dein Passwort nicht."
+                        },
+                        color = TextMuted,
+                        fontSize = 12.sp
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
+                if (lbUser != null) {
+                    TvFocusableButton(text = "Abmelden", onClick = { LetterboxdAccountAndroid.signOut() })
+                } else {
+                    TvFocusableButton(
+                        text = "Mit Letterboxd anmelden",
+                        isPrimary = true,
+                        onClick = { context.startActivity(LetterboxdAccountAndroid.signInIntent(context)) }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(18.dp))
 
         // Karte: Updates
         Box(
@@ -2305,14 +2358,23 @@ private fun SettingsTabContent(
         }
 
         Spacer(modifier = Modifier.height(16.dp))
-        // Quellen der Bilder und Bewertungen (TVmaze verlangt die Nennung)
+        // Quellen der Bilder und Bewertungen (TVmaze verlangt die Nennung). Fokussierbar, damit man
+        // mit der Fernbedienung bis ganz nach unten kommt – sonst endet das Scrollen am letzten Knopf.
+        var sourcesFocused by remember { mutableStateOf(false) }
         Text(
             text = "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
                 "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd.",
-            color = TextMuted,
+            color = if (sourcesFocused) TextPrimary else TextMuted,
             fontSize = 12.sp,
-            modifier = Modifier.fillMaxWidth(0.92f)
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(8.dp))
+                .border(1.dp, if (sourcesFocused) FocusBorder else Color.Transparent, RoundedCornerShape(8.dp))
+                .onFocusChanged { sourcesFocused = it.isFocused }
+                .focusable()
+                .padding(8.dp)
         )
+        Spacer(modifier = Modifier.height(24.dp))
     }
 }
 
