@@ -259,8 +259,15 @@ object LetterboxdAccount {
                 val before = previous
                 previous = slugs
                 // Beim Start nur den Stand merken; danach zählen nur neu hinzugefügte Titel
-                if (before == null || !isListOwner) return@collect
-                list.filter { it.cleanSlug !in before }.forEach { card ->
+                if (before == null) return@collect
+                val added = list.filter { it.cleanSlug !in before }
+                if (added.isEmpty()) return@collect
+                if (!isListOwner) {
+                    AppLog.i(TAG, "Watchlist: ${added.size} neu, aber angemeldet als ${_username.value} – Empfehlungsliste bleibt")
+                    return@collect
+                }
+                added.forEach { card ->
+                    AppLog.i(TAG, "Watchlist: „${card.title}“ neu (${card.cleanSlug}) – trage in die Empfehlungsliste ein")
                     scope.launch {
                         // Fehler nie still schlucken: in den Einstellungen anzeigen und protokollieren
                         runCatching { addToFeaturedList(card) }.onFailure {
@@ -276,7 +283,9 @@ object LetterboxdAccount {
     private val syncMutex = Mutex()
 
     private suspend fun addToFeaturedList(card: AnimeCard) = syncMutex.withLock {
-        val (title, filmPath) = when (val lookup = LetterboxdListSync.lookupFilm(card)) {
+        val lookup = LetterboxdListSync.lookupFilm(card)
+        AppLog.i(TAG, "Letterboxd-Film zu „${card.title}“: $lookup")
+        val (title, filmPath) = when (lookup) {
             LetterboxdListSync.Lookup.NotAMovie -> return@withLock // Letterboxd kennt nur Filme
             is LetterboxdListSync.Lookup.NotFound -> {
                 AppLog.w(TAG, "„${lookup.title}“: kein Letterboxd-Film gefunden")
@@ -286,7 +295,9 @@ object LetterboxdAccount {
             is LetterboxdListSync.Lookup.Found -> lookup.title to lookup.path
         }
 
-        val outcome = LetterboxdListSync.parseResult(runInLetterboxd(LetterboxdListSync.addScript(filmPath))?.toString(), title)
+        val raw = runInLetterboxd(LetterboxdListSync.addScript(filmPath))?.toString()
+        AppLog.i(TAG, "Antwort von Letterboxd: ${raw ?: "keine (Zeitüberschreitung)"}")
+        val outcome = LetterboxdListSync.parseResult(raw, title)
         _status.value = LetterboxdListSync.message(outcome, title)
         AppLog.i(TAG, "Empfehlungsliste: ${_status.value}")
         when (outcome) {
@@ -303,7 +314,7 @@ object LetterboxdAccount {
     private suspend fun runInLetterboxd(script: String): JsonObject? {
         val id = UUID.randomUUID().toString()
         val result = CompletableDeferred<JsonObject?>()
-        var started = false
+        var starts = 0
         val wrapped = """
             ($script).then(function(r) {
                 window.cefQuery({ request: JSON.stringify({ id: '$id', result: r }), onSuccess: function() {}, onFailure: function() {} });
@@ -313,8 +324,11 @@ object LetterboxdAccount {
         """.trimIndent()
         val listener = object : ChromiumStreamExtractor.PageListener {
             override fun onPageLoaded(browser: CefBrowser, url: String) {
-                if (started || "letterboxd.com" !in url) return
-                started = true
+                AppLog.i(TAG, "Unsichtbare Letterboxd-Seite geladen: $url")
+                // Letterboxd lädt die Seite nach dem Öffnen manchmal ein zweites Mal – das verwirft ein
+                // schon laufendes Skript. Darum nach jedem Laden (bis zur Antwort) erneut starten;
+                // doppelte Einträge verhindert das Skript selbst.
+                if (result.isCompleted || "letterboxd.com" !in url || ++starts > 4) return
                 browser.executeJavaScript(wrapped, url, 0)
             }
 

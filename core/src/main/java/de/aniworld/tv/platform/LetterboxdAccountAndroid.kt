@@ -171,20 +171,21 @@ object LetterboxdAccountAndroid {
         val web = WebView(appContext)
         configure(web)
         web.addJavascriptInterface(ResultBridge(result), "AbiLetterboxd")
-        var started = false
+        var starts = 0
         var sawChallenge = false
         web.webViewClient = object : WebViewClient() {
             override fun onPageFinished(view: WebView, url: String?) {
-                if (started || url?.contains("letterboxd.com") != true) return
+                if (result.isCompleted || url?.contains("letterboxd.com") != true) return
                 // Zeigt Cloudflare erst eine Sicherheitsprüfung, gibt es noch kein "person"-Objekt:
-                // dann auf die nächste Seite warten (die Prüfung leitet nach Erfolg selbst weiter)
+                // dann auf die nächste Seite warten (die Prüfung leitet nach Erfolg selbst weiter).
+                // Lädt Letterboxd die Seite ein zweites Mal, wird das Skript dort erneut gestartet.
                 view.evaluateJavascript("typeof window.person") { type ->
-                    if (started) return@evaluateJavascript
+                    if (result.isCompleted) return@evaluateJavascript
                     if (type?.contains("object") != true) {
                         sawChallenge = true
                         return@evaluateJavascript
                     }
-                    started = true
+                    if (++starts > 4) return@evaluateJavascript
                     view.evaluateJavascript(
                         "($script).then(function(r){AbiLetterboxd.done(JSON.stringify(r));})" +
                             ".catch(function(e){AbiLetterboxd.done(JSON.stringify({ok:false,error:String(e)}));});",
