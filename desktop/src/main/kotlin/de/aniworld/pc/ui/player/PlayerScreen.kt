@@ -67,6 +67,7 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.draw.alpha
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -152,6 +153,9 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
 
     var controlsVisible by remember { mutableStateOf(true) }
     var sidePanel by remember { mutableStateOf<PlayerPanel?>(null) }
+    // Zuletzt gemessene Höhe der Leisten (bleibt beim Ausblenden als schwarzer Platz stehen)
+    var topBarHeightPx by remember { mutableStateOf(0) }
+    var bottomBarHeightPx by remember { mutableStateOf(0) }
     var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pairingNotice by CastPairing.notice.collectAsState()
 
@@ -403,8 +407,14 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             .fillMaxSize()
             .background(Color.Black)
     ) {
+        // Leisten ausblenden, ihren Platz aber schwarz freihalten: Ändert das Videobild seine Größe,
+        // füllt Windows die neue Fläche kurz weiß, bis VLC dort zeichnet – das wirkte wie Flackern.
         if (showBars) {
-            PlayerTopBar(onClose = onClose)
+            Box(modifier = Modifier.onSizeChanged { topBarHeightPx = it.height }) {
+                PlayerTopBar(onClose = onClose)
+            }
+        } else {
+            Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { topBarHeightPx.toDp() }))
         }
 
         Row(
@@ -491,14 +501,18 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         }
 
         if (showBars) {
-            PlayerBottomBar(
-                controller = controller,
-                isFullscreen = isFullscreen,
-                activePanel = sidePanel,
-                onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
-                onToggleFullscreen = { toggleFullscreen() },
-                onInteraction = { keepControlsAlive() }
-            )
+            Box(modifier = Modifier.onSizeChanged { bottomBarHeightPx = it.height }) {
+                PlayerBottomBar(
+                    controller = controller,
+                    isFullscreen = isFullscreen,
+                    activePanel = sidePanel,
+                    onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
+                    onToggleFullscreen = { toggleFullscreen() },
+                    onInteraction = { keepControlsAlive() }
+                )
+            }
+        } else {
+            Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { bottomBarHeightPx.toDp() }))
         }
     }
 }

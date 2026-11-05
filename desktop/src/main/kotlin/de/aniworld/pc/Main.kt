@@ -106,11 +106,9 @@ fun main() {
 
     application {
         val windowState = rememberWindowState(placement = WindowPlacement.Maximized, size = DpSize(1440.dp, 900.dp))
-        val closeApp = {
-            chromium.dispose()
-            VlcSupport.release()
-            exitApplication()
-        }
+        // Erst das Fenster schließen (dabei gibt der Player seinen VLC-Player frei), danach VLC und
+        // Chromium aufräumen – andersherum blieb die App beim Schließen während der Wiedergabe hängen
+        val closeApp = { exitApplication() }
         Window(
             onCloseRequest = closeApp,
             title = "ABI TV",
@@ -124,6 +122,12 @@ fun main() {
         ) {
             LaunchedEffect(Unit) {
                 window.minimumSize = java.awt.Dimension(1024, 640)
+                // Dunkler Fensterhintergrund: beim Umbau des Layouts (z. B. Leisten im Vollbild-Player
+                // aus-/einblenden) blitzte sonst für einen Moment der weiße Standard-Hintergrund auf
+                val dark = java.awt.Color(0x0B, 0x0E, 0x14)
+                window.background = dark
+                window.contentPane.background = dark
+                window.rootPane.background = dark
                 WindowChrome.install(window)
             }
             CompositionLocalProvider(LocalWindowState provides windowState, LocalComposeWindow provides window) {
@@ -146,6 +150,14 @@ fun main() {
             }
         }
     }
+    // Aufräumen darf das Beenden nie blockieren: spätestens nach 5 s hart beenden (Daten vorher sichern)
+    Thread {
+        Thread.sleep(5_000)
+        runCatching { mainStore.flush() }
+        Runtime.getRuntime().halt(0)
+    }.apply { isDaemon = true }.start()
+    runCatching { chromium.dispose() }
+    runCatching { VlcSupport.release() }
     // JCEF- und Netzwerk-Threads würden die JVM sonst am Leben halten
     exitProcess(0)
 }
