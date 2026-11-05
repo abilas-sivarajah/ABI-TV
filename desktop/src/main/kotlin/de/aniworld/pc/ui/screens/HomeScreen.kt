@@ -105,6 +105,7 @@ import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.pc.ui.compat.loadCachedImage
 import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.pc.platform.withoutStoAnime
 import de.aniworld.pc.platform.StoAnimeFilter
 import de.aniworld.tv.cast.CastPairing
@@ -973,6 +974,61 @@ private val heroDetailCache = java.util.concurrent.ConcurrentHashMap<String, Ani
 /** TMDB-Bilder je Titel (zusätzlich speichert [TmdbArtwork] sie auf der Platte). */
 private val heroArtworkCache = java.util.concurrent.ConcurrentHashMap<String, TmdbArtwork.Artwork>()
 
+/** TMDB-Treffer zu einem Titel (aus dem Zwischenspeicher oder neu gesucht). */
+private suspend fun loadTitleArtwork(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Artwork? {
+    heroArtworkCache[anime.cleanSlug]?.let { return it }
+    if (!TmdbArtwork.isConfigured) return null
+    val title = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
+    val year = detail?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
+    return TmdbArtwork.find(title, year, guessTmdbKind(anime, detail))?.also { heroArtworkCache[anime.cleanSlug] = it }
+}
+
+/** Letterboxd-Bewertung, sobald ein Film bei TMDB gefunden ist (Serien/Anime: keine). */
+@Composable
+private fun rememberLetterboxdRating(artwork: TmdbArtwork.Artwork?): LetterboxdRatings.Rating? {
+    val movieId = artwork?.tmdbId?.takeIf { artwork.kind == TmdbArtwork.Kind.MOVIE }
+    var rating by remember(movieId) { mutableStateOf<LetterboxdRatings.Rating?>(null) }
+    LaunchedEffect(movieId) {
+        if (movieId != null) rating = LetterboxdRatings.rating(movieId)
+    }
+    return rating
+}
+
+private val LetterboxdGreen = Color(0xFF00E054)
+
+/** Kleines Kästchen "Letterboxd ★ 3,9 ↗" – Klick öffnet die Filmseite im Browser. */
+@Composable
+private fun LetterboxdChip(rating: LetterboxdRatings.Rating, large: Boolean = false) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    var focused by remember { mutableStateOf(false) }
+    val shape = RoundedCornerShape(6.dp)
+    Row(
+        modifier = Modifier
+            .clip(shape)
+            .background(if (hovered || focused) LetterboxdGreen.copy(alpha = 0.22f) else BgElevated)
+            .border(1.dp, if (focused) FocusBorder else LetterboxdGreen.copy(alpha = 0.45f), shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null) {
+                runCatching { java.awt.Desktop.getDesktop().browse(java.net.URI(rating.url)) }
+            }
+            .padding(horizontal = if (large) 12.dp else 10.dp, vertical = if (large) 5.dp else 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(modifier = Modifier.size(7.dp).clip(CircleShape).background(LetterboxdGreen))
+        Spacer(modifier = Modifier.width(6.dp))
+        Text(
+            text = "Letterboxd" + (rating.shortLabel?.let { " ★ $it" } ?: "") + "  ↗",
+            color = TextPrimary,
+            fontSize = if (large) 13.sp else 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1
+        )
+    }
+}
+
 /** Wahrscheinlicher Typ für die TMDB-Suche; der andere wird notfalls auch probiert. */
 private fun guessTmdbKind(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Kind = when {
     anime.isSto -> TmdbArtwork.Kind.TV
@@ -1319,16 +1375,24 @@ private fun HeroBanner(
                     detail?.years?.takeIf { it.isNotBlank() }?.let { add(it) }
                     detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
                 }
-                if (meta.isNotEmpty()) {
+                val letterboxd = rememberLetterboxdRating(artwork)
+                if (meta.isNotEmpty() || letterboxd != null) {
                     Spacer(modifier = Modifier.height(10.dp))
-                    Text(
-                        text = meta.joinToString("  •  "),
-                        color = TextPrimary.copy(alpha = 0.9f),
-                        fontSize = 15.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (meta.isNotEmpty()) {
+                            Text(
+                                text = meta.joinToString("  •  "),
+                                color = TextPrimary.copy(alpha = 0.9f),
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f, fill = false)
+                            )
+                            Spacer(modifier = Modifier.width(12.dp))
+                        }
+                        letterboxd?.let { LetterboxdChip(it, large = true) }
+                    }
                 }
 
                 detail?.description?.takeIf { it.isNotBlank() }?.let { description ->
@@ -1508,11 +1572,15 @@ private fun TitleInfoPanel(
 ) {
     val slug = anime.cleanSlug
     var detail by remember(slug) { mutableStateOf(heroDetailCache[slug]) }
+    var artwork by remember(slug) { mutableStateOf(heroArtworkCache[slug]) }
     LaunchedEffect(slug) {
         if (detail == null) {
             detail = runCatching { fetchHeroDetail(slug) }.getOrNull()?.also { heroDetailCache[slug] = it }
         }
+        // TMDB-Treffer (für die Letterboxd-Bewertung von Filmen)
+        if (artwork == null) artwork = loadTitleArtwork(anime, detail)
     }
+    val letterboxd = rememberLetterboxdRating(artwork)
 
     val playTitle = LocalPlayTitle.current
     val scope = rememberCoroutineScope()
@@ -1583,7 +1651,8 @@ private fun TitleInfoPanel(
                     detail?.ageRating?.takeIf { it.isNotBlank() }?.let { add(if (it.all(Char::isDigit)) "FSK $it" else it) }
                 }
                 if (chips.isNotEmpty()) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                        letterboxd?.let { LetterboxdChip(it) }
                         chips.forEach { chip ->
                             Box(
                                 modifier = Modifier

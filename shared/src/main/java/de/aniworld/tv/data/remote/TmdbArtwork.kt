@@ -21,7 +21,13 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object TmdbArtwork {
 
-    data class Artwork(val backdropUrl: String?, val logoUrl: String?)
+    /** [tmdbId]/[kind]: der gefundene TMDB-Eintrag (z. B. für die Letterboxd-Bewertung eines Films). */
+    data class Artwork(
+        val backdropUrl: String?,
+        val logoUrl: String?,
+        val tmdbId: Int? = null,
+        val kind: Kind? = null
+    )
 
     enum class Kind(val path: String) { MOVIE("movie"), TV("tv") }
 
@@ -55,7 +61,13 @@ object TmdbArtwork {
 
     // ------------------- Zwischenspeicher auf der Platte -------------------
 
-    private data class Entry(val backdrop: String?, val logo: String?, val time: Long)
+    private data class Entry(
+        val backdrop: String?,
+        val logo: String?,
+        val time: Long,
+        val id: Int? = null,
+        val kind: String? = null
+    )
 
     private val gson = Gson()
     private val cache: ConcurrentHashMap<String, Entry> by lazy {
@@ -93,15 +105,18 @@ object TmdbArtwork {
         val key = "${kind ?: "any"}|${normalize(title)}|${year ?: ""}"
         cache[key]?.let { entry ->
             val isMiss = entry.backdrop == null && entry.logo == null
-            if (!isMiss) return Artwork(entry.backdrop, entry.logo)
-            if (System.currentTimeMillis() - entry.time < MISS_RETRY_MS) return null
+            // Ältere Einträge ohne TMDB-Nummer einmal neu suchen
+            if (!isMiss && entry.id != null) {
+                return Artwork(entry.backdrop, entry.logo, entry.id, entry.kind?.let { k -> Kind.entries.firstOrNull { it.name == k } })
+            }
+            if (isMiss && System.currentTimeMillis() - entry.time < MISS_RETRY_MS) return null
         }
         return withContext(Dispatchers.IO) {
             val result = runCatching { lookup(title, year, kind) }
                 .onFailure { AppLog.w(TAG, "Suche nach \"$title\" fehlgeschlagen: ${it.message}") }
                 // Netzwerkfehler nicht als "nicht gefunden" merken
                 .getOrElse { return@withContext null }
-            cache[key] = Entry(result?.backdropUrl, result?.logoUrl, System.currentTimeMillis())
+            cache[key] = Entry(result?.backdropUrl, result?.logoUrl, System.currentTimeMillis(), result?.tmdbId, result?.kind?.name)
             saveCache()
             result
         }
@@ -132,7 +147,9 @@ object TmdbArtwork {
             AppLog.i(TAG, "\"$title\" → ${k.path}/$id (Hintergrund: ${backdropPath != null}, Logo: ${logoPath != null})")
             return Artwork(
                 backdropUrl = backdropPath?.let { "$IMAGES/$backdropSize$it" },
-                logoUrl = logoPath?.let { "$IMAGES/w500$it" }
+                logoUrl = logoPath?.let { "$IMAGES/w500$it" },
+                tmdbId = id,
+                kind = k
             )
         }
         return null

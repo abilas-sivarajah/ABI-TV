@@ -39,6 +39,7 @@ import de.aniworld.pc.ui.theme.BgPrimary
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -77,6 +78,7 @@ fun main() {
     val chromium = ChromiumStreamExtractor(File(AppDirs.cacheDir, "jcef"))
     StreamResolver.browserExtractor = chromium
     TmdbArtwork.configure(tmdbApiKey(), AppDirs.cacheDir)
+    LetterboxdRatings.configure(AppDirs.cacheDir)
     chromium.prepareInBackground(backgroundScope)
     PcCastManager.start()
     backgroundScope.launch { AppDirs.pruneImageCache() }
