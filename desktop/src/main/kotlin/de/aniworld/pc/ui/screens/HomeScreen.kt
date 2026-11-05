@@ -109,6 +109,7 @@ import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.pc.ui.compat.loadCachedImage
 import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.tv.data.remote.KeylessArtwork
 import de.aniworld.tv.data.remote.LetterboxdRatings
 import de.aniworld.pc.platform.LetterboxdUsers
 import de.aniworld.tv.data.remote.LetterboxdLists
@@ -979,19 +980,35 @@ private val heroArtworkCache = java.util.concurrent.ConcurrentHashMap<String, Tm
 /** TMDB-Treffer zu einem Titel (aus dem Zwischenspeicher oder neu gesucht). */
 private suspend fun loadTitleArtwork(anime: AnimeCard, detail: AnimeDetail?): TmdbArtwork.Artwork? {
     heroArtworkCache[anime.cleanSlug]?.let { return it }
-    if (!TmdbArtwork.isConfigured) return null
     val title = detail?.title?.takeIf { it.isNotBlank() } ?: anime.title
     val year = detail?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
-    return TmdbArtwork.find(title, year, guessTmdbKind(anime, detail))?.also { heroArtworkCache[anime.cleanSlug] = it }
+    val found = if (TmdbArtwork.isConfigured) {
+        TmdbArtwork.find(title, year, guessTmdbKind(anime, detail))
+    } else {
+        // Ohne TMDB-Schlüssel: TVmaze (Serien), Kitsu/AniList (Anime), Wikidata + Letterboxd (Filme)
+        val kind = when {
+            titleKindLabel(anime, detail) == "Anime" -> KeylessArtwork.Kind.ANIME
+            guessTmdbKind(anime, detail) == TmdbArtwork.Kind.MOVIE -> KeylessArtwork.Kind.MOVIE
+            else -> KeylessArtwork.Kind.TV
+        }
+        KeylessArtwork.find(title, year, kind)
+    }
+    return found?.also { heroArtworkCache[anime.cleanSlug] = it }
 }
 
-/** Letterboxd-Bewertung, sobald ein Film bei TMDB gefunden ist (Serien/Anime: keine). */
+/** Letterboxd-Bewertung eines Films (über TMDB- oder IMDb-Nummer); Serien/Anime: keine. */
 @Composable
 private fun rememberLetterboxdRating(artwork: TmdbArtwork.Artwork?): LetterboxdRatings.Rating? {
-    val movieId = artwork?.tmdbId?.takeIf { artwork.kind == TmdbArtwork.Kind.MOVIE }
-    var rating by remember(movieId) { mutableStateOf<LetterboxdRatings.Rating?>(null) }
-    LaunchedEffect(movieId) {
-        if (movieId != null) rating = LetterboxdRatings.rating(movieId)
+    val isMovie = artwork?.kind == TmdbArtwork.Kind.MOVIE
+    val movieId = artwork?.tmdbId?.takeIf { isMovie }
+    val imdbId = artwork?.imdbId?.takeIf { isMovie }
+    var rating by remember(movieId, imdbId) { mutableStateOf<LetterboxdRatings.Rating?>(null) }
+    LaunchedEffect(movieId, imdbId) {
+        rating = when {
+            movieId != null -> LetterboxdRatings.rating(movieId)
+            imdbId != null -> LetterboxdRatings.byImdb(imdbId)
+            else -> null
+        }
     }
     return rating
 }
@@ -1204,12 +1221,7 @@ private fun HeroBanner(
             delay(loadDelayMs)
             detail = runCatching { fetchHeroDetail(slug) }.getOrNull()?.also { heroDetailCache[slug] = it }
         }
-        if (artwork == null && TmdbArtwork.isConfigured) {
-            val current = detail
-            val title = current?.title?.takeIf { it.isNotBlank() } ?: anime.title
-            val year = current?.years?.let { Regex("""(19|20)\d{2}""").find(it)?.value?.toInt() }
-            artwork = TmdbArtwork.find(title, year, guessTmdbKind(anime, current))?.also { heroArtworkCache[slug] = it }
-        }
+        if (artwork == null) artwork = loadTitleArtwork(anime, detail)
     }
 
     // Hintergrund: TMDB, sonst das Bild der Seite – aber nur, wenn es wirklich querformatig ist.
@@ -3305,7 +3317,8 @@ private fun SettingsTabContent(
                 "Bilder im Titelbild: The Movie Database (TMDB). Dieses Produkt nutzt die TMDB-API, " +
                     "ist aber nicht von TMDB unterstützt oder zertifiziert."
             } else {
-                "Bilder von TMDB sind nicht eingerichtet (kein API-Schlüssel)."
+                "Bilder im Titelbild: TVmaze (Serien, Lizenz CC BY-SA), Kitsu und AniList (Anime), " +
+                    "Letterboxd (Filme, über Wikidata). Bewertungen: Letterboxd."
             },
             color = TextMuted,
             fontSize = 12.sp,

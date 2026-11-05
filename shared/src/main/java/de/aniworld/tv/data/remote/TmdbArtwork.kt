@@ -26,7 +26,9 @@ object TmdbArtwork {
         val backdropUrl: String?,
         val logoUrl: String?,
         val tmdbId: Int? = null,
-        val kind: Kind? = null
+        val kind: Kind? = null,
+        /** IMDb-Nummer (aus der Suche ohne Schlüssel, siehe KeylessArtwork) – für die Letterboxd-Bewertung. */
+        val imdbId: String? = null
     )
 
     enum class Kind(val path: String) { MOVIE("movie"), TV("tv") }
