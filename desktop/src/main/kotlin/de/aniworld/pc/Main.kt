@@ -24,6 +24,7 @@ import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.pc.platform.AppDirs
 import de.aniworld.pc.platform.ChromiumStreamExtractor
 import de.aniworld.pc.platform.JsonFileStore
+import de.aniworld.pc.platform.StoAnimeFilter
 import de.aniworld.pc.platform.VlcSupport
 import de.aniworld.pc.platform.WindowChrome
 import de.aniworld.pc.ui.DesktopApp
@@ -79,6 +80,8 @@ fun main() {
     chromium.prepareInBackground(backgroundScope)
     PcCastManager.start()
     backgroundScope.launch { AppDirs.pruneImageCache() }
+    // Liste der Anime auf S.to, damit der Serien-Bereich ohne Anime auskommt
+    backgroundScope.launch { StoAnimeFilter.load() }
 
     // Auch bei exitProcess (z. B. nach dem Update) Merkliste & Verlauf sicher schreiben
     Runtime.getRuntime().addShutdownHook(Thread {

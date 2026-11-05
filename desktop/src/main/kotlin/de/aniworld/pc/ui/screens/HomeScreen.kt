@@ -104,6 +104,8 @@ import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.pc.ui.compat.loadCachedImage
 import de.aniworld.tv.data.remote.TmdbArtwork
+import de.aniworld.pc.platform.withoutStoAnime
+import de.aniworld.pc.platform.StoAnimeFilter
 import de.aniworld.tv.cast.CastPairing
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.tv.data.local.LocalStorage
@@ -595,7 +597,7 @@ private fun StartTabContent(
             val movies = async { runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList()) }
             val series = async { runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList()) }
             uiState.startTopMovies = movies.await().distinctBy { it.cleanSlug }.take(24)
-            uiState.startPopularSeries = series.await().distinctBy { it.cleanSlug }.take(24)
+            uiState.startPopularSeries = series.await().distinctBy { it.cleanSlug }
         }
         uiState.startLoaded = uiState.startTopMovies.isNotEmpty() || uiState.startPopularSeries.isNotEmpty()
         isLoading = false
@@ -609,8 +611,13 @@ private fun StartTabContent(
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
 
     // Titelbild: je 2 zufällige Filme, Serien und Animes, immer abwechselnd
-    val heroItems = remember(uiState.startTopMovies, uiState.startPopularSeries, popularAnime) {
-        interleaveHeroPicks(listOf(uiState.startTopMovies, uiState.startPopularSeries, popularAnime), perSource = 2)
+    // Serien ohne Anime (die stehen unter "Beliebte Anime")
+    val stoAnimeSlugs by StoAnimeFilter.slugs.collectAsState()
+    val popularSeries = remember(uiState.startPopularSeries, stoAnimeSlugs) {
+        uiState.startPopularSeries.withoutStoAnime(stoAnimeSlugs).take(24)
+    }
+    val heroItems = remember(uiState.startTopMovies, popularSeries, popularAnime) {
+        interleaveHeroPicks(listOf(uiState.startTopMovies, popularSeries, popularAnime), perSource = 2)
     }
 
     // Erst die Liste aufbauen, wenn es etwas zu zeigen gibt. Sonst bliebe sie an der Lade-Zeile hängen,
@@ -667,7 +674,7 @@ private fun StartTabContent(
 
         val rows = listOf(
             Triple("start_movies", "🔥 Beliebte Top-Filme auf Filmpalast", uiState.startTopMovies),
-            Triple("start_series", "🍿 Beliebte Serien auf S.to", uiState.startPopularSeries),
+            Triple("start_series", "🍿 Beliebte Serien auf S.to", popularSeries),
             Triple("start_anime", "⭐ Beliebte Anime auf AniWorld", popularAnime)
         )
         rows.filter { it.third.isNotEmpty() }.forEach { (key, title, items) ->
@@ -1755,13 +1762,24 @@ private fun SeriesTabContent(
         }
     }
 
+    // Anime gehören in den Anime-Reiter: hier herausfiltern
+    val stoAnimeSlugs by StoAnimeFilter.slugs.collectAsState()
+    val seriesSections = remember(uiState.seriesOverviewSections, stoAnimeSlugs) {
+        uiState.seriesOverviewSections
+            .map { it.copy(items = it.items.withoutStoAnime(stoAnimeSlugs)) }
+            .filter { it.items.isNotEmpty() }
+    }
+    val seriesItems = remember(uiState.seriesCategoryItems, stoAnimeSlugs) {
+        uiState.seriesCategoryItems.withoutStoAnime(stoAnimeSlugs)
+    }
+
     CatalogBrowser(
         // Nur echte Genres; "Beliebt"/"Neu" stecken schon in der Übersicht
         genres = SerienStreamScraper.CATEGORIES.filter { "/genre/" in it.first },
         selectedCategoryPath = selectedCategoryPath,
         onSelectCategory = { uiState.seriesCategoryPath = it },
-        overviewSections = uiState.seriesOverviewSections,
-        categoryItems = uiState.seriesCategoryItems,
+        overviewSections = seriesSections,
+        categoryItems = seriesItems,
         isLoading = isLoading ||
             (selectedCategoryPath != "OVERVIEW" && uiState.seriesLoadedPath != selectedCategoryPath),
         loadingText = "Lade Serien von S.to...",
