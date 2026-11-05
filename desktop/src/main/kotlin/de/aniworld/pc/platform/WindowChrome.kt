@@ -6,6 +6,7 @@ import com.sun.jna.platform.win32.WinDef
 import com.sun.jna.platform.win32.WinUser
 import de.aniworld.tv.platform.AppLog
 import java.awt.Frame
+import java.awt.GraphicsEnvironment
 import java.awt.Rectangle
 import java.awt.Toolkit
 import java.awt.event.ComponentAdapter
@@ -34,14 +35,21 @@ object WindowChrome {
         if (isWindows) allowTaskbarMinimize(frame)
     }
 
-    /** Arbeitsbereich des aktuellen Bildschirms (ohne Taskleiste), relativ zu dessen Ecke. */
+    /**
+     * Arbeitsbereich des aktuellen Bildschirms (ohne Taskleiste). Windows liest die Position relativ zum
+     * Hauptbildschirm: Auf dem Hauptbildschirm ist das dessen Ecke (0,0), auf einem zweiten Bildschirm
+     * muss sie absolut angegeben werden – sonst landete das maximierte Fenster auf dem Hauptbildschirm.
+     */
     private fun updateMaximizedBounds(frame: Frame) {
         val config = frame.graphicsConfiguration ?: return
         val screen = config.bounds
         val insets = Toolkit.getDefaultToolkit().getScreenInsets(config)
+        val isPrimary = config.device == GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
+        val originX = if (isPrimary) 0 else screen.x
+        val originY = if (isPrimary) 0 else screen.y
         val target = Rectangle(
-            insets.left,
-            insets.top,
+            originX + insets.left,
+            originY + insets.top,
             screen.width - insets.left - insets.right,
             screen.height - insets.top - insets.bottom
         )
