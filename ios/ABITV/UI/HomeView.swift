@@ -584,15 +584,26 @@ public struct HomeView: View {
             popularLists = cached
             return
         }
-        do {
-            // Eine mehr laden, falls die eigene Empfehlungsliste darunter ist (sie steht ohnehin oben)
-            let lists = try await LetterboxdLists.popularLists(limit: 5)
-                .filter { $0.path != LetterboxdLists.FeaturedList.path }
-            let shown = Array(lists.prefix(4))
-            LetterboxdSessionCache.popularLists = shown
-            popularLists = shown
-        } catch {
-            popularListsError = "Letterboxd-Listen nicht erreichbar."
+        popularListsError = nil
+        // Ein Fehlschlag wird einmal kurz danach wiederholt (Letterboxd antwortet nicht immer sofort)
+        for attempt in 0..<2 {
+            do {
+                // Eine mehr laden, falls die eigene Empfehlungsliste darunter ist (sie steht ohnehin oben)
+                let lists = try await LetterboxdLists.popularLists(limit: 5)
+                    .filter { $0.path != LetterboxdLists.FeaturedList.path }
+                let shown = Array(lists.prefix(4))
+                LetterboxdSessionCache.popularLists = shown
+                popularLists = shown
+                return
+            } catch {
+                // Abgebrochen, weil der Reiter gewechselt wurde: kein Fehler, beim nächsten Öffnen neu laden
+                if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                if attempt == 0 {
+                    try? await Task.sleep(nanoseconds: 1_500_000_000)
+                    continue
+                }
+                popularListsError = "Letterboxd-Listen nicht erreichbar."
+            }
         }
     }
 
