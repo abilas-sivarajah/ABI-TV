@@ -107,6 +107,7 @@ public final class LocalStorage: ObservableObject {
     private static let keyIgnoredUpdateTag = "ignored_update_tag"
     private static let keyUpdateSnoozedUntil = "update_snoozed_until"
     private static let keyCustomM3uUrl = "custom_m3u_url_v1"
+    private static let keyLetterboxdUsers = "letterboxd_users_v1"
 
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -115,6 +116,8 @@ public final class LocalStorage: ObservableObject {
     @Published public private(set) var watchlist: [AnimeCard] = []
     @Published public private(set) var progressList: [WatchProgressEntry] = []
     @Published public private(set) var watchedEpisodes: Set<String> = []
+    /// Letterboxd-Benutzer, deren Watchlists im Reiter "Watchlist" erscheinen.
+    @Published public private(set) var letterboxdUsers: [String] = []
 
     public init(store: KeyValueStore = UserDefaultsStore()) {
         self.store = store
@@ -130,6 +133,26 @@ public final class LocalStorage: ObservableObject {
         watchlist = readWatchlist()
         progressList = readProgressList()
         watchedEpisodes = readWatchedEpisodes()
+        letterboxdUsers = (store.getString(Self.keyLetterboxdUsers, default: "[]")?.data(using: .utf8))
+            .flatMap { try? decoder.decode([String].self, from: $0) } ?? []
+    }
+
+    // ------------------- Letterboxd-Benutzer -------------------
+
+    public func addLetterboxdUser(_ name: String) {
+        guard !letterboxdUsers.contains(name) else { return }
+        saveLetterboxdUsers(letterboxdUsers + [name])
+    }
+
+    public func removeLetterboxdUser(_ name: String) {
+        saveLetterboxdUsers(letterboxdUsers.filter { $0 != name })
+    }
+
+    private func saveLetterboxdUsers(_ list: [String]) {
+        letterboxdUsers = list
+        if let data = try? encoder.encode(list), let text = String(data: data, encoding: .utf8) {
+            store.putString(Self.keyLetterboxdUsers, value: text)
+        }
     }
 
     // ------------------- Bevorzugte Sprache -------------------
