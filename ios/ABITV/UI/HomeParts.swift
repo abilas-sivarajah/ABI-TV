@@ -510,19 +510,31 @@ struct LetterboxdFilmsRow: View {
     @MainActor private func loadAll() async {
         var list = LetterboxdSessionCache.films[cacheKey]
         if list == nil {
-            do {
-                let loaded = try await load()
-                LetterboxdSessionCache.films[cacheKey] = loaded
-                list = loaded
-            } catch LetterboxdLists.ListError.userNotFound {
-                error = "Diesen Letterboxd-Benutzer gibt es nicht."
-                return
-            } catch {
-                self.error = "Letterboxd nicht erreichbar."
-                return
+            // Ein Fehlschlag wird einmal kurz danach wiederholt (Letterboxd antwortet nicht immer sofort)
+            for attempt in 0..<2 {
+                do {
+                    let loaded = try await load()
+                    LetterboxdSessionCache.films[cacheKey] = loaded
+                    list = loaded
+                    break
+                } catch LetterboxdLists.ListError.userNotFound {
+                    error = "Diesen Letterboxd-Benutzer gibt es nicht."
+                    return
+                } catch {
+                    // Abgebrochen, weil die Reihe gerade neu lädt (z. B. neuer Film in der Liste): kein Fehler
+                    if Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled { return }
+                    if attempt == 0 {
+                        try? await Task.sleep(nanoseconds: 1_500_000_000)
+                        continue
+                    }
+                    // Bereits geladene Filme bleiben stehen; nur ohne sie gibt es einen Hinweis
+                    if films == nil { self.error = "Letterboxd nicht erreichbar." }
+                    return
+                }
             }
         }
         guard let list else { return }
+        error = nil
         films = list
         matches = [:]
         checked = 0

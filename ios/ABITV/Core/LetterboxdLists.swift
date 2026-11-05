@@ -120,7 +120,15 @@ public enum LetterboxdLists {
         var films: [Film] = []
         for page in 1...maxPages {
             let pagePath = page == 1 ? path : "\(path.hasSuffix("/") ? String(path.dropLast()) : path)/page/\(page)/"
-            let (code, html) = try await fetchHtml(pagePath)
+            // Ab Seite 2 beendet ein Fehler nur das Blättern, die erste Seite bleibt erhalten
+            let response: (Int, String)
+            do {
+                response = try await fetchHtml(pagePath)
+            } catch {
+                if page == 1 { throw error }
+                break
+            }
+            let (code, html) = response
             if code != 200 {
                 if page == 1 { throw ListError.http(code) }
                 break
