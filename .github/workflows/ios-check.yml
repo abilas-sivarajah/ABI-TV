@@ -1,0 +1,68 @@
+name: iOS Test-Build
+
+# Baut nur die iPhone-App (kein Release), wenn auf einen "ios-"-Branch hochgeladen wird.
+# Fehler erscheinen als Hinweise am Lauf; die IPA liegt als Artefakt zum Herunterladen bereit.
+on:
+  push:
+    branches:
+      - 'ios-**'
+  workflow_dispatch:
+
+jobs:
+  ios:
+    name: iOS bauen
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Swift-Tests (Kern)
+        working-directory: ios
+        shell: bash
+        run: |
+          set -o pipefail
+          swift test 2>&1 | tee test.log || {
+            grep -E "error:" test.log | sort -u | head -60 | sed 's/^/::error::/'
+            exit 1
+          }
+
+      - name: Xcode-Projekt erzeugen
+        working-directory: ios
+        run: |
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+          xcodegen generate
+
+      - name: App bauen (ohne Signatur)
+        working-directory: ios
+        shell: bash
+        run: |
+          set -o pipefail
+          xcodebuild clean build \
+            -project ABITV.xcodeproj \
+            -scheme ABITV \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO 2>&1 | tee build.log | grep -E "error:|warning: unused|BUILD" || true
+          if ! grep -q "BUILD SUCCEEDED" build.log; then
+            grep -E "error:" build.log | sort -u | head -60 | sed 's/^/::error::/'
+            exit 1
+          fi
+
+      - name: IPA packen
+        run: |
+          mkdir -p ios/build/Payload out
+          cp -R ios/build/Build/Products/Release-iphoneos/ABITV.app ios/build/Payload/ABITV.app
+          cd ios/build && zip -qry ../../out/ABI_iOS_test.ipa Payload
+
+      - name: IPA hochladen
+        uses: actions/upload-artifact@v4
+        with:
+          name: ABI_iOS_test
+          path: out/ABI_iOS_test.ipa
+          retention-days: 14
