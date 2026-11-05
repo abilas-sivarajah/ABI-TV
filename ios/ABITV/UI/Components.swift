@@ -44,16 +44,13 @@ public struct MobileAnimeCard: View {
                         RoundedRectangle(cornerRadius: 10)
                             .fill(AbiTheme.bgElevated)
 
-                        if let url = URL(string: anime.coverUrl), !anime.coverUrl.isEmpty {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
-                                    image
-                                        .resizable()
-                                        .scaledToFill()
-                                default:
-                                    Color.clear
-                                }
+                        CachedImage(url: anime.coverUrl) { image in
+                            if let image {
+                                image
+                                    .resizable()
+                                    .scaledToFill()
+                            } else {
+                                Color.clear
                             }
                         }
 
@@ -117,11 +114,9 @@ public struct MobileContinueCard: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: 6)
                         .fill(AbiTheme.bgElevated)
-                    if let url = URL(string: entry.coverUrl), !entry.coverUrl.isEmpty {
-                        AsyncImage(url: url) { phase in
-                            if case .success(let img) = phase {
-                                img.resizable().scaledToFill()
-                            }
+                    CachedImage(url: entry.coverUrl) { img in
+                        if let img {
+                            img.resizable().scaledToFill()
                         }
                     }
                 }

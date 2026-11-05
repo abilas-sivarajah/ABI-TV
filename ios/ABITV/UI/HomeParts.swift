@@ -72,17 +72,12 @@ struct RemoteImage: View {
     var contentMode: ContentMode = .fill
 
     var body: some View {
-        if let url, let parsed = URL(string: url), !url.isEmpty {
-            AsyncImage(url: parsed) { phase in
-                switch phase {
-                case .success(let image):
-                    image.resizable().aspectRatio(contentMode: contentMode)
-                default:
-                    AbiTheme.bgElevated
-                }
+        CachedImage(url: url) { image in
+            if let image {
+                image.resizable().aspectRatio(contentMode: contentMode)
+            } else {
+                AbiTheme.bgElevated
             }
-        } else {
-            AbiTheme.bgElevated
         }
     }
 }

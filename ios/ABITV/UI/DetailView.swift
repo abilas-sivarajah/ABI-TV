@@ -141,15 +141,14 @@ public struct DetailView: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 290)
                 .overlay(
-                    AsyncImage(url: URL(string: currentBackdrop)) { phase in
-                        switch phase {
-                        case .success(let image):
+                    CachedImage(url: currentBackdrop) { image in
+                        if let image {
                             image
                                 .resizable()
                                 .aspectRatio(contentMode: .fill)
                                 .blur(radius: 12)
                                 .opacity(0.38)
-                        default:
+                        } else {
                             AbiTheme.bgSurface
                         }
                     }
@@ -168,13 +167,12 @@ public struct DetailView: View {
             .frame(height: 290)
 
             HStack(alignment: .bottom, spacing: 16) {
-                AsyncImage(url: URL(string: currentCover)) { phase in
-                    switch phase {
-                    case .success(let image):
+                CachedImage(url: currentCover) { image in
+                    if let image {
                         image
                             .resizable()
                             .aspectRatio(contentMode: .fill)
-                    default:
+                    } else {
                         ZStack {
                             AbiTheme.bgSurface
                             Image(systemName: "film")

@@ -308,15 +308,14 @@ private struct ChannelCard: View {
                         RoundedRectangle(cornerRadius: 8)
                             .fill(Color.black.opacity(0.4))
 
-                        if let url = URL(string: channel.logoUrl), !channel.logoUrl.isEmpty {
-                            AsyncImage(url: url) { phase in
-                                switch phase {
-                                case .success(let image):
+                        if !channel.logoUrl.isEmpty {
+                            CachedImage(url: channel.logoUrl) { image in
+                                if let image {
                                     image
                                         .resizable()
                                         .scaledToFit()
                                         .padding(10)
-                                default:
+                                } else {
                                     Text(channel.name.prefix(3).uppercased())
                                         .font(.system(size: 20, weight: .heavy))
                                         .foregroundColor(AbiTheme.accentCyan)
