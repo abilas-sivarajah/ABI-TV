@@ -2394,7 +2394,7 @@ private fun SearchTabContent(
         }
         suspend fun animes() = runCatching { AniWorldScraper.searchCatalog(trimmed) }.getOrDefault(emptyList())
         suspend fun movies() = TitleSearch.filterAndRank(
-            siteSearch { FilmpalastScraper.searchMovies(it) }.filterNot { it.title.contains("*ENGLISH*", ignoreCase = true) },
+            siteSearch { FilmpalastScraper.searchMovies(it) }.filterNot { it.title.contains("*ENGLISH*", ignoreCase = true) || SingleEpisodeTitle.containsMatchIn(it.title) },
             trimmed
         )
         suspend fun series() = runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
@@ -2666,6 +2666,9 @@ private fun SearchTabContent(
         }
     }
 }
+
+/** Filmpalast führt auch einzelne Serienfolgen als "Film" ("Spider-Noir S01E08") – in der Filmsuche weglassen. */
+private val SingleEpisodeTitle = Regex("""\bS\d{1,2}E\d{1,3}\b""", RegexOption.IGNORE_CASE)
 
 /** Vorschläge der Suche pro App-Start merken (Reiterwechsel lädt nicht neu). */
 private var searchSuggestionMovies: List<AnimeCard> = emptyList()

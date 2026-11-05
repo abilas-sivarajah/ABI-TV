@@ -1,5 +1,9 @@
 package de.aniworld.tv.ui.screens
 
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.awaitAll
+import de.aniworld.tv.data.remote.TitleSearch
 import de.aniworld.tv.data.remote.LetterboxdLists
 import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.foundation.shape.CircleShape
@@ -315,6 +319,7 @@ fun HomeScreen(
                 MainNavTab.SEARCH -> SearchTabContent(
                     uiState = uiState,
                     watchlist = watchlist,
+                    animeSections = sections,
                     onOpenAnime = onOpenAnime
                 )
 
@@ -1284,6 +1289,7 @@ private fun CatalogEmpty(text: String, onRetry: () -> Unit) {
 private fun SearchTabContent(
     uiState: HomeUiState,
     watchlist: List<AnimeCard>,
+    animeSections: List<CatalogSection>,
     onOpenAnime: (AnimeCard) -> Unit
 ) {
     val query = uiState.searchQuery
@@ -1291,6 +1297,42 @@ private fun SearchTabContent(
     val searchScope = uiState.searchScope
     var isSearching by remember { mutableStateOf(false) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    val stoAnimeSlugs by StoAnimeFilter.slugs.collectAsState()
+
+    // ---------- Vorschläge bei leerer Suche: zufällige Titel des Reiters ----------
+    var suggestionMovies by remember { mutableStateOf(searchSuggestionMovies) }
+    var suggestionSeries by remember { mutableStateOf(searchSuggestionSeries) }
+    LaunchedEffect(Unit) {
+        coroutineScope {
+            if (suggestionMovies.isEmpty()) launch {
+                val loaded = uiState.startTopMovies.ifEmpty {
+                    runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList())
+                } + uiState.moviesOverviewSections.flatMap { it.items }
+                suggestionMovies = loaded.distinctBy { it.cleanSlug }
+                searchSuggestionMovies = suggestionMovies
+            }
+            if (suggestionSeries.isEmpty()) launch {
+                val loaded = uiState.startPopularSeries.ifEmpty {
+                    runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList())
+                } + uiState.seriesOverviewSections.flatMap { it.items }
+                suggestionSeries = loaded.distinctBy { it.cleanSlug }
+                searchSuggestionSeries = suggestionSeries
+            }
+        }
+    }
+    val suggestionAnime = remember(animeSections) { animeSections.flatMap { it.items }.distinctBy { it.cleanSlug } }
+    val suggestions = remember(searchScope, suggestionMovies, suggestionSeries, suggestionAnime, stoAnimeSlugs) {
+        val movies = suggestionMovies.shuffled()
+        val series = suggestionSeries.withoutStoAnime(stoAnimeSlugs).shuffled()
+        val anime = suggestionAnime.shuffled()
+        when (searchScope) {
+            SearchScope.MOVIES -> movies.take(36)
+            SearchScope.SERIES -> series.take(36)
+            SearchScope.ANIMES -> anime.take(36)
+            // Abwechselnd Film, Serie, Anime
+            SearchScope.ALL -> (0 until 12).flatMap { i -> listOfNotNull(movies.getOrNull(i), series.getOrNull(i), anime.getOrNull(i)) }
+        }.filter { it.coverUrl.isNotBlank() }
+    }
 
     LaunchedEffect(query, searchScope) {
         val trimmed = query.trim()
@@ -1301,34 +1343,58 @@ private fun SearchTabContent(
         }
         isSearching = true
         delay(300)
+
+        // Seiten können nur "Titel enthält" – darum mit Teilbegriffen abfragen und danach selbst
+        // nach Wortanfängen filtern (TitleSearch): "sp" → "Marvel's Spider-Man", "spiderman" → "Spider-Man"
+        suspend fun siteSearch(search: suspend (String) -> List<AnimeCard>): List<AnimeCard> = coroutineScope {
+            TitleSearch.siteQueries(trimmed)
+                .map { q -> async { runCatching { search(q) }.getOrDefault(emptyList()) } }
+                .awaitAll()
+                .flatten()
+        }
+        suspend fun animes() = runCatching { AniWorldScraper.searchCatalog(trimmed) }.getOrDefault(emptyList())
+        suspend fun movies() = TitleSearch.filterAndRank(
+            siteSearch { FilmpalastScraper.searchMovies(it) }.filterNot { it.title.contains("*ENGLISH*", ignoreCase = true) || SingleEpisodeTitle.containsMatchIn(it.title) },
+            trimmed
+        )
+        suspend fun series() = runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
+            .withoutStoAnime(stoAnimeSlugs)
+
         val combined = coroutineScope {
             when (searchScope) {
-                SearchScope.ANIMES -> {
-                    runCatching { AniWorldScraper.searchAnimes(trimmed) }.getOrDefault(emptyList())
-                }
-                SearchScope.SERIES -> {
-                    runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
-                }
-                SearchScope.MOVIES -> {
-                    runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
-                }
+                SearchScope.ANIMES -> animes()
+                SearchScope.SERIES -> series()
+                SearchScope.MOVIES -> movies()
                 SearchScope.ALL -> {
-                    val animeDeferred = async {
-                        runCatching { AniWorldScraper.searchAnimes(trimmed) }.getOrDefault(emptyList())
-                    }
-                    val seriesDeferred = async {
-                        runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
-                    }
-                    val movieDeferred = async {
-                        runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
-                    }
-                    animeDeferred.await() + seriesDeferred.await() + movieDeferred.await()
+                    val a = async { animes() }
+                    val sr = async { series() }
+                    val m = async { movies() }
+                    TitleSearch.filterAndRank(m.await() + sr.await() + a.await(), trimmed)
                 }
             }
         }
-        // Doppelte Treffer (z. B. aus mehreren Quellen) würden die Schlüssel im Ergebnisraster sprengen
-        uiState.searchResults = combined.distinctBy { it.cleanSlug }
+        uiState.searchResults = combined.distinctBy { it.cleanSlug }.take(60)
         isSearching = false
+
+        // S.to-Treffer haben keine Cover (sie kommen aus der A–Z-Liste): für die ersten nachladen
+        val missing = uiState.searchResults.filter { it.coverUrl.isBlank() }.take(24)
+        if (missing.isNotEmpty()) {
+            val slots = Semaphore(6)
+            coroutineScope {
+                missing.forEach { card ->
+                    launch {
+                        val cover = searchCoverCache[card.cleanSlug] ?: slots.withPermit {
+                            TitlePreview.loadDetail(card.cleanSlug)?.coverUrl.orEmpty()
+                        }.also { if (it.isNotBlank()) searchCoverCache[card.cleanSlug] = it }
+                        if (cover.isNotBlank() && uiState.searchQuery.trim() == trimmed) {
+                            uiState.searchResults = uiState.searchResults.map {
+                                if (it.cleanSlug == card.cleanSlug) it.copy(coverUrl = cover) else it
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     fun triggerSearch(newQuery: String) {
@@ -1342,24 +1408,6 @@ private fun SearchTabContent(
         SearchScope.ALL -> "Alles durchsuchen..."
     }
 
-    val quickSuggestions = when (searchScope) {
-        SearchScope.ANIMES -> listOf(
-            "Solo Leveling", "One Piece", "Naruto", "Attack on Titan",
-            "Jujutsu Kaisen", "Demon Slayer", "Black Clover", "Bleach"
-        )
-        SearchScope.SERIES -> listOf(
-            "Chicago Fire", "Breaking Bad", "Game of Thrones", "Wednesday",
-            "Stranger Things", "The Boys", "The Rookie", "House of the Dragon"
-        )
-        SearchScope.MOVIES -> listOf(
-            "Deadpool", "Oppenheimer", "Spider-Man", "Batman",
-            "Harry Potter", "Avatar", "John Wick", "Dune"
-        )
-        SearchScope.ALL -> listOf(
-            "Solo Leveling", "Chicago Fire", "One Piece", "Breaking Bad",
-            "Deadpool", "Stranger Things", "Harry Potter", "Spider-Man"
-        )
-    }
 
     val keyboardController = LocalSoftwareKeyboardController.current
     val textFieldFocusRequester = remember { FocusRequester() }
@@ -1404,18 +1452,18 @@ private fun SearchTabContent(
             .fillMaxSize()
             .padding(horizontal = 36.dp)
     ) {
-        // Kompakte Kopfzeile: Suchfeld + Filter-Kategorien auf EINER Zeile
+        // Kopf: Suchfeld (nicht über die ganze Breite), darunter die Filter
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(top = 10.dp, bottom = 10.dp),
+                .padding(top = 10.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp)
         ) {
             // Suchfeld
             Box(
                 modifier = Modifier
-                    .weight(1f)
+                    .width(520.dp)
                     .height(46.dp)
                     .focusRequester(boxFocusRequester)
                     .clip(RoundedCornerShape(10.dp))
@@ -1517,46 +1565,25 @@ private fun SearchTabContent(
                 )
             }
 
-            // Kategorien-Filter (Animes | Serien | Filme | Alle) direkt in derselben Zeile
-            for (scopeOption in SearchScope.entries) {
-                val isSelected = searchScope == scopeOption
-                TvFocusableButton(
-                    text = "${scopeOption.icon} ${scopeOption.label}",
-                    isSelected = isSelected,
-                    badgeColor = if (isSelected) AccentCyan else null,
-                    onClick = {
-                        uiState.searchScope = scopeOption
-                    }
-                )
-            }
         }
 
-        // Beliebte Suchvorschläge (NUR sichtbar wenn das Suchfeld leer ist)
-        if (query.isEmpty()) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(bottom = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Text(
-                    text = "Beliebt:",
-                    color = TextMuted,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
+        // Filter unter dem Suchfeld: Filme · Serien · Anime · Alle
+        Row(
+            modifier = Modifier.padding(bottom = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            listOf(
+                SearchScope.MOVIES to "Filme",
+                SearchScope.SERIES to "Serien",
+                SearchScope.ANIMES to "Anime",
+                SearchScope.ALL to "Alle"
+            ).forEach { (scopeOption, label) ->
+                NavTextTab(
+                    label = label,
+                    selected = searchScope == scopeOption,
+                    onClick = { uiState.searchScope = scopeOption }
                 )
-                LazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    items(quickSuggestions) { suggestion ->
-                        TvFocusableButton(
-                            text = suggestion,
-                            isSelected = false,
-                            onClick = { triggerSearch(suggestion) }
-                        )
-                    }
-                }
             }
         }
 
@@ -1573,20 +1600,118 @@ private fun SearchTabContent(
                     fontSize = 16.sp
                 )
             }
+        } else if (query.trim().length < 2) {
+            // Leere Suche: zufällige Titel des Reiters zum Stöbern
+            ExpandableTitleGrid(
+                items = suggestions,
+                header = when (searchScope) {
+                    SearchScope.MOVIES -> "Filme entdecken"
+                    SearchScope.SERIES -> "Serien entdecken"
+                    SearchScope.ANIMES -> "Anime entdecken"
+                    SearchScope.ALL -> "Entdecken"
+                },
+                keyPrefix = "suggest-${searchScope.name}",
+                watchlistSlugs = watchlistSlugs,
+                onOpenAnime = onOpenAnime
+            )
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 148.dp),
-                contentPadding = PaddingValues(top = 4.dp, bottom = 32.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalArrangement = Arrangement.spacedBy(18.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(results, key = { it.cleanSlug }) { anime ->
-                    TvAnimeCard(
-                        anime = anime,
-                        isBookmarked = anime.cleanSlug in watchlistSlugs,
-                        onClick = { onOpenAnime(anime) }
-                    )
+            ExpandableTitleGrid(
+                items = results,
+                header = "${results.size} Treffer für „${query.trim()}“",
+                keyPrefix = "search",
+                watchlistSlugs = watchlistSlugs,
+                onOpenAnime = onOpenAnime
+            )
+        }
+    }
+}
+
+/** Filmpalast führt auch einzelne Serienfolgen als "Film" ("Spider-Noir S01E08") – in der Filmsuche weglassen. */
+private val SingleEpisodeTitle = Regex("""\bS\d{1,2}E\d{1,3}\b""", RegexOption.IGNORE_CASE)
+
+/** Vorschläge der Suche pro App-Start merken (Reiterwechsel lädt nicht neu). */
+private var searchSuggestionMovies: List<AnimeCard> = emptyList()
+private var searchSuggestionSeries: List<AnimeCard> = emptyList()
+private val searchCoverCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+/**
+ * Raster mit Überschrift; ein Klick auf einen Titel macht ihn (wie in den Reihen) zur Info-Kachel,
+ * vier Karten breit, die übrigen rücken nach.
+ */
+@Composable
+private fun ExpandableTitleGrid(
+    items: List<AnimeCard>,
+    header: String,
+    keyPrefix: String,
+    watchlistSlugs: Set<String>,
+    onOpenAnime: (AnimeCard) -> Unit
+) {
+    val expandedState = LocalExpandedTitle.current
+    val expandedSlug = expandedState.key?.takeIf { it.startsWith("$keyPrefix|") }?.removePrefix("$keyPrefix|")
+    val gridState = rememberLazyGridState()
+    // Nach dem Schließen springt der Fokus zurück auf die Karte, sonst wäre er auf dem TV verloren
+    val cardFocus = remember { FocusRequester() }
+    var refocusSlug by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(keyPrefix, items.firstOrNull()?.cleanSlug) {
+        if (expandedState.key?.startsWith("$keyPrefix|") == true && items.none { it.cleanSlug == expandedSlug }) {
+            expandedState.key = null
+        }
+    }
+    LaunchedEffect(expandedSlug) {
+        val index = items.indexOfFirst { it.cleanSlug == expandedSlug }
+        if (index < 0) return@LaunchedEffect
+        delay(60)
+        val info = gridState.layoutInfo
+        val visible = info.visibleItemsInfo.firstOrNull { it.index == index + 1 }
+        if (visible == null || visible.offset.y < 0 || visible.offset.y + visible.size.height > info.viewportEndOffset) {
+            gridState.animateScrollToItem(index + 1)
+        }
+    }
+    LazyVerticalGrid(
+        state = gridState,
+        // Auf dem TV (960 dp breit) passen so 6 Karten nebeneinander
+        columns = GridCells.Adaptive(minSize = 130.dp),
+        contentPadding = PaddingValues(top = 4.dp, bottom = 32.dp),
+        horizontalArrangement = Arrangement.spacedBy(16.dp),
+        verticalArrangement = Arrangement.spacedBy(18.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+            Text(text = header, color = TextPrimary, fontSize = 18.sp, fontWeight = FontWeight.Bold)
+        }
+        items(
+            items,
+            key = { it.cleanSlug },
+            span = { card -> GridItemSpan(if (card.cleanSlug == expandedSlug) minOf(4, maxLineSpan) else 1) }
+        ) { card ->
+            if (card.cleanSlug == expandedSlug) {
+                TitleInfoPanel(
+                    anime = card,
+                    isBookmarked = card.cleanSlug in watchlistSlugs,
+                    onOpenDetail = { onOpenAnime(card) },
+                    onToggleWatchlist = { LocalStorage.toggleWatchlist(card) },
+                    onClose = { hadFocus ->
+                        if (hadFocus) refocusSlug = card.cleanSlug
+                        expandedState.key = null
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(TitleTileHeight)
+                )
+            } else {
+                val isRefocusTarget = card.cleanSlug == refocusSlug
+                TvAnimeCard(
+                    anime = card,
+                    isBookmarked = card.cleanSlug in watchlistSlugs,
+                    modifier = if (isRefocusTarget) Modifier.focusRequester(cardFocus) else Modifier,
+                    onClick = { expandedState.key = "$keyPrefix|${card.cleanSlug}" }
+                )
+                if (isRefocusTarget) {
+                    LaunchedEffect(Unit) {
+                        delay(40)
+                        runCatching { cardFocus.requestFocus() }
+                        refocusSlug = null
+                    }
                 }
             }
         }
