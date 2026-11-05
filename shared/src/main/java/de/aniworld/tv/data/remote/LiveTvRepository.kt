@@ -354,6 +354,8 @@ object LiveTvRepository {
         val trimmed = input.trim()
         val normalized = when {
             trimmed.isEmpty() -> ""
+            // Lokale Datei (PC: "Datei auswählen")
+            trimmed.startsWith("file:", true) -> trimmed
             trimmed.startsWith("http://", true) || trimmed.startsWith("https://", true) ->
                 trimmed.toHttpUrlOrNull()?.toString() ?: return false
             else -> "http://$trimmed".toHttpUrlOrNull()?.toString() ?: return false
@@ -374,6 +376,11 @@ object LiveTvRepository {
     }
 
     private fun fetchM3u(url: String): List<LiveTvChannel> {
+        if (url.startsWith("file:", ignoreCase = true)) {
+            val file = java.io.File(java.net.URI(url))
+            if (!file.isFile) throw IOException("Datei nicht gefunden: ${file.name}")
+            return parseM3u(file.readText(Charsets.UTF_8))
+        }
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", HttpClient.USER_AGENT)

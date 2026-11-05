@@ -75,6 +75,11 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.pc.ui.components.TvFocusableButton
+import de.aniworld.pc.platform.AppDirs
+import de.aniworld.pc.ui.compat.LocalComposeWindow
+import java.awt.FileDialog
+import java.io.File
+import java.net.URI
 import de.aniworld.pc.ui.theme.AccentCyan
 import de.aniworld.pc.ui.theme.BgElevated
 import de.aniworld.pc.ui.theme.BgPrimary
@@ -212,7 +217,7 @@ fun LiveTvScreen(
             ) {
                 Text(
                     text = if (selectedCategory == CUSTOM_CATEGORY) {
-                        "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Datei ein."
+                        "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Liste ein oder wähle eine M3U-Datei aus."
                     } else {
                         "Keine Sender in dieser Kategorie gefunden."
                     },
@@ -243,6 +248,7 @@ fun LiveTvScreen(
 /** Eingabefeld für den Link zur eigenen M3U-Liste (Bedienung wie das Suchfeld: OK zum Tippen). */
 @Composable
 private fun CustomM3uInput(onSaved: () -> Unit) {
+    val window = LocalComposeWindow.current
     val keyboardController = LocalSoftwareKeyboardController.current
     val textFieldFocusRequester = remember { FocusRequester() }
     val boxFocusRequester = remember { FocusRequester() }
@@ -265,6 +271,28 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
             onSaved()
         } else {
             inputError = "Das ist keine gültige Adresse (Beispiel: http://server.de/liste.m3u)."
+        }
+    }
+
+    // M3U-Datei vom PC wählen: wird in den App-Ordner kopiert, damit sie auch nach Verschieben/Löschen
+    // des Originals funktioniert (Änderungen am Original: Datei einfach erneut auswählen)
+    fun pickFile() {
+        val dialog = FileDialog(window, "M3U-Liste auswählen", FileDialog.LOAD).apply {
+            file = "*.m3u;*.m3u8"
+            setFilenameFilter { _, name -> name.endsWith(".m3u", true) || name.endsWith(".m3u8", true) }
+            isVisible = true
+        }
+        val chosen = dialog.file?.let { File(dialog.directory, it) } ?: return
+        runCatching {
+            val targetDir = File(AppDirs.dataDir, "eigene-m3u").apply { mkdirs() }
+            targetDir.listFiles()?.forEach { it.delete() }
+            val copy = File(targetDir, chosen.name)
+            chosen.copyTo(copy, overwrite = true)
+            copy
+        }.onSuccess { copy ->
+            save(copy.toURI().toString())
+        }.onFailure {
+            inputError = "Datei konnte nicht übernommen werden (${it.message})."
         }
     }
 
@@ -322,7 +350,12 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                         horizontalArrangement = Arrangement.SpaceBetween
                     ) {
                         Text(
-                            text = savedUrl.ifBlank { "📂 Link zur eigenen M3U-Liste eingeben" },
+                            text = when {
+                                savedUrl.isBlank() -> "📂 Link zur eigenen M3U-Liste eingeben"
+                                savedUrl.startsWith("file:", true) ->
+                                    "📄 Datei: " + runCatching { File(URI(savedUrl)).name }.getOrDefault(savedUrl)
+                                else -> savedUrl
+                            },
                             color = if (savedUrl.isBlank()) TextMuted else TextPrimary,
                             fontSize = 14.sp,
                             maxLines = 1,
@@ -367,6 +400,11 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                 }
             }
 
+            TvFocusableButton(
+                text = "📁 Datei auswählen",
+                isPrimary = savedUrl.isBlank(),
+                onClick = { pickFile() }
+            )
             if (savedUrl.isNotBlank()) {
                 TvFocusableButton(
                     text = "✕ Entfernen",
