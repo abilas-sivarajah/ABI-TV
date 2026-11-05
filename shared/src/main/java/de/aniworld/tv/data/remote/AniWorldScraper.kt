@@ -86,13 +86,15 @@ object AniWorldScraper {
         sections
     }
 
-    suspend fun fetchCategoryOrGenre(categoryKey: String): List<AnimeCard> = withContext(Dispatchers.IO) {
-        val path = when (categoryKey.lowercase()) {
+    /** Titel einer Liste/eines Genres; Genres blättert AniWorld mit "/genre/action/2", "/3" … (30 je Seite). */
+    suspend fun fetchCategoryOrGenre(categoryKey: String, page: Int = 1): List<AnimeCard> = withContext(Dispatchers.IO) {
+        val basePath = when (categoryKey.lowercase()) {
             "beliebt", "popular" -> "/beliebte-animes"
             "neu", "new" -> "/neu"
             "isekai" -> "/genre/fantasy"
             else -> "/genre/${categoryKey.lowercase()}"
         }
+        val path = if (page > 1 && basePath.startsWith("/genre/")) "$basePath/$page" else basePath
         val (_, html) = HttpClient.getHtml(path)
         val doc = Jsoup.parse(html, HttpClient.BASE_URL)
         parseCoverListItems(doc)

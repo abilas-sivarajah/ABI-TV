@@ -199,6 +199,12 @@ class HomeUiState {
     var searchResults by mutableStateOf<List<AnimeCard>>(emptyList())
     var selectedGenreKey by mutableStateOf(AniWorldScraper.GENRE_CATEGORIES.first().first)
     var genreItems by mutableStateOf<List<AnimeCard>>(emptyList())
+    // Anime-Reiter: "OVERVIEW" oder ein AniWorld-Genre ("action", ...)
+    var animeCategoryPath by mutableStateOf("OVERVIEW")
+    var animeGenreItems by mutableStateOf<List<AnimeCard>>(emptyList())
+    var animeLoadedPath by mutableStateOf<String?>(null)
+    var animePage by mutableStateOf(1)
+    var animeCanLoadMore by mutableStateOf(true)
     // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
     var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
     var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
@@ -253,6 +259,7 @@ fun HomeScreen(
     // Schrittweise Zurück-Navigation innerhalb des Hauptbildschirms
     val canGoBackInHome =
         (uiState.activeTab == MainNavTab.MOVIES && uiState.moviesCategoryPath != "OVERVIEW") ||
+            (uiState.activeTab == MainNavTab.HOME && uiState.animeCategoryPath != "OVERVIEW") ||
             (uiState.activeTab == MainNavTab.SERIES && uiState.seriesCategoryPath != "OVERVIEW") ||
             (uiState.activeTab == MainNavTab.SEARCH && uiState.searchQuery.isNotEmpty()) ||
             uiState.tabHistory.isNotEmpty() ||
@@ -262,6 +269,9 @@ fun HomeScreen(
         when {
             uiState.activeTab == MainNavTab.MOVIES && uiState.moviesCategoryPath != "OVERVIEW" -> {
                 uiState.moviesCategoryPath = "OVERVIEW"
+            }
+            uiState.activeTab == MainNavTab.HOME && uiState.animeCategoryPath != "OVERVIEW" -> {
+                uiState.animeCategoryPath = "OVERVIEW"
             }
             uiState.activeTab == MainNavTab.SERIES && uiState.seriesCategoryPath != "OVERVIEW" -> {
                 uiState.seriesCategoryPath = "OVERVIEW"
@@ -315,7 +325,8 @@ fun HomeScreen(
                     onResumeWatch = onResumeWatch
                 )
 
-                MainNavTab.HOME -> HomeTabContent(
+                MainNavTab.HOME -> AnimeTabContent(
+                    uiState = uiState,
                     sections = sections,
                     continueWatching = progressList,
                     watchlist = watchlist,
@@ -705,8 +716,136 @@ private fun StartTabContent(
     }
 }
 
+/** AniWorld-Genres für die Genre-Seite (ohne "Beliebt"/"Neu", die in der Übersicht stehen, und ohne Isekai = Fantasy). */
+private val AnimeGenres = AniWorldScraper.GENRE_CATEGORIES.filter { it.first !in setOf("beliebt", "neu", "isekai") }
+
+/**
+ * Anime-Reiter: Übersicht (Titelbild, Weiterschauen, Reihen) oder Genre-Seite – wie bei Filmen
+ * und Serien über den Umschalter unter dem Titelbild.
+ */
+@Composable
+private fun AnimeTabContent(
+    uiState: HomeUiState,
+    sections: List<CatalogSection>,
+    continueWatching: List<WatchProgressEntry>,
+    watchlist: List<AnimeCard>,
+    isLoading: Boolean,
+    errorMessage: String?,
+    onRetry: () -> Unit,
+    onOpenAnime: (AnimeCard) -> Unit,
+    onResumeWatch: (WatchProgressEntry) -> Unit
+) {
+    val selectedPath = uiState.animeCategoryPath
+    val scope = rememberCoroutineScope()
+    var lastGenre by remember { mutableStateOf(uiState.animeLoadedPath ?: AnimeGenres.first().first) }
+    var genreLoading by remember { mutableStateOf(false) }
+    var genreReloadKey by remember { mutableStateOf(0) }
+    var isLoadingMore by remember { mutableStateOf(false) }
+    var loadMoreFailed by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedPath, genreReloadKey) {
+        if (selectedPath == "OVERVIEW") return@LaunchedEffect
+        lastGenre = selectedPath
+        if (uiState.animeLoadedPath == selectedPath && uiState.animeGenreItems.isNotEmpty()) return@LaunchedEffect
+        genreLoading = true
+        val firstPage = runCatching { AniWorldScraper.fetchCategoryOrGenre(selectedPath) }.getOrDefault(emptyList())
+        uiState.animeGenreItems = firstPage.distinctBy { it.cleanSlug }
+        uiState.animeLoadedPath = selectedPath
+        uiState.animePage = 1
+        uiState.animeCanLoadMore = firstPage.isNotEmpty()
+        loadMoreFailed = false
+        genreLoading = false
+    }
+
+    // Nächste Seite des Genres anhängen ("Mehr Anime laden")
+    fun loadMoreAnime() {
+        if (isLoadingMore || !uiState.animeCanLoadMore) return
+        val path = uiState.animeLoadedPath ?: return
+        val nextPage = uiState.animePage + 1
+        isLoadingMore = true
+        loadMoreFailed = false
+        scope.launch {
+            val result = runCatching { AniWorldScraper.fetchCategoryOrGenre(path, nextPage) }
+            if (uiState.animeLoadedPath == path) {
+                result.onSuccess { more ->
+                    val known = uiState.animeGenreItems.mapTo(HashSet()) { it.cleanSlug }
+                    val fresh = more.filter { known.add(it.cleanSlug) }
+                    uiState.animeGenreItems = uiState.animeGenreItems + fresh
+                    uiState.animePage = nextPage
+                    uiState.animeCanLoadMore = fresh.isNotEmpty()
+                }.onFailure {
+                    // Hinter der letzten Seite antwortet AniWorld mit 404: dann ist Schluss
+                    if (it.message?.contains("404") == true) uiState.animeCanLoadMore = false else loadMoreFailed = true
+                }
+            }
+            isLoadingMore = false
+        }
+    }
+
+    val switcher: @Composable () -> Unit = {
+        CatalogModeSwitcher(
+            isOverview = selectedPath == "OVERVIEW",
+            onOverview = { uiState.animeCategoryPath = "OVERVIEW" },
+            onGenre = { uiState.animeCategoryPath = lastGenre }
+        )
+    }
+
+    if (selectedPath == "OVERVIEW") {
+        HomeTabContent(
+            switcher = switcher,
+            sections = sections,
+            continueWatching = continueWatching,
+            watchlist = watchlist,
+            isLoading = isLoading,
+            errorMessage = errorMessage,
+            onRetry = onRetry,
+            onOpenAnime = onOpenAnime,
+            onResumeWatch = onResumeWatch
+        )
+        return
+    }
+
+    val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    GenreBrowsePage(
+        genres = AnimeGenres,
+        selectedPath = selectedPath,
+        onSelectGenre = { uiState.animeCategoryPath = it },
+        items = uiState.animeGenreItems,
+        isLoading = genreLoading || uiState.animeLoadedPath != selectedPath,
+        loadingText = "Lade Animes von AniWorld...",
+        emptyText = "Keine Animes gefunden. AniWorld ist gerade nicht erreichbar.",
+        onRetry = { genreReloadKey++ },
+        watchlistSlugs = watchlistSlugs,
+        onOpenAnime = onOpenAnime,
+        switcher = switcher,
+        gridFooter = {
+            if (uiState.animeCanLoadMore) {
+                item(key = "load_more_anime", span = { GridItemSpan(maxLineSpan) }) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 10.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        TvFocusableButton(
+                            text = when {
+                                isLoadingMore -> "⏳ Lade weitere Animes..."
+                                loadMoreFailed -> "⚠️ Laden fehlgeschlagen – erneut versuchen"
+                                else -> "⬇️ Mehr Anime laden"
+                            },
+                            isPrimary = true,
+                            onClick = { loadMoreAnime() }
+                        )
+                    }
+                }
+            }
+        }
+    )
+}
+
 @Composable
 private fun HomeTabContent(
+    switcher: @Composable () -> Unit,
     sections: List<CatalogSection>,
     continueWatching: List<WatchProgressEntry>,
     watchlist: List<AnimeCard>,
@@ -766,6 +905,8 @@ private fun HomeTabContent(
                 HeroCarousel(items = heroItems, watchlistSlugs = watchlistSlugs, onOpenAnime = onOpenAnime)
             }
         }
+        // Umschalter "Übersicht & Highlights" / "Genre"
+        item(key = "anime_switcher") { switcher() }
 
         // 2. Weiterschauen-Zeile (falls vorhanden)
         if (continueWatching.isNotEmpty()) {
@@ -1880,7 +2021,38 @@ private fun CatalogBrowser(
         return
     }
 
-    // ------------------- Genre-Seite -------------------
+    GenreBrowsePage(
+        genres = genres,
+        selectedPath = selectedCategoryPath,
+        onSelectGenre = onSelectCategory,
+        items = categoryItems,
+        isLoading = isLoading,
+        loadingText = loadingText,
+        emptyText = emptyText,
+        onRetry = onRetry,
+        watchlistSlugs = watchlistSlugs,
+        onOpenAnime = onOpenAnime,
+        switcher = switcher,
+        gridFooter = gridFooter
+    )
+}
+
+/** Genre-Seite (Filme, Serien, Anime): oben der Umschalter, links die Genres, rechts die Titel. */
+@Composable
+private fun GenreBrowsePage(
+    genres: List<Pair<String, String>>,
+    selectedPath: String,
+    onSelectGenre: (String) -> Unit,
+    items: List<AnimeCard>,
+    isLoading: Boolean,
+    loadingText: String,
+    emptyText: String,
+    onRetry: () -> Unit,
+    watchlistSlugs: Set<String>,
+    onOpenAnime: (AnimeCard) -> Unit,
+    switcher: @Composable () -> Unit,
+    gridFooter: LazyGridScope.() -> Unit = {}
+) {
     Column(modifier = Modifier.fillMaxSize()) {
         Spacer(modifier = Modifier.height(12.dp))
         switcher()
@@ -1897,8 +2069,8 @@ private fun CatalogBrowser(
                 items(genres, key = { it.first }) { (path, label) ->
                     GenreListItem(
                         label = label.dropWhile { !it.isLetter() }.trim(),
-                        selected = path == selectedCategoryPath,
-                        onClick = { onSelectCategory(path) }
+                        selected = path == selectedPath,
+                        onClick = { onSelectGenre(path) }
                     )
                 }
             }
@@ -1915,7 +2087,7 @@ private fun CatalogBrowser(
             Box(modifier = Modifier.weight(1f).fillMaxHeight()) {
                 when {
                     isLoading -> CatalogLoading(loadingText)
-                    categoryItems.isEmpty() -> CatalogEmpty(emptyText, onRetry)
+                    items.isEmpty() -> CatalogEmpty(emptyText, onRetry)
                     else -> LazyVerticalGrid(
                         columns = GridCells.Adaptive(minSize = 148.dp),
                         contentPadding = PaddingValues(start = 24.dp, end = 36.dp, top = 4.dp, bottom = 36.dp),
@@ -1923,7 +2095,7 @@ private fun CatalogBrowser(
                         verticalArrangement = Arrangement.spacedBy(20.dp),
                         modifier = Modifier.fillMaxSize()
                     ) {
-                        items(categoryItems, key = { it.cleanSlug }) { card ->
+                        items(items, key = { it.cleanSlug }) { card ->
                             TvAnimeCard(
                                 anime = card,
                                 isBookmarked = card.cleanSlug in watchlistSlugs,
