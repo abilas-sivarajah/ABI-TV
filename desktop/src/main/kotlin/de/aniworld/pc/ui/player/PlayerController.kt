@@ -122,6 +122,7 @@ class PlayerController(private val scope: CoroutineScope) {
             isPlaying = true
             isBuffering = false
             applyPendingSeek()
+            applyVolume()
         }
 
         override fun videoOutput(mediaPlayer: MediaPlayer, newCount: Int) = onUi {
@@ -155,6 +156,8 @@ class PlayerController(private val scope: CoroutineScope) {
     // ------------------- Steuerung -------------------
 
     fun handle(request: PlayRequest) {
+        // Neuer Titel startet nie stumm (auch wenn der vorige stummgeschaltet war)
+        if (volume == 0) volume = volumeBeforeMute.coerceAtLeast(10)
         if (mediaPlayer == null) {
             isResolving = false
             errorMessage = "VLC konnte nicht gestartet werden. Bitte ABI TV neu installieren."
@@ -262,6 +265,18 @@ class PlayerController(private val scope: CoroutineScope) {
     }
 
     private var volumeBeforeMute = 100
+
+    /**
+     * Lautstärke an VLC geben, sobald ein Titel läuft. Windows merkt sich die Lautstärke für das
+     * ganze Programm – ohne das startete ein neuer Titel stumm, obwohl "Ton an" angezeigt wurde.
+     */
+    private fun applyVolume() {
+        val mp = mediaPlayer ?: return
+        runCatching {
+            mp.audio().setMute(false)
+            mp.audio().setVolume(volume)
+        }
+    }
 
     /** Ton aus/an (Lautstärke-Symbol im Player). */
     fun toggleMute() {
