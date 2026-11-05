@@ -48,10 +48,13 @@ class MainActivity : ComponentActivity() {
         showIntro = savedInstanceState == null
         loadHomeCatalog()
 
-        // Prüfe im Hintergrund automatisch auf GitHub-Updates
-        lifecycleScope.launch {
-            val result = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = true)
-            if (result is UpdateCheckResult.Available) availableRelease = result.release
+        // Prüfe im Hintergrund automatisch auf GitHub-Updates (nicht in der Test-Version "ABI TV Dev":
+        // deren Kennung passt nicht zur Release-APK, das Update würde nur scheitern)
+        if (!packageName.endsWith(".dev")) {
+            lifecycleScope.launch {
+                val result = UpdateManager.checkForUpdate(this@MainActivity, isTvApp = true)
+                if (result is UpdateCheckResult.Available) availableRelease = result.release
+            }
         }
 
         setContent {
