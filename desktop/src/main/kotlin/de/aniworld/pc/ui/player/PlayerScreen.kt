@@ -1,6 +1,47 @@
 package de.aniworld.pc.ui.player
 
 import de.aniworld.pc.ui.compat.ScrollLazyRow
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.TooltipArea
+import androidx.compose.foundation.TooltipPlacement
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.VolumeDown
+import androidx.compose.material.icons.automirrored.filled.VolumeOff
+import androidx.compose.material.icons.automirrored.filled.VolumeUp
+import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Forward10
+import androidx.compose.material.icons.filled.Fullscreen
+import androidx.compose.material.icons.filled.FullscreenExit
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Replay10
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.Subtitles
+import androidx.compose.material.icons.filled.VideoLibrary
+import androidx.compose.material3.Icon
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.input.pointer.PointerIcon
+import androidx.compose.ui.input.pointer.pointerHoverIcon
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
+import androidx.compose.ui.unit.DpOffset
+import de.aniworld.tv.data.model.EpisodeItem
+import de.aniworld.tv.data.model.LanguageOption
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +97,7 @@ import de.aniworld.pc.ui.components.TvFocusableButton
 import de.aniworld.pc.ui.theme.AccentCyan
 import de.aniworld.pc.ui.theme.BgElevated
 import de.aniworld.pc.ui.theme.BgSurface
+import de.aniworld.pc.ui.theme.FocusBorder
 import de.aniworld.pc.ui.theme.TextMuted
 import de.aniworld.pc.ui.theme.TextPrimary
 import de.aniworld.pc.ui.theme.TextSecondary
@@ -84,6 +126,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     var placementBeforeFullscreen by remember { mutableStateOf(WindowPlacement.Maximized) }
 
     var controlsVisible by remember { mutableStateOf(true) }
+    var sidePanel by remember { mutableStateOf<PlayerPanel?>(null) }
     var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pairingNotice by CastPairing.notice.collectAsState()
 
@@ -166,7 +209,11 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     }
 
     BackHandler {
-        if (windowState.placement == WindowPlacement.Fullscreen) toggleFullscreen() else onClose()
+        when {
+            sidePanel != null -> sidePanel = null
+            windowState.placement == WindowPlacement.Fullscreen -> toggleFullscreen()
+            else -> onClose()
+        }
     }
 
     WindowKeyHandler { event ->
@@ -219,14 +266,16 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         }
     }
 
-    val showBars = !isFullscreen || controlsVisible || controller.isResolving || controller.isStarting || controller.errorMessage != null
+    val showBars = !isFullscreen || controlsVisible || controller.isResolving || controller.isStarting ||
+        controller.errorMessage != null || sidePanel != null
     // Mauszeiger im Vollbild mit den Leisten ausblenden
     LaunchedEffect(showBars) {
         controller.videoCanvas.cursor = if (showBars) Cursor.getDefaultCursor() else BLANK_CURSOR
     }
 
     // Compose kann nicht über das VLC-Bild zeichnen: solange geladen wird, ein Fehler oder der
-    // Kopplungscode angezeigt wird, schrumpft das Bild und die Meldung erscheint an seiner Stelle
+    // Kopplungscode angezeigt wird, schrumpft das Bild und die Meldung erscheint an seiner Stelle.
+    // Aus demselben Grund liegen die Leisten über/unter dem Bild und Folgen/Sprache rechts daneben.
     val isLoading = controller.isResolving || controller.isStarting
     val showVideo = !isLoading && controller.errorMessage == null && pairingNotice == null
 
@@ -236,45 +285,72 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             .background(Color.Black)
     ) {
         if (showBars) {
-            PlayerTopBar(controller = controller, onClose = onClose)
+            PlayerTopBar(onClose = onClose)
         }
 
-        Box(
+        Row(
             modifier = Modifier
                 .weight(1f)
-                .fillMaxWidth(),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
         ) {
-            SwingPanel(
-                background = Color.Black,
-                factory = { controller.videoCanvas },
-                modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
-            )
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight(),
+                contentAlignment = Alignment.Center
+            ) {
+                SwingPanel(
+                    background = Color.Black,
+                    factory = { controller.videoCanvas },
+                    modifier = if (showVideo) Modifier.fillMaxSize() else Modifier.size(1.dp)
+                )
 
-            if (isLoading && controller.errorMessage == null) {
-                StatusCard {
-                    CircularProgressIndicator(color = AccentCyan)
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Text(
-                        text = controller.statusMessage,
-                        color = TextPrimary,
-                        fontSize = 14.sp,
-                        fontWeight = FontWeight.Medium
-                    )
+                if (isLoading && controller.errorMessage == null) {
+                    StatusCard {
+                        CircularProgressIndicator(color = AccentCyan)
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text(
+                            text = controller.statusMessage,
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+                }
+
+                controller.errorMessage?.let { message ->
+                    StatusCard {
+                        Text(text = "Wiedergabefehler", color = AccentCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(8.dp))
+                        Text(text = message, color = TextSecondary, fontSize = 14.sp)
+                        Spacer(modifier = Modifier.height(18.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            TvFocusableButton(text = "Erneut versuchen", isPrimary = true, onClick = { controller.retry() })
+                            TvFocusableButton(text = "Zurück", onClick = onClose)
+                        }
+                    }
                 }
             }
 
-            controller.errorMessage?.let { message ->
-                StatusCard {
-                    Text(text = "Wiedergabefehler", color = AccentCyan, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-                    Spacer(modifier = Modifier.height(8.dp))
-                    Text(text = message, color = TextSecondary, fontSize = 14.sp)
-                    Spacer(modifier = Modifier.height(18.dp))
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        TvFocusableButton(text = "Erneut versuchen", isPrimary = true, onClick = { controller.retry() })
-                        TvFocusableButton(text = "Zurück", onClick = onClose)
-                    }
-                }
+            when (sidePanel) {
+                PlayerPanel.EPISODES -> EpisodesPanel(
+                    controller = controller,
+                    onPick = { episode ->
+                        sidePanel = null
+                        controller.persistCurrentProgress()
+                        controller.loadEpisodeAndPlay(episode)
+                    },
+                    onClose = { sidePanel = null }
+                )
+                PlayerPanel.LANGUAGE -> LanguagePanel(
+                    controller = controller,
+                    onPick = { language ->
+                        sidePanel = null
+                        controller.selectLanguage(language)
+                    },
+                    onClose = { sidePanel = null }
+                )
+                null -> Unit
             }
         }
 
@@ -282,12 +358,17 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             PlayerBottomBar(
                 controller = controller,
                 isFullscreen = isFullscreen,
+                activePanel = sidePanel,
+                onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
                 onToggleFullscreen = { toggleFullscreen() },
                 onInteraction = { keepControlsAlive() }
             )
         }
     }
 }
+
+/** Seitenleiste rechts neben dem Bild. */
+private enum class PlayerPanel { EPISODES, LANGUAGE }
 
 @Composable
 private fun StatusCard(content: @Composable () -> Unit) {
@@ -303,105 +384,51 @@ private fun StatusCard(content: @Composable () -> Unit) {
     }
 }
 
+/** Oben nur der Pfeil zurück (wie bei Streaming-Apps). */
 @Composable
-private fun PlayerTopBar(controller: PlayerController, onClose: () -> Unit) {
+private fun PlayerTopBar(onClose: () -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color(0xFF05070B), Color.Black)))
-            .padding(horizontal = 24.dp, vertical = 14.dp),
+            .background(Color.Black)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        TvFocusableButton(text = "← Zurück", onClick = onClose)
-        Spacer(modifier = Modifier.width(18.dp))
-
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = if (controller.isLiveStream) "Live TV" else controller.animeTitle,
-                color = AccentCyan,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Bold
-            )
-            controller.currentEpisode?.let { ep ->
-                val epLabel = when {
-                    controller.isLiveStream -> ep.displayTitle
-                    ep.seasonLabel.equals("Film", true) -> ep.displayTitle
-                    ep.seasonLabel.equals("Filme", true) -> "Film ${ep.number}: ${ep.displayTitle}"
-                    else -> "Staffel ${ep.seasonLabel} • Folge ${ep.number}: ${ep.displayTitle}"
-                }
-                Text(
-                    text = epLabel,
-                    color = TextPrimary,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp), verticalAlignment = Alignment.CenterVertically) {
-            if (controller.isBuffering && controller.isPlaying) {
-                Text(text = "Puffere…", color = TextSecondary, fontSize = 12.sp)
-            }
-            Pill(text = "🔊 ${controller.volume} %")
-            if (controller.isLiveStream) {
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(6.dp))
-                        .background(Color(0xFFEF4444))
-                        .padding(horizontal = 10.dp, vertical = 4.dp)
-                ) {
-                    Text(text = "🔴 LIVE SENDER", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            } else {
-                controller.activeHoster?.let { h ->
-                    LanguageBadge(h.language)
-                    Pill(text = "Hoster: ${h.hosterName}")
-                }
-            }
-        }
+        PlayerIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, description = "Zurück", onClick = onClose)
     }
 }
 
-@Composable
-private fun Pill(text: String) {
-    Box(
-        modifier = Modifier
-            .clip(RoundedCornerShape(6.dp))
-            .background(BgElevated)
-            .padding(horizontal = 10.dp, vertical = 4.dp)
-    ) {
-        Text(text = text, color = TextPrimary, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-    }
-}
-
+/**
+ * Unten: Fortschritt über die ganze Breite mit Restzeit, darunter links Play/Spulen/Lautstärke,
+ * in der Mitte der Titel, rechts nächste Folge, Folgen, Sprache und Vollbild.
+ */
 @Composable
 private fun PlayerBottomBar(
     controller: PlayerController,
     isFullscreen: Boolean,
+    activePanel: PlayerPanel?,
+    onTogglePanel: (PlayerPanel) -> Unit,
     onToggleFullscreen: () -> Unit,
     onInteraction: () -> Unit
 ) {
+    val isLive = controller.isLiveStream
+    val hasEpisodes = !isLive && controller.seasonEpisodes.size > 1
+    val nextEpisode = if (isLive) null else controller.findNextEpisode()
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(Color.Black, Color(0xFF05070B))))
-            .padding(horizontal = 24.dp, vertical = 12.dp)
+            .background(Color.Black)
+            .padding(start = 16.dp, end = 16.dp, top = 4.dp, bottom = 12.dp)
     ) {
-        if (!controller.isLiveStream) {
+        // ---------- Fortschritt ----------
+        if (!isLive) {
             var dragFraction by remember { mutableStateOf<Float?>(null) }
             val duration = controller.durationMs
             val fraction = if (duration > 0) (controller.currentPositionMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
             val shownFraction = dragFraction ?: fraction
-
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                Text(
-                    text = formatDuration(if (dragFraction != null) (shownFraction * duration).toLong() else controller.currentPositionMs),
-                    color = TextPrimary,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.SemiBold
-                )
+            val shownPosition = if (dragFraction != null) (shownFraction * duration).toLong() else controller.currentPositionMs
+            Row(verticalAlignment = Alignment.CenterVertically) {
                 Slider(
                     value = shownFraction,
                     onValueChange = {
@@ -413,82 +440,302 @@ private fun PlayerBottomBar(
                         dragFraction = null
                     },
                     enabled = duration > 0,
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier.weight(1f).height(28.dp),
                     colors = SliderDefaults.colors(
                         thumbColor = AccentCyan,
                         activeTrackColor = AccentCyan,
                         inactiveTrackColor = Color.White.copy(alpha = 0.25f)
                     )
                 )
-                Text(text = formatDuration(duration), color = TextSecondary, fontSize = 13.sp)
+                Spacer(modifier = Modifier.width(14.dp))
+                // Restzeit wie bei Streaming-Apps
+                Text(
+                    text = if (duration > 0) formatDuration(duration - shownPosition) else "--:--",
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold
+                )
             }
         } else {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Box(modifier = Modifier.size(12.dp).clip(RoundedCornerShape(6.dp)).background(Color(0xFFEF4444)))
-                Text(text = "LIVE ÜBERTRAGUNG", color = Color(0xFFEF4444), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-                Spacer(modifier = Modifier.weight(1f))
-                Text(text = controller.animeTitle, color = TextSecondary, fontSize = 13.sp)
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 6.dp)) {
+                Box(modifier = Modifier.size(10.dp).clip(RoundedCornerShape(5.dp)).background(Color(0xFFEF4444)))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(text = "LIVE", color = Color(0xFFEF4444), fontSize = 14.sp, fontWeight = FontWeight.Bold)
             }
-            Spacer(modifier = Modifier.height(10.dp))
         }
 
+        // ---------- Bedienung ----------
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                TvFocusableButton(
-                    text = if (controller.isPlaying) "⏸ Pause" else "▶ Play",
-                    isPrimary = true,
+            // Links: Play, Spulen, Lautstärke
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
+                PlayerIconButton(
+                    icon = if (controller.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                    description = if (controller.isPlaying) "Pause" else "Abspielen",
+                    large = true,
                     onClick = { controller.togglePause(); onInteraction() }
                 )
-                if (controller.isLiveStream) {
-                    TvFocusableButton(text = "🔄 Neu verbinden", onClick = { controller.reconnectLive(); onInteraction() })
+                if (!isLive) {
+                    PlayerIconButton(icon = Icons.Filled.Replay10, description = "10 Sekunden zurück", onClick = { controller.seekBy(-10_000L); onInteraction() })
+                    PlayerIconButton(icon = Icons.Filled.Forward10, description = "10 Sekunden vor", onClick = { controller.seekBy(10_000L); onInteraction() })
                 } else {
-                    TvFocusableButton(text = "⏪ -10s", onClick = { controller.seekBy(-10_000L); onInteraction() })
-                    TvFocusableButton(text = "⏩ +10s", onClick = { controller.seekBy(10_000L); onInteraction() })
-                    TvFocusableButton(text = "+85s Intro Skip", onClick = { controller.seekBy(85_000L); onInteraction() })
-                    controller.findNextEpisode()?.let { nextEp ->
-                        TvFocusableButton(text = "⏭ Folge ${nextEp.number}", onClick = { controller.playNextEpisode(); onInteraction() })
-                    }
+                    PlayerIconButton(icon = Icons.Filled.Refresh, description = "Neu verbinden", onClick = { controller.reconnectLive(); onInteraction() })
                 }
-                TvFocusableButton(
-                    text = if (isFullscreen) "🗗 Fenster" else "⛶ Vollbild",
+                PlayerIconButton(
+                    icon = when {
+                        controller.volume == 0 -> Icons.AutoMirrored.Filled.VolumeOff
+                        controller.volume < 50 -> Icons.AutoMirrored.Filled.VolumeDown
+                        else -> Icons.AutoMirrored.Filled.VolumeUp
+                    },
+                    description = if (controller.volume == 0) "Ton an" else "Ton aus",
+                    onClick = { controller.toggleMute(); onInteraction() }
+                )
+                Slider(
+                    value = controller.volume / 150f,
+                    onValueChange = { controller.setVolumeLevel((it * 150).toInt()); onInteraction() },
+                    modifier = Modifier.width(110.dp).height(28.dp),
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.25f)
+                    )
+                )
+            }
+
+            // Mitte: Titel – Serie fett, dann "Flg. 22  Episodentitel"
+            val episode = controller.currentEpisode
+            val title = buildAnnotatedString {
+                withStyle(SpanStyle(fontWeight = FontWeight.Bold)) { append(controller.animeTitle) }
+                if (episode != null && !isLive) {
+                    val isMovie = episode.seasonLabel.equals("Film", true) || controller.seasonEpisodes.size <= 1
+                    if (!isMovie) {
+                        val season = episode.seasonLabel.takeIf { it.isNotBlank() && !it.equals("Filme", true) }
+                        append("   ")
+                        append(if (season != null) "St. $season · Flg. ${episode.number}" else "Flg. ${episode.number}")
+                        episode.displayTitle.takeIf { it.isNotBlank() && it != controller.animeTitle }?.let { append("   $it") }
+                    }
+                } else if (isLive) {
+                    episode?.displayTitle?.takeIf { it.isNotBlank() && it != controller.animeTitle }?.let { append("   $it") }
+                }
+            }
+            Text(
+                text = title,
+                color = TextPrimary,
+                fontSize = 15.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.weight(1.4f)
+            )
+
+            // Rechts: nächste Folge, Folgen, Sprache, Vollbild
+            Row(
+                modifier = Modifier.weight(1f),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)
+            ) {
+                if (nextEpisode != null) {
+                    PlayerIconButton(
+                        icon = Icons.Filled.SkipNext,
+                        description = "Nächste Folge (${nextEpisode.number})",
+                        onClick = { controller.playNextEpisode(); onInteraction() }
+                    )
+                }
+                if (hasEpisodes) {
+                    PlayerIconButton(
+                        icon = Icons.Filled.VideoLibrary,
+                        description = "Folgen",
+                        selected = activePanel == PlayerPanel.EPISODES,
+                        onClick = { onTogglePanel(PlayerPanel.EPISODES); onInteraction() }
+                    )
+                }
+                if (!isLive && controller.availableLanguages.isNotEmpty()) {
+                    PlayerIconButton(
+                        icon = Icons.Filled.Subtitles,
+                        description = "Sprache",
+                        selected = activePanel == PlayerPanel.LANGUAGE,
+                        onClick = { onTogglePanel(PlayerPanel.LANGUAGE); onInteraction() }
+                    )
+                }
+                PlayerIconButton(
+                    icon = if (isFullscreen) Icons.Filled.FullscreenExit else Icons.Filled.Fullscreen,
+                    description = if (isFullscreen) "Vollbild beenden" else "Vollbild",
                     onClick = onToggleFullscreen
                 )
             }
+        }
+    }
+}
 
-            // Verfügbare Hoster / Sprachen für diese Folge direkt umschaltbar
-            if (!controller.isLiveStream) {
-                ScrollLazyRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(start = 16.dp)
-                ) {
-                    items(controller.availableHosters, key = { it.redirectPath }) { hoster ->
-                        TvFocusableButton(
-                            text = "${hoster.language.shortLabel} • ${hoster.hosterName}",
-                            isSelected = controller.activeHoster?.redirectPath == hoster.redirectPath,
-                            badgeColor = Color(hoster.language.badgeColorHex),
-                            onClick = { controller.selectHoster(hoster); onInteraction() }
+/** Schlichtes Symbol ohne Rahmen; beim Überfahren/Fokus hell hinterlegt, mit Tooltip-Text. */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun PlayerIconButton(
+    icon: ImageVector,
+    description: String,
+    onClick: () -> Unit,
+    large: Boolean = false,
+    selected: Boolean = false
+) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    TooltipArea(
+        tooltip = {
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(BgElevated)
+                    .padding(horizontal = 10.dp, vertical = 5.dp)
+            ) {
+                Text(text = description, color = TextPrimary, fontSize = 12.sp)
+            }
+        },
+        delayMillis = 500,
+        tooltipPlacement = TooltipPlacement.CursorPoint(offset = DpOffset(0.dp, (-36).dp))
+    ) {
+        Box(
+            modifier = Modifier
+                .size(if (large) 52.dp else 46.dp)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        selected -> Color.White.copy(alpha = 0.18f)
+                        hovered || focused -> Color.White.copy(alpha = 0.10f)
+                        else -> Color.Transparent
+                    }
+                )
+                .border(2.dp, if (focused) FocusBorder else Color.Transparent, CircleShape)
+                .hoverable(interaction)
+                .pointerHoverIcon(PointerIcon.Hand)
+                .onFocusChanged { focused = it.isFocused }
+                .clickable(interactionSource = interaction, indication = null, onClick = onClick),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = description,
+                tint = Color.White,
+                modifier = Modifier.size(if (large) 38.dp else 30.dp)
+            )
+        }
+    }
+}
+
+/** Gemeinsamer Rahmen der Seitenleisten (Folgen, Sprache). */
+@Composable
+private fun SidePanel(title: String, onClose: () -> Unit, content: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier
+            .width(380.dp)
+            .fillMaxHeight()
+            .background(BgSurface)
+            .padding(16.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(text = title, color = TextPrimary, fontSize = 20.sp, fontWeight = FontWeight.ExtraBold, modifier = Modifier.weight(1f))
+            PlayerIconButton(icon = Icons.Filled.Close, description = "Schließen", onClick = onClose)
+        }
+        Spacer(modifier = Modifier.height(10.dp))
+        content()
+    }
+}
+
+/** Folgen der Staffel; die laufende ist hervorgehoben, ein Klick spielt die gewählte. */
+@Composable
+private fun EpisodesPanel(controller: PlayerController, onPick: (EpisodeItem) -> Unit, onClose: () -> Unit) {
+    val episodes = controller.seasonEpisodes
+    val currentPath = controller.currentEpisode?.path
+    val listState = rememberLazyListState()
+    LaunchedEffect(Unit) {
+        val index = episodes.indexOfFirst { it.path == currentPath }
+        if (index > 2) listState.scrollToItem(index - 2)
+    }
+    val season = controller.currentEpisode?.seasonLabel?.takeIf { it.isNotBlank() }
+    SidePanel(title = if (season != null) "Staffel $season" else "Folgen", onClose = onClose) {
+        LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            items(episodes, key = { it.path }) { episode ->
+                val isCurrent = episode.path == currentPath
+                PanelRow(selected = isCurrent, onClick = { if (!isCurrent) onPick(episode) }) {
+                    Text(
+                        text = "${episode.number}",
+                        color = if (isCurrent) AccentCyan else TextSecondary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        modifier = Modifier.width(40.dp)
+                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = episode.displayTitle.ifBlank { "Folge ${episode.number}" },
+                            color = TextPrimary,
+                            fontSize = 14.sp,
+                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Medium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis
                         )
+                        if (isCurrent) Text(text = "Läuft gerade", color = AccentCyan, fontSize = 12.sp)
                     }
                 }
             }
         }
-
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = if (controller.isLiveStream) {
-                "Leertaste: Play/Pause • ↑/↓: Lautstärke • F / Doppelklick: Vollbild • Esc: Zurück"
-            } else {
-                "Leertaste: Play/Pause • ←/→: 10 s spulen • ↑/↓: Lautstärke • I: Intro überspringen • " +
-                    "N: Nächste Folge • F / Doppelklick: Vollbild • Esc: Zurück"
-            },
-            color = TextMuted,
-            fontSize = 11.sp
-        )
     }
+}
+
+/** Sprachen der aktuellen Folge; die gewählte wird auch für die nächsten Titel gemerkt. */
+@Composable
+private fun LanguagePanel(controller: PlayerController, onPick: (LanguageOption) -> Unit, onClose: () -> Unit) {
+    val active = controller.activeLanguage
+    SidePanel(title = "Sprache", onClose = onClose) {
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            controller.availableLanguages.forEach { language ->
+                PanelRow(selected = language == active, onClick = { onPick(language) }) {
+                    Box(modifier = Modifier.size(10.dp).clip(CircleShape).background(Color(language.badgeColorHex)))
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(text = language.shortLabel, color = TextPrimary, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+                        Text(text = language.fullLabel, color = TextSecondary, fontSize = 12.sp)
+                    }
+                    if (language == active) {
+                        Icon(imageVector = Icons.Filled.Check, contentDescription = "Aktiv", tint = AccentCyan, modifier = Modifier.size(22.dp))
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun PanelRow(selected: Boolean, onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+    var focused by remember { mutableStateOf(false) }
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val shape = RoundedCornerShape(10.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(
+                when {
+                    selected -> Color.White.copy(alpha = 0.12f)
+                    hovered || focused -> Color.White.copy(alpha = 0.06f)
+                    else -> Color.Transparent
+                }
+            )
+            .border(2.dp, if (focused) FocusBorder else Color.Transparent, shape)
+            .hoverable(interaction)
+            .pointerHoverIcon(PointerIcon.Hand)
+            .onFocusChanged { focused = it.isFocused }
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        content = content
+    )
 }
 
 private fun formatDuration(ms: Long): String {

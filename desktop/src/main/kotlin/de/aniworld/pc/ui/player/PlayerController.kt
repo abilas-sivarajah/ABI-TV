@@ -225,6 +225,60 @@ class PlayerController(private val scope: CoroutineScope) {
         mp.audio().setVolume(volume)
     }
 
+    /** Sprachen, in denen es die aktuelle Folge gibt (aus den Hostern). */
+    val availableLanguages: List<LanguageOption>
+        get() = availableHosters.map { it.language }.distinct().sortedBy { it.ordinal }
+
+    /** Sprache, die gerade läuft. */
+    val activeLanguage: LanguageOption? get() = activeHoster?.language
+
+    /**
+     * Sprache im Player wechseln: ersten funktionierenden Hoster dieser Sprache nehmen, an der
+     * aktuellen Stelle weiterspielen und die Sprache als Standard für die nächsten Titel merken.
+     */
+    fun selectLanguage(language: LanguageOption) {
+        LocalStorage.preferredLanguage = language
+        val ep = currentEpisode ?: return
+        if (activeLanguage == language) return
+        val candidates = availableHosters
+            .filter { it.language == language }
+            .sortedBy { if (failedRecently(it)) 1 else 0 }
+        if (candidates.isEmpty()) return
+        persistCurrentProgress()
+        resolveJob?.cancel()
+        selectedLangKey = language.langKey
+        isResolving = true
+        errorMessage = null
+        statusMessage = "Starte …"
+        resolveJob = scope.launch {
+            if (!playFirstWorkingHoster(ep, candidates)) {
+                isResolving = false
+                errorMessage = "In dieser Sprache lässt sich die Folge gerade nicht abspielen."
+            }
+        }
+    }
+
+    private var volumeBeforeMute = 100
+
+    /** Ton aus/an (Lautstärke-Symbol im Player). */
+    fun toggleMute() {
+        val mp = mediaPlayer ?: return
+        if (volume > 0) {
+            volumeBeforeMute = volume
+            volume = 0
+        } else {
+            volume = volumeBeforeMute.coerceAtLeast(10)
+        }
+        mp.audio().setVolume(volume)
+    }
+
+    /** Lautstärke direkt setzen (Regler im Player). */
+    fun setVolumeLevel(level: Int) {
+        val mp = mediaPlayer ?: return
+        volume = level.coerceIn(0, 150)
+        mp.audio().setVolume(volume)
+    }
+
     fun findNextEpisode(): EpisodeItem? {
         val current = currentEpisode ?: return null
         val idx = seasonEpisodes.indexOfFirst { it.path == current.path }
@@ -289,7 +343,7 @@ class PlayerController(private val scope: CoroutineScope) {
         failedHosterPaths.clear()
         isResolving = true
         errorMessage = null
-        statusMessage = "Lade Hoster für Folge ${episode.number}..."
+        statusMessage = "Lade Folge ${episode.number} …"
 
         resolveJob = scope.launch {
             val hosters = runCatching {
@@ -320,7 +374,7 @@ class PlayerController(private val scope: CoroutineScope) {
             )
             if (!playFirstWorkingHoster(episode, orderedCandidates)) {
                 isResolving = false
-                errorMessage = "Keiner der Hoster (${hosters.joinToString { it.hosterName }}) konnte aufgelöst werden."
+                errorMessage = "Dieser Titel lässt sich gerade nicht abspielen. Bitte später erneut versuchen."
             }
         }
     }
@@ -333,7 +387,7 @@ class PlayerController(private val scope: CoroutineScope) {
         selectedLangKey = hoster.langKey
         isResolving = true
         errorMessage = null
-        statusMessage = "Wechsle zu ${hoster.hosterName} (${hoster.language.shortLabel})..."
+        statusMessage = "Starte …"
         resolveJob = scope.launch {
             runCatching { StreamResolver.resolveHoster(hoster) }
                 .onSuccess { resolved ->
@@ -344,7 +398,7 @@ class PlayerController(private val scope: CoroutineScope) {
                 .onFailure { err ->
                     markFailed(hoster)
                     isResolving = false
-                    errorMessage = "${hoster.hosterName} fehlgeschlagen: ${err.message}"
+                    errorMessage = "Wiedergabe fehlgeschlagen. Bitte erneut versuchen."
                 }
         }
     }
@@ -356,7 +410,7 @@ class PlayerController(private val scope: CoroutineScope) {
     private suspend fun playFirstWorkingHoster(episode: EpisodeItem, candidates: List<HosterLink>): Boolean {
         for (candidate in candidates) {
             if (candidate.redirectPath in failedHosterPaths) continue
-            statusMessage = "Verbinde mit ${candidate.hosterName} (${candidate.language.shortLabel})..."
+            statusMessage = "Starte …"
             val resolved = runCatching { StreamResolver.resolveHoster(candidate) }.getOrNull()
             if (resolved != null) {
                 activeHoster = candidate
@@ -408,7 +462,7 @@ class PlayerController(private val scope: CoroutineScope) {
         }
         durationMs = 0L
         isStarting = true
-        statusMessage = "Starte Wiedergabe über ${stream.hosterName}..."
+        statusMessage = "Starte …"
 
         // Das Bild muss im Fenster hängen, sonst öffnet VLC ein eigenes Fenster
         withTimeoutOrNull(3_000L) { while (!videoCanvas.isDisplayable) delay(30L) }
@@ -432,7 +486,7 @@ class PlayerController(private val scope: CoroutineScope) {
             if (isStarting && System.currentTimeMillis() - startedAt >= START_TIMEOUT_MS) {
                 AppLog.w(TAG, "Kein Bild nach ${START_TIMEOUT_MS / 1000} s: ${stream.hosterName}")
                 mp.controls().stop()
-                onPlaybackError("${stream.hosterName} antwortet nicht")
+                onPlaybackError("Stream antwortet nicht")
             }
         }
     }

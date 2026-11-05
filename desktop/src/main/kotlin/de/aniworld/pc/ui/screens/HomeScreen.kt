@@ -470,17 +470,11 @@ private fun TopTvNavigationBar(
                 }
             }
 
-            // Rechts: Sprachwahl, Suche (Lupe) und Einstellungen (Zahnrad)
+            // Rechts: Suche (Lupe) und Einstellungen (Zahnrad). Die Sprache wählt man im Player.
             Row(
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                NavTextTab(
-                    label = preferredLanguage.shortLabel,
-                    selected = false,
-                    badgeColor = Color(preferredLanguage.badgeColorHex),
-                    onClick = onCycleLanguage
-                )
                 NavIconButton(
                     icon = Icons.Outlined.Search,
                     description = "Suche",
@@ -3103,44 +3097,6 @@ private fun SettingsTabContent(
                         )
                     }
                 }
-            }
-        }
-
-        Spacer(modifier = Modifier.height(18.dp))
-
-        // Karte: Spracheinstellungen
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.92f)
-                .clip(RoundedCornerShape(14.dp))
-                .background(BgElevated)
-                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
-                .padding(20.dp)
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Column {
-                    Text(
-                        text = "🌐 Standard-Audiosprache",
-                        color = TextPrimary,
-                        fontSize = 17.sp,
-                        fontWeight = FontWeight.Bold
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "Aktuell: ${preferredLanguage.shortLabel} (${preferredLanguage.fullLabel})",
-                        color = TextSecondary,
-                        fontSize = 13.sp
-                    )
-                }
-
-                TvFocusableButton(
-                    text = "Ändern (${preferredLanguage.shortLabel})",
-                    onClick = onCycleLanguage
-                )
             }
         }
 
