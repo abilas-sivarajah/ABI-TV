@@ -171,6 +171,7 @@ struct RootContainerView: View {
         }
         .task {
             castManager.initialize()
+            LetterboxdAccount.shared.start(storage: storage)
             // Erst nach der Start-Animation prüfen, damit der Update-Dialog nicht über dem Intro aufgeht
             try? await Task.sleep(nanoseconds: 3_200_000_000)
             if case .available(let release) = await UpdateManager.checkForUpdate(forceCheck: false) {

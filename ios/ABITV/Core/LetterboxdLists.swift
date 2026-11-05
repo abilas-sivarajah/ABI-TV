@@ -22,6 +22,8 @@ public enum LetterboxdLists {
         public static let name = "Ilkems Empfehlungen"
         public static let owner = "nerofreyz"
         public static let path = "/nerofreyz/list/ilkems-empfehlungen-1/"
+        /// Letterboxds Kurzkennung der Liste (boxd.it/Ys36y).
+        public static let lid = "Ys36y"
     }
 
     public enum ListError: Error, Sendable {

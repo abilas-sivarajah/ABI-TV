@@ -533,4 +533,18 @@ final class ABITVTests: XCTestCase {
     func testHttpClientRewriteUrlAcceptsUnencodedAddresses() {
         XCTAssertNotNil(HttpClient.rewriteUrl("https://example.com/Köln Film.html"))
     }
+
+    // MARK: - Letterboxd-Liste
+
+    func testLetterboxdListSyncParsesProbeAndResult() {
+        XCTAssertEqual(LetterboxdListSync.parseProbe(#"{"loggedIn":true,"username":"nerofreyz"}"#), "nerofreyz")
+        XCTAssertNil(LetterboxdListSync.parseProbe(#"{"loggedIn":false,"username":""}"#))
+        XCTAssertTrue(LetterboxdListSync.isListOwner("NeroFreyz"))
+        XCTAssertFalse(LetterboxdListSync.isListOwner("jemand"))
+        XCTAssertEqual(LetterboxdListSync.parseResult(#"{"ok":true,"added":1,"name":"Dune"}"#, fallbackTitle: "x"), .added(name: "Dune"))
+        XCTAssertEqual(LetterboxdListSync.parseResult(#"{"ok":true,"added":0,"name":""}"#, fallbackTitle: "x"), .alreadyInList(name: "x"))
+        XCTAssertEqual(LetterboxdListSync.parseResult(#"{"ok":false,"loggedOut":true}"#, fallbackTitle: "x"), .loggedOut)
+        XCTAssertEqual(LetterboxdListSync.parseResult(nil, fallbackTitle: "x"), .failed(message: "Letterboxd nicht erreichbar"))
+        XCTAssertTrue(LetterboxdListSync.addScript(filmPath: "/imdb/tt1/").contains(#"fetch("/imdb/tt1/""#))
+    }
 }

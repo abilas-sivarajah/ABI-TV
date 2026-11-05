@@ -54,6 +54,8 @@ public struct HomeView: View {
 
     @ObservedObject private var storage = LocalStorage.shared
     @ObservedObject private var stoFilter = StoAnimeFilter.shared
+    @ObservedObject private var letterboxdAccount = LetterboxdAccount.shared
+    @State private var showLetterboxdSignIn = false
     @State private var selectedTab: MobileTab = .start
 
     // Kataloge (Übersichten)
@@ -484,7 +486,7 @@ public struct HomeView: View {
 
                 // Eigene Empfehlungsliste immer zuerst; bei jedem Öffnen des Reiters frisch geladen
                 LetterboxdFilmsRow(
-                    cacheKey: "featured#\(featuredVisit)",
+                    cacheKey: "featured#\(featuredVisit)-\(letterboxdAccount.listVersion)",
                     title: "⭐ \(LetterboxdLists.FeaturedList.name)",
                     storage: storage,
                     load: { try await LetterboxdLists.listFilms(path: LetterboxdLists.FeaturedList.path, maxPages: 2) },
@@ -1005,6 +1007,7 @@ public struct HomeView: View {
 
 
     private var settingsSheetContent: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Text("Einstellungen & Info")
@@ -1044,6 +1047,10 @@ public struct HomeView: View {
                     .buttonStyle(.plain)
                 }
             }
+
+            Divider().background(Color.white.opacity(0.1))
+
+            letterboxdSettings
 
             Divider().background(Color.white.opacity(0.1))
 
@@ -1098,11 +1105,69 @@ public struct HomeView: View {
                 }
             }
 
-            Spacer()
         }
         .padding(20)
+        }
         .background(AbiTheme.bgElevated.ignoresSafeArea())
         .preferredColorScheme(.dark)
+        .sheet(isPresented: $showLetterboxdSignIn) {
+            LetterboxdSignInView(onClose: { showLetterboxdSignIn = false })
+        }
+    }
+
+    /// Letterboxd-Konto: Anmeldung auf der echten Seite; als Listenbesitzer füllt die Watchlist
+    /// zusätzlich "Ilkems Empfehlungen".
+    private var letterboxdSettings: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Letterboxd")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundColor(AbiTheme.textSecondary)
+
+            if let name = letterboxdAccount.username {
+                Text("Angemeldet als \(name)")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundColor(AbiTheme.textPrimary)
+                Text(letterboxdAccount.isListOwner
+                     ? "Filme, die du auf die Watchlist setzt, kommen auch in „\(LetterboxdLists.FeaturedList.name)“."
+                     : "Nur \(LetterboxdLists.FeaturedList.owner) kann „\(LetterboxdLists.FeaturedList.name)“ füllen.")
+                    .font(.system(size: 11))
+                    .foregroundColor(AbiTheme.textMuted)
+                Button {
+                    letterboxdAccount.signOut()
+                } label: {
+                    Text("Abmelden")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(AbiTheme.textPrimary)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(AbiTheme.bgSurface)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("Melde dich auf der Letterboxd-Seite an – die App sieht dein Passwort nicht. Als Besitzer der Liste kommen Filme von deiner Watchlist auch in „\(LetterboxdLists.FeaturedList.name)“.")
+                    .font(.system(size: 11))
+                    .foregroundColor(AbiTheme.textMuted)
+                Button {
+                    showLetterboxdSignIn = true
+                } label: {
+                    Text("Bei Letterboxd anmelden")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(AbiTheme.onAccent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                        .background(AbiTheme.accentCyan)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+
+            if let status = letterboxdAccount.status {
+                Text(status)
+                    .font(.system(size: 12))
+                    .foregroundColor(AbiTheme.accentEmerald)
+            }
+        }
     }
 
 
