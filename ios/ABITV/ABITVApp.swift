@@ -109,6 +109,10 @@ struct RootContainerView: View {
                     onOpenCastSheet: {
                         castManager.startDiscovery()
                         showCastSheet = true
+                    },
+                    onSwitch: { next in
+                        // Andere Folge oder Sprache: Player mit dem neuen Auftrag neu starten
+                        activePlayback = next
                     }
                 )
                 .id(playback.id)

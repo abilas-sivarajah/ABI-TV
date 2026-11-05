@@ -1,6 +1,7 @@
 import SwiftUI
 import AVKit
 import AVFoundation
+import Combine
 
 public struct ActivePlaybackItem: Identifiable, Equatable {
     public let id = UUID()
@@ -39,16 +40,20 @@ public struct ActivePlaybackItem: Identifiable, Equatable {
     }
 }
 
+/// Player im Streaming-Stil (wie auf PC und TV): eigene Bedienelemente, Sprache und Folgen im Player,
+/// "Intro überspringen", "Nächste Folge" und eine Pausen-Ansicht. Hoster sind nicht mehr sichtbar.
 public struct PlayerView: View {
     public let item: ActivePlaybackItem
     public var onBack: () -> Void
     public var onOpenCastSheet: () -> Void
+    /// Andere Folge oder Sprache: der Player startet mit diesem Auftrag neu.
+    public var onSwitch: (ActivePlaybackItem) -> Void
 
     @ObservedObject private var storage = LocalStorage.shared
     @ObservedObject private var castManager = IosCastManager.shared
 
     @State private var isLoading: Bool = true
-    @State private var statusText: String = "Lade Hoster..."
+    @State private var statusText: String = "Starte …"
     @State private var errorMessage: String? = nil
 
     @State private var resolvedStream: ResolvedStream? = nil
@@ -56,30 +61,103 @@ public struct PlayerView: View {
     @State private var failedRedirectPaths: Set<String> = []
     @State private var liveRetryCount: Int = 0
     @State private var reloadTrigger: Int = 0
+    @State private var hosterLanguages: [LanguageOption] = []
 
     @State private var player: AVPlayer? = nil
     @State private var timeObserverToken: Any? = nil
+    @State private var uiTimeObserverToken: Any? = nil
     @State private var statusObserver: NSKeyValueObservation? = nil
+    @State private var endObserver: NSObjectProtocol? = nil
     @State private var didInitialSeek: Bool = false
+
+    // Bedienung
+    @State private var controlsVisible = true
+    @State private var lastInteraction = Date()
+    @State private var now = Date()
+    @State private var isPlaying = false
+    @State private var currentSec: Double = 0
+    @State private var durationSec: Double = 0
+    @State private var scrubValue: Double? = nil
+    @State private var introSkipped = false
+    @State private var showEpisodes = false
+    @State private var showLanguages = false
+
+    // Staffeln und Folgen der Serie
+    @State private var seasons: [SeasonLink] = []
+    @State private var seasonEpisodes: [EpisodeItem] = []
+    @State private var titleDescription = ""
+
+    private let ticker = Timer.publish(every: 0.5, on: .main, in: .common).autoconnect()
 
     public init(
         item: ActivePlaybackItem,
         onBack: @escaping () -> Void,
-        onOpenCastSheet: @escaping () -> Void
+        onOpenCastSheet: @escaping () -> Void,
+        onSwitch: @escaping (ActivePlaybackItem) -> Void = { _ in }
     ) {
         self.item = item
         self.onBack = onBack
         self.onOpenCastSheet = onOpenCastSheet
+        self.onSwitch = onSwitch
     }
+
+    // MARK: - Ableitungen
+
+    private var isSeries: Bool { !item.isLiveStream && (seasonEpisodes.count > 1 || seasons.count > 1) }
+
+    private var currentSeason: SeasonLink? { seasons.first { $0.label == item.seasonLabel } }
+
+    private var nextEpisode: EpisodeItem? {
+        guard let index = seasonEpisodes.firstIndex(where: { $0.path == item.episodePath }),
+              index + 1 < seasonEpisodes.count else { return nil }
+        return seasonEpisodes[index + 1]
+    }
+
+    private var nextSeason: SeasonLink? {
+        guard nextEpisode == nil, let current = currentSeason, let index = seasons.firstIndex(of: current) else { return nil }
+        return seasons.dropFirst(index + 1).first { !$0.isMovies }
+    }
+
+    private var videoReady: Bool { player != nil && !isLoading && errorMessage == nil }
+
+    /// "Intro überspringen" in den ersten 5 Minuten, "Nächste Folge" in den letzten 100 Sekunden.
+    private var showIntroSkip: Bool {
+        isSeries && videoReady && durationSec > 600 && currentSec >= 5 && currentSec <= 300 && !introSkipped
+    }
+
+    private var showNextUp: Bool {
+        isSeries && videoReady && durationSec > 600 && durationSec - currentSec <= 100 && (nextEpisode != nil || nextSeason != nil)
+    }
+
+    /// Pausen-Ansicht nach 2,5 s Pause ohne Eingabe.
+    private var showPauseInfo: Bool {
+        videoReady && !isPlaying && now.timeIntervalSince(lastInteraction) > 2.5 && !showEpisodes && !showLanguages
+    }
+
+    // MARK: - Oberfläche
 
     public var body: some View {
         ZStack {
             Color.black.ignoresSafeArea()
 
             if let player = player, errorMessage == nil {
-                SystemVideoPlayerRepresentable(player: player)
+                PlayerLayerView(player: player)
                     .ignoresSafeArea()
             }
+
+            // Tippen aufs Bild blendet die Bedienung ein/aus
+            Color.clear
+                .contentShape(Rectangle())
+                .ignoresSafeArea()
+                .onTapGesture {
+                    if showPauseInfo {
+                        lastInteraction = Date()
+                        controlsVisible = true
+                    } else {
+                        controlsVisible.toggle()
+                        lastInteraction = Date()
+                    }
+                }
 
             if isLoading && errorMessage == nil {
                 VStack(spacing: 14) {
@@ -89,137 +167,449 @@ public struct PlayerView: View {
                     Text(statusText)
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundColor(AbiTheme.textPrimary)
-                    Text("\(item.title) • \(item.episodeTitle)")
-                        .font(.system(size: 12))
-                        .foregroundColor(AbiTheme.textSecondary)
                 }
                 .padding(24)
                 .background(AbiTheme.bgSurface.opacity(0.9))
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             }
 
-            if let errorMessage = errorMessage {
-                VStack(spacing: 12) {
-                    Text("⚠️ Stream-Fehler")
-                        .font(.system(size: 18, weight: .bold))
-                        .foregroundColor(AbiTheme.errorRed)
-
-                    Text(errorMessage)
-                        .font(.system(size: 13))
-                        .foregroundColor(AbiTheme.textSecondary)
-                        .multilineTextAlignment(.center)
-
-                    HStack(spacing: 12) {
-                        Button(action: {
-                            saveProgressAndClose()
-                        }) {
-                            Text("Zurück")
-                                .font(.system(size: 13, weight: .semibold))
-                                .foregroundColor(AbiTheme.textPrimary)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(AbiTheme.bgElevated)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
-
-                        Button(action: {
-                            failedRedirectPaths.removeAll()
-                            liveRetryCount = 0
-                            reloadTrigger += 1
-                        }) {
-                            Text("Erneut versuchen")
-                                .font(.system(size: 13, weight: .bold))
-                                .foregroundColor(AbiTheme.onAccent)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 10)
-                                .background(AbiTheme.accentCyan)
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                        }
-                        .buttonStyle(.plain)
+            if showPauseInfo {
+                pauseInfo
+                    .transition(.opacity)
+                    .onTapGesture {
+                        lastInteraction = Date()
+                        player?.play()
                     }
-                    .padding(.top, 4)
-                }
-                .padding(24)
-                .background(AbiTheme.bgSurface)
-                .clipShape(RoundedRectangle(cornerRadius: 16))
-                .padding(24)
             }
 
-            VStack {
-                HStack(spacing: 12) {
-                    Button {
-                        saveProgressAndClose()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "chevron.left")
-                                .font(.system(size: 14, weight: .bold))
-                            Text("Zurück")
-                                .font(.system(size: 13, weight: .semibold))
-                        }
-                        .foregroundColor(AbiTheme.textPrimary)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.65))
-                        .clipShape(Capsule())
-                    }
-                    .buttonStyle(.plain)
+            if controlsVisible && !showPauseInfo && errorMessage == nil {
+                controlsOverlay
+                    .transition(.opacity)
+            }
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(item.title)
-                            .font(.system(size: 14, weight: .bold))
-                            .foregroundColor(AbiTheme.textPrimary)
-                            .lineLimit(1)
-
-                        HStack(spacing: 6) {
-                            if item.isLiveStream {
-                                Text("● LIVE")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(AbiTheme.liveRed)
-                            }
-                            Text(resolvedStream != nil ? "\(item.episodeTitle) • \(resolvedStream!.hosterName)" : item.episodeTitle)
-                                .font(.system(size: 11))
-                                .foregroundColor(AbiTheme.textSecondary)
-                                .lineLimit(1)
-                        }
-                    }
-
+            if (showIntroSkip || showNextUp) && !showPauseInfo {
+                VStack {
                     Spacer()
-
-                    Button {
-                        handOffToTv()
-                    } label: {
-                        HStack(spacing: 4) {
-                            Image(systemName: "tv")
-                                .font(.system(size: 12, weight: .bold))
-                            Text("Auf TV")
-                                .font(.system(size: 12, weight: .bold))
-                        }
-                        .foregroundColor(AbiTheme.accentCyan)
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(Color.black.opacity(0.65))
-                        .clipShape(Capsule())
-                        .overlay(
-                            Capsule()
-                                .stroke(AbiTheme.accentCyan.opacity(0.6), lineWidth: 1)
-                        )
+                    HStack {
+                        Spacer()
+                        overlayButton
                     }
-                    .buttonStyle(.plain)
                 }
-                .padding(.horizontal, 16)
-                .padding(.top, 12)
+                .padding(.trailing, 20)
+                .padding(.bottom, controlsVisible ? 120 : 40)
+            }
 
-                Spacer()
+            if let errorMessage = errorMessage {
+                errorCard(errorMessage)
             }
         }
+        .animation(.easeInOut(duration: 0.25), value: controlsVisible)
+        .animation(.easeInOut(duration: 0.5), value: showPauseInfo)
+        .statusBarHidden(!controlsVisible)
         .task(id: reloadTrigger) {
             await resolveAndStartPlayback()
+        }
+        .task { await loadSeasons() }
+        .onReceive(ticker) { date in
+            now = date
+            // Bedienung nach 4 Sekunden ohne Eingabe ausblenden, solange abgespielt wird
+            if controlsVisible && isPlaying && !showEpisodes && !showLanguages && date.timeIntervalSince(lastInteraction) > 4 {
+                controlsVisible = false
+            }
         }
         .onDisappear {
             cleanupPlayer()
         }
+        .sheet(isPresented: $showEpisodes) {
+            EpisodesSheet(
+                title: item.title,
+                seasons: seasons,
+                currentSeason: currentSeason,
+                currentEpisodes: seasonEpisodes,
+                currentPath: item.episodePath,
+                loadSeason: { season in await fetchSeasonEpisodes(season) },
+                onPick: { episode, episodes in
+                    showEpisodes = false
+                    switchTo(episode: episode)
+                    _ = episodes
+                }
+            )
+            .presentationDetents([.medium, .large])
+        }
+        .sheet(isPresented: $showLanguages) {
+            LanguageSheet(
+                languages: hosterLanguages,
+                active: resolvedStream?.language,
+                onPick: { language in
+                    showLanguages = false
+                    switchLanguage(language)
+                }
+            )
+            .presentationDetents([.medium])
+        }
     }
+
+    private var controlsOverlay: some View {
+        ZStack {
+            LinearGradient(
+                stops: [
+                    .init(color: Color.black.opacity(0.7), location: 0),
+                    .init(color: .clear, location: 0.3),
+                    .init(color: .clear, location: 0.6),
+                    .init(color: Color.black.opacity(0.85), location: 1)
+                ],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+            .allowsHitTesting(false)
+
+            VStack(spacing: 0) {
+                // Oben: zurück, Titel, auf dem TV abspielen
+                HStack(spacing: 12) {
+                    Button { saveProgressAndClose() } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(item.isLiveStream ? "Live TV" : item.title)
+                            .font(.system(size: 15, weight: .bold))
+                            .foregroundColor(.white)
+                            .lineLimit(1)
+                        Text(episodeLine)
+                            .font(.system(size: 12))
+                            .foregroundColor(Color.white.opacity(0.8))
+                            .lineLimit(1)
+                    }
+
+                    Spacer()
+
+                    Button { handOffToTv() } label: {
+                        Image(systemName: "tv")
+                            .font(.system(size: 16, weight: .bold))
+                            .foregroundColor(.white)
+                            .frame(width: 40, height: 40)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.top, 6)
+
+                Spacer()
+
+                // Mitte: 10 s zurück, Play/Pause, 10 s vor
+                HStack(spacing: 44) {
+                    if !item.isLiveStream {
+                        centerButton("gobackward.10", size: 30) { seek(by: -10) }
+                    }
+                    centerButton(isPlaying ? "pause.fill" : "play.fill", size: 44) { togglePause() }
+                    if !item.isLiveStream {
+                        centerButton("goforward.10", size: 30) { seek(by: 10) }
+                    }
+                }
+
+                Spacer()
+
+                // Unten: Fortschritt mit Restzeit, darunter Folgen, Sprache, nächste Folge
+                VStack(spacing: 6) {
+                    if item.isLiveStream {
+                        HStack(spacing: 6) {
+                            Circle().fill(AbiTheme.liveRed).frame(width: 9, height: 9)
+                            Text("LIVE").font(.system(size: 13, weight: .bold)).foregroundColor(AbiTheme.liveRed)
+                            Spacer()
+                        }
+                    } else {
+                        HStack(spacing: 10) {
+                            Slider(
+                                value: Binding(
+                                    get: { scrubValue ?? currentSec },
+                                    set: { scrubValue = $0; lastInteraction = Date() }
+                                ),
+                                in: 0...max(durationSec, 1),
+                                onEditingChanged: { editing in
+                                    if !editing, let target = scrubValue {
+                                        seek(to: target)
+                                        scrubValue = nil
+                                    }
+                                }
+                            )
+                            .tint(AbiTheme.accentCyan)
+                            .disabled(durationSec <= 0)
+                            Text(durationSec > 0 ? formatTime(durationSec - (scrubValue ?? currentSec)) : "--:--")
+                                .font(.system(size: 13, weight: .semibold).monospacedDigit())
+                                .foregroundColor(.white)
+                        }
+                    }
+
+                    HStack(spacing: 22) {
+                        if isSeries {
+                            bottomButton("rectangle.stack", "Folgen") { showEpisodes = true }
+                        }
+                        if !item.isLiveStream && !hosterLanguages.isEmpty {
+                            bottomButton("captions.bubble", "Sprache") { showLanguages = true }
+                        }
+                        Spacer()
+                        if let next = nextEpisode {
+                            bottomButton("forward.end", "Nächste Folge") { switchTo(episode: next) }
+                        } else if nextSeason != nil {
+                            bottomButton("forward.end", "Nächste Staffel") { playNextSeason() }
+                        }
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
+            }
+        }
+    }
+
+    private var episodeLine: String {
+        if item.isLiveStream { return item.title }
+        if !isSeries { return "Film" }
+        let season = item.seasonLabel.lowercased() == "filme" ? "Filme & Specials" : "St. \(item.seasonLabel)"
+        let name = item.episodeTitle.hasPrefix("Folge ") ? "" : "  \(item.episodeTitle)"
+        return "\(season) · Flg. \(item.episodeNumber)\(name)"
+    }
+
+    private func centerButton(_ icon: String, size: CGFloat, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            lastInteraction = Date()
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: size, weight: .bold))
+                .foregroundColor(.white)
+                .frame(width: size + 30, height: size + 30)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func bottomButton(_ icon: String, _ label: String, action: @escaping () -> Void) -> some View {
+        Button {
+            action()
+            lastInteraction = Date()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: icon).font(.system(size: 15, weight: .semibold))
+                Text(label).font(.system(size: 13, weight: .semibold))
+            }
+            .foregroundColor(.white)
+            .padding(.vertical, 6)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var overlayButton: some View {
+        Button {
+            if showNextUp {
+                if let next = nextEpisode { switchTo(episode: next) } else { playNextSeason() }
+            } else {
+                seek(by: 85)
+                introSkipped = true
+            }
+            lastInteraction = Date()
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: showNextUp ? "forward.end.fill" : "forward.fill")
+                Text(showNextUp ? (nextEpisode != nil ? "Nächste Folge" : "Nächste Staffel") : "Intro überspringen")
+            }
+            .font(.system(size: 15, weight: .bold))
+            .foregroundColor(.black)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .background(Color.white)
+            .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+    }
+
+    private var pauseInfo: some View {
+        ZStack(alignment: .bottomTrailing) {
+            LinearGradient(
+                colors: [Color.black.opacity(0.85), Color.black.opacity(0.5)],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .ignoresSafeArea()
+
+            VStack(alignment: .leading, spacing: 6) {
+                Spacer()
+                Text("Sie sehen gerade")
+                    .font(.system(size: 13))
+                    .foregroundColor(AbiTheme.textSecondary)
+                Text(item.isLiveStream ? "Live TV" : item.title)
+                    .font(.system(size: 30, weight: .heavy))
+                    .foregroundColor(.white)
+                    .lineLimit(2)
+                if isSeries {
+                    Text(item.seasonLabel.lowercased() == "filme" ? "Filme & Specials" : "Staffel \(item.seasonLabel)")
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(.white)
+                    Text(item.episodeTitle.hasPrefix("Folge ") || item.episodeTitle.isEmpty
+                         ? "Folge \(item.episodeNumber)"
+                         : "\(item.episodeTitle): Flg. \(item.episodeNumber)")
+                        .font(.system(size: 17, weight: .bold))
+                        .foregroundColor(.white)
+                        .padding(.top, 8)
+                        .lineLimit(2)
+                }
+                if !titleDescription.isEmpty && !item.isLiveStream {
+                    Text(titleDescription)
+                        .font(.system(size: 13))
+                        .foregroundColor(Color.white.opacity(0.85))
+                        .lineLimit(4)
+                }
+                Spacer()
+            }
+            .padding(.horizontal, 28)
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            Text("Angehalten")
+                .font(.system(size: 14))
+                .foregroundColor(Color.white.opacity(0.85))
+                .padding(.trailing, 24)
+                .padding(.bottom, 20)
+        }
+    }
+
+    private func errorCard(_ message: String) -> some View {
+        VStack(spacing: 12) {
+            Text("Wiedergabefehler")
+                .font(.system(size: 18, weight: .bold))
+                .foregroundColor(AbiTheme.accentCyan)
+            Text(message)
+                .font(.system(size: 13))
+                .foregroundColor(AbiTheme.textSecondary)
+                .multilineTextAlignment(.center)
+            HStack(spacing: 12) {
+                Button { saveProgressAndClose() } label: {
+                    Text("Zurück")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(AbiTheme.textPrimary)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(AbiTheme.bgElevated)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+                Button {
+                    failedRedirectPaths.removeAll()
+                    liveRetryCount = 0
+                    reloadTrigger += 1
+                } label: {
+                    Text("Erneut versuchen")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundColor(AbiTheme.onAccent)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(AbiTheme.accentCyan)
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.top, 4)
+        }
+        .padding(24)
+        .background(AbiTheme.bgSurface)
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .padding(24)
+    }
+
+    // MARK: - Steuerung
+
+    private func togglePause() {
+        guard let player else { return }
+        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+    }
+
+    private func seek(by seconds: Double) {
+        guard let player, !item.isLiveStream else { return }
+        let target = max(0, CMTimeGetSeconds(player.currentTime()) + seconds)
+        seek(to: durationSec > 0 ? min(target, durationSec) : target)
+    }
+
+    private func seek(to seconds: Double) {
+        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        currentSec = seconds
+    }
+
+    /// Andere Folge (auch aus einer anderen Staffel) in der gemerkten Sprache spielen.
+    private func switchTo(episode: EpisodeItem) {
+        saveCurrentProgress()
+        onSwitch(ActivePlaybackItem(
+            animeSlug: item.animeSlug,
+            seasonLabel: episode.seasonLabel,
+            episodeNumber: episode.number,
+            episodePath: episode.path,
+            language: storage.preferredLanguage,
+            title: item.title,
+            episodeTitle: episode.displayTitle,
+            coverUrl: item.coverUrl
+        ))
+    }
+
+    /// Sprache wechseln: an derselben Stelle weiter und als Standard für die nächsten Titel merken.
+    private func switchLanguage(_ language: LanguageOption) {
+        storage.preferredLanguage = language
+        guard language != resolvedStream?.language else { return }
+        saveCurrentProgress()
+        onSwitch(ActivePlaybackItem(
+            animeSlug: item.animeSlug,
+            seasonLabel: item.seasonLabel,
+            episodeNumber: item.episodeNumber,
+            episodePath: item.episodePath,
+            language: language,
+            title: item.title,
+            episodeTitle: item.episodeTitle,
+            coverUrl: item.coverUrl
+        ))
+    }
+
+    private func playNextSeason() {
+        guard let season = nextSeason else { return }
+        Task {
+            let episodes = await fetchSeasonEpisodes(season)
+            if let first = episodes.first {
+                await MainActor.run { switchTo(episode: first) }
+            }
+        }
+    }
+
+    // MARK: - Staffeln
+
+    private func loadSeasons() async {
+        guard !item.isLiveStream else { return }
+        let card = AnimeCard(slug: item.animeSlug, title: item.title, coverUrl: item.coverUrl)
+        guard let detail = await TitlePreview.loadDetail(card) else { return }
+        let current = detail.seasons.first { $0.label == item.seasonLabel }
+        var episodes = detail.episodes
+        if !episodes.contains(where: { $0.path == item.episodePath }), let current {
+            episodes = await fetchSeasonEpisodes(current)
+        }
+        let loadedEpisodes = episodes
+        await MainActor.run {
+            seasons = detail.seasons
+            titleDescription = detail.description
+            seasonEpisodes = loadedEpisodes
+        }
+    }
+
+    private func fetchSeasonEpisodes(_ season: SeasonLink) async -> [EpisodeItem] {
+        let slug = item.animeSlug
+        if SerienStreamScraper.isStoSlug(slug) {
+            return (try? await SerienStreamScraper.fetchDetail(slug, requestedSeasonPath: season.path))?.episodes ?? []
+        } else if HdFilmeScraper.isHdFilmeSlug(slug) {
+            return (try? await HdFilmeScraper.fetchDetail(slug, seasonPathOverride: season.path))?.episodes ?? []
+        } else if FilmpalastScraper.isFilmpalastSlug(slug) {
+            return []
+        }
+        return (try? await AniWorldScraper.fetchAnimeDetail(slug, seasonPathOverride: season.path))?.episodes ?? []
+    }
+
+    // MARK: - Auf dem TV abspielen
 
     private func handOffToTv() {
         player?.pause()
@@ -252,10 +642,13 @@ public struct PlayerView: View {
         }
     }
 
+    // MARK: - Stream auflösen und abspielen
+
     private func resolveAndStartPlayback() async {
         await MainActor.run {
             isLoading = true
             errorMessage = nil
+            statusText = "Starte …"
         }
 
         if let channel = item.liveChannel {
@@ -269,16 +662,12 @@ public struct PlayerView: View {
             await MainActor.run {
                 self.resolvedStream = direct
                 self.activeRedirectPath = ""
-                self.statusText = "Verbinde Live-Stream..."
                 startAvPlayer(with: direct)
             }
             return
         }
 
         do {
-            await MainActor.run {
-                statusText = "Suche verfügbare Hoster..."
-            }
             let hosters: [HosterLink]
             if FilmpalastScraper.isFilmpalastSlug(item.animeSlug) || FilmpalastScraper.isFilmpalastEpisodePath(item.episodePath) {
                 hosters = await FilmpalastScraper.fetchHostersForFilm(item.episodePath)
@@ -293,9 +682,12 @@ public struct PlayerView: View {
             // Player inzwischen geschlossen oder neu gestartet: nichts mehr anfassen
             if Task.isCancelled { return }
 
+            let languages = Array(Set(hosters.map(\.language))).sorted { $0.rawValue < $1.rawValue }
+            await MainActor.run { hosterLanguages = languages }
+
             if hosters.isEmpty {
                 await MainActor.run {
-                    errorMessage = "Keine Streams für diese Episode gefunden."
+                    errorMessage = "Keine Streams für diese Folge gefunden."
                     isLoading = false
                 }
                 return
@@ -308,19 +700,8 @@ public struct PlayerView: View {
                 return aPref < bPref
             }
 
-            if sortedCandidates.isEmpty {
-                await MainActor.run {
-                    errorMessage = "Alle verfügbaren Hoster (\(hosters.count)) konnten nicht geladen werden."
-                    isLoading = false
-                }
-                return
-            }
-
             for candidate in sortedCandidates {
                 if Task.isCancelled { return }
-                await MainActor.run {
-                    statusText = "Extrahiere Stream von \(candidate.hosterName)..."
-                }
                 let resolved = try? await StreamResolver.resolveHoster(candidate)
                 // Beim Schließen des Players schlagen laufende Anfragen fehl (kein Hoster-Fehler),
                 // und ein spät aufgelöster Stream darf nicht mehr ohne sichtbaren Player losspielen.
@@ -330,7 +711,6 @@ public struct PlayerView: View {
                     await MainActor.run {
                         self.resolvedStream = stream
                         self.activeRedirectPath = candidate.redirectPath
-                        self.statusText = "Verbinde mit \(stream.hosterName)..."
                         startAvPlayer(with: stream)
                     }
                     return
@@ -340,14 +720,13 @@ public struct PlayerView: View {
             }
 
             await MainActor.run {
-                let triedNames = sortedCandidates.map(\.hosterName).uniqued().joined(separator: ", ")
-                errorMessage = "Stream konnte von keinem Hoster (\(triedNames)) aufgelöst werden."
+                errorMessage = "Dieser Titel lässt sich gerade nicht abspielen. Bitte später erneut versuchen."
                 isLoading = false
             }
         } catch {
             if Task.isCancelled { return }
             await MainActor.run {
-                errorMessage = "Fehler: \(error.localizedDescription)"
+                errorMessage = "Dieser Titel lässt sich gerade nicht abspielen. Bitte später erneut versuchen."
                 isLoading = false
             }
         }
@@ -405,6 +784,36 @@ public struct PlayerView: View {
             }
         }
 
+        // Anzeige: Position, Dauer, läuft/angehalten
+        uiTimeObserverToken = avPlayer.addPeriodicTimeObserver(forInterval: CMTime(seconds: 0.5, preferredTimescale: 600), queue: .main) { time in
+            let pos = CMTimeGetSeconds(time)
+            let dur = CMTimeGetSeconds(avPlayer.currentItem?.duration ?? .zero)
+            let playing = avPlayer.timeControlStatus != .paused
+            // Der Block ist @Sendable: Zustand des Views nur über die Hauptwarteschlange ändern
+            DispatchQueue.main.async {
+                if pos.isFinite { self.currentSec = pos }
+                if dur.isFinite && dur > 0 { self.durationSec = dur }
+                self.isPlaying = playing
+            }
+        }
+
+        // Ende der Folge: als gesehen merken, nächste Folge bzw. Staffel starten
+        endObserver = NotificationCenter.default.addObserver(
+            forName: .AVPlayerItemDidPlayToEndTime,
+            object: playerItem,
+            queue: .main
+        ) { _ in
+            DispatchQueue.main.async {
+                guard !self.item.isLiveStream else { return }
+                self.storage.markEpisodeWatched(self.item.episodePath)
+                if let next = self.nextEpisode {
+                    self.switchTo(episode: next)
+                } else if self.nextSeason != nil {
+                    self.playNextSeason()
+                }
+            }
+        }
+
         if !item.isLiveStream {
             let interval = CMTime(seconds: 5.0, preferredTimescale: 600)
             // Lokale Kopien: Der Block ist @Sendable und darf nicht auf den MainActor-gebundenen View zugreifen
@@ -436,6 +845,8 @@ public struct PlayerView: View {
 
         self.player = avPlayer
         avPlayer.play()
+        lastInteraction = Date()
+        controlsVisible = true
     }
 
     @MainActor
@@ -443,7 +854,7 @@ public struct PlayerView: View {
         if item.isLiveStream {
             if liveRetryCount < 3 {
                 liveRetryCount += 1
-                statusText = "Signal unterbrochen – verbinde neu (\(liveRetryCount)/3)..."
+                statusText = "Verbinde neu (\(liveRetryCount)/3) …"
                 isLoading = true
                 Task {
                     try? await Task.sleep(nanoseconds: 1_500_000_000)
@@ -453,43 +864,44 @@ public struct PlayerView: View {
                 }
                 return
             }
-            errorMessage = "Live-Stream nicht erreichbar (\(reason))."
+            errorMessage = "Der Sender ist gerade nicht erreichbar."
             isLoading = false
         } else if !activeRedirectPath.isEmpty {
             StreamResolver.invalidateCache(activeRedirectPath)
             failedRedirectPaths.insert(activeRedirectPath)
-            statusText = "\(stream.hosterName) fehlgeschlagen – wechsle Hoster..."
+            statusText = "Starte …"
             isLoading = true
             reloadTrigger += 1
         } else {
-            errorMessage = "Wiedergabe fehlgeschlagen: \(reason)"
+            errorMessage = "Wiedergabe fehlgeschlagen. Bitte erneut versuchen."
             isLoading = false
         }
     }
 
+    private func saveCurrentProgress() {
+        guard !item.isLiveStream, let avPlayer = player, let currentItem = avPlayer.currentItem else { return }
+        let posSec = CMTimeGetSeconds(avPlayer.currentTime())
+        let durSec = CMTimeGetSeconds(currentItem.duration)
+        guard posSec.isFinite && durSec.isFinite && posSec > 0 && durSec > 0 else { return }
+        storage.saveWatchProgress(
+            WatchProgressEntry(
+                animeSlug: item.animeSlug,
+                animeTitle: item.title,
+                coverUrl: item.coverUrl,
+                seasonLabel: item.seasonLabel,
+                episodeNumber: item.episodeNumber,
+                episodeTitle: item.episodeTitle,
+                episodePath: item.episodePath,
+                preferredLangKey: item.language.langKey,
+                positionMs: Int64(posSec * 1000),
+                durationMs: Int64(durSec * 1000),
+                updatedAt: Int64(Date().timeIntervalSince1970 * 1000)
+            )
+        )
+    }
+
     private func saveProgressAndClose() {
-        if !item.isLiveStream, let avPlayer = player, let currentItem = avPlayer.currentItem {
-            let posSec = CMTimeGetSeconds(avPlayer.currentTime())
-            let durSec = CMTimeGetSeconds(currentItem.duration)
-            if posSec.isFinite && durSec.isFinite && posSec > 0 && durSec > 0 {
-                let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
-                storage.saveWatchProgress(
-                    WatchProgressEntry(
-                        animeSlug: item.animeSlug,
-                        animeTitle: item.title,
-                        coverUrl: item.coverUrl,
-                        seasonLabel: item.seasonLabel,
-                        episodeNumber: item.episodeNumber,
-                        episodeTitle: item.episodeTitle,
-                        episodePath: item.episodePath,
-                        preferredLangKey: item.language.langKey,
-                        positionMs: Int64(posSec * 1000),
-                        durationMs: Int64(durSec * 1000),
-                        updatedAt: nowMs
-                    )
-                )
-            }
-        }
+        saveCurrentProgress()
         cleanupPlayer()
         onBack()
     }
@@ -497,43 +909,239 @@ public struct PlayerView: View {
     private func cleanupPlayer() {
         statusObserver?.invalidate()
         statusObserver = nil
-        if let token = timeObserverToken, let avPlayer = player {
-            avPlayer.removeTimeObserver(token)
+        if let avPlayer = player {
+            if let token = timeObserverToken { avPlayer.removeTimeObserver(token) }
+            if let token = uiTimeObserverToken { avPlayer.removeTimeObserver(token) }
         }
         timeObserverToken = nil
+        uiTimeObserverToken = nil
+        if let observer = endObserver {
+            NotificationCenter.default.removeObserver(observer)
+        }
+        endObserver = nil
         player?.pause()
         player = nil
     }
-}
 
-private extension Array where Element: Hashable {
-    func uniqued() -> [Element] {
-        var seen = Set<Element>()
-        return filter { seen.insert($0).inserted }
+    private func formatTime(_ seconds: Double) -> String {
+        let total = max(0, Int(seconds))
+        let h = total / 3600
+        let m = (total % 3600) / 60
+        let s = total % 60
+        return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
     }
 }
+
+// MARK: - Folgen und Sprache
+
+/// Folgen-Liste wie bei Netflix: oben "‹ Staffel N", Tippen darauf zeigt alle Staffeln.
+private struct EpisodesSheet: View {
+    let title: String
+    let seasons: [SeasonLink]
+    let currentSeason: SeasonLink?
+    let currentEpisodes: [EpisodeItem]
+    let currentPath: String
+    let loadSeason: (SeasonLink) async -> [EpisodeItem]
+    let onPick: (EpisodeItem, [EpisodeItem]) -> Void
+
+    @State private var viewSeason: SeasonLink?
+    @State private var episodes: [EpisodeItem] = []
+    @State private var choosingSeason = false
+    @State private var loading = false
+
+    private func label(_ season: SeasonLink?) -> String {
+        guard let season else { return "Folgen" }
+        return season.isMovies ? "Filme & Specials" : "Staffel \(season.label)"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if choosingSeason {
+                Text(title)
+                    .font(.system(size: 20, weight: .heavy))
+                    .foregroundColor(AbiTheme.textPrimary)
+                    .lineLimit(1)
+                ScrollView {
+                    VStack(spacing: 4) {
+                        ForEach(seasons) { season in
+                            Button {
+                                show(season)
+                            } label: {
+                                HStack {
+                                    Image(systemName: "checkmark")
+                                        .opacity(season == viewSeason ? 1 : 0)
+                                        .frame(width: 26)
+                                    Text(label(season)).font(.system(size: 16, weight: .bold))
+                                    Spacer()
+                                    if season == currentSeason {
+                                        Text("läuft").font(.system(size: 12)).foregroundColor(AbiTheme.accentCyan)
+                                    }
+                                }
+                                .foregroundColor(AbiTheme.textPrimary)
+                                .padding(12)
+                                .background(season == viewSeason ? Color.white.opacity(0.1) : Color.clear)
+                                .clipShape(RoundedRectangle(cornerRadius: 10))
+                            }
+                            .buttonStyle(.plain)
+                        }
+                    }
+                }
+            } else {
+                Button {
+                    if seasons.count > 1 { choosingSeason = true }
+                } label: {
+                    HStack(spacing: 4) {
+                        if seasons.count > 1 { Image(systemName: "chevron.left").font(.system(size: 18, weight: .bold)) }
+                        Text(label(viewSeason)).font(.system(size: 20, weight: .heavy))
+                    }
+                    .foregroundColor(AbiTheme.textPrimary)
+                }
+                .buttonStyle(.plain)
+
+                if loading {
+                    ProgressView().tint(AbiTheme.accentCyan).frame(maxWidth: .infinity).padding(24)
+                } else {
+                    ScrollViewReader { proxy in
+                        ScrollView {
+                            VStack(spacing: 6) {
+                                ForEach(episodes) { episode in
+                                    let isCurrent = episode.path == currentPath
+                                    Button {
+                                        if !isCurrent { onPick(episode, episodes) }
+                                    } label: {
+                                        HStack(alignment: .top, spacing: 10) {
+                                            Text("\(episode.number)")
+                                                .font(.system(size: 17, weight: .bold))
+                                                .foregroundColor(isCurrent ? AbiTheme.accentCyan : AbiTheme.textSecondary)
+                                                .frame(width: 34, alignment: .leading)
+                                            VStack(alignment: .leading, spacing: 2) {
+                                                Text(episode.displayTitle.isEmpty ? "Folge \(episode.number)" : episode.displayTitle)
+                                                    .font(.system(size: 14, weight: isCurrent ? .bold : .medium))
+                                                    .foregroundColor(AbiTheme.textPrimary)
+                                                    .multilineTextAlignment(.leading)
+                                                if isCurrent {
+                                                    Text("Läuft gerade").font(.system(size: 12)).foregroundColor(AbiTheme.accentCyan)
+                                                }
+                                            }
+                                            Spacer()
+                                        }
+                                        .padding(10)
+                                        .background(isCurrent ? Color.white.opacity(0.1) : Color.clear)
+                                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                                    }
+                                    .buttonStyle(.plain)
+                                    .id(episode.path)
+                                }
+                            }
+                        }
+                        .onAppear { proxy.scrollTo(currentPath, anchor: .center) }
+                    }
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(AbiTheme.bgSurface.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+        .onAppear {
+            if viewSeason == nil {
+                viewSeason = currentSeason
+                episodes = currentEpisodes
+            }
+        }
+    }
+
+    private func show(_ season: SeasonLink) {
+        choosingSeason = false
+        viewSeason = season
+        if season == currentSeason {
+            episodes = currentEpisodes
+            return
+        }
+        loading = true
+        Task {
+            let loaded = await loadSeason(season)
+            await MainActor.run {
+                episodes = loaded
+                loading = false
+            }
+        }
+    }
+}
+
+/// Sprachen der aktuellen Folge; die gewählte wird auch für die nächsten Titel gemerkt.
+private struct LanguageSheet: View {
+    let languages: [LanguageOption]
+    let active: LanguageOption?
+    let onPick: (LanguageOption) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Sprache")
+                .font(.system(size: 20, weight: .heavy))
+                .foregroundColor(AbiTheme.textPrimary)
+            ForEach(languages, id: \.self) { language in
+                Button {
+                    onPick(language)
+                } label: {
+                    HStack(spacing: 12) {
+                        Circle()
+                            .fill(Color(red: Double((language.badgeColorHex >> 16) & 0xFF) / 255,
+                                        green: Double((language.badgeColorHex >> 8) & 0xFF) / 255,
+                                        blue: Double(language.badgeColorHex & 0xFF) / 255))
+                            .frame(width: 10, height: 10)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(language.shortLabel).font(.system(size: 15, weight: .bold))
+                            Text(language.fullLabel).font(.system(size: 12)).foregroundColor(AbiTheme.textSecondary)
+                        }
+                        Spacer()
+                        if language == active {
+                            Image(systemName: "checkmark").foregroundColor(AbiTheme.accentCyan)
+                        }
+                    }
+                    .foregroundColor(AbiTheme.textPrimary)
+                    .padding(12)
+                    .background(language == active ? Color.white.opacity(0.1) : Color.clear)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                }
+                .buttonStyle(.plain)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(18)
+        .background(AbiTheme.bgSurface.ignoresSafeArea())
+        .preferredColorScheme(.dark)
+    }
+}
+
+// MARK: - Videofläche
 
 #if canImport(UIKit)
-private struct SystemVideoPlayerRepresentable: UIViewControllerRepresentable {
+/// Nur das Bild (AVPlayerLayer), ohne die Bedienelemente von iOS – die zeichnet der Player selbst.
+private struct PlayerLayerView: UIViewRepresentable {
     let player: AVPlayer
 
-    func makeUIViewController(context: Context) -> AVPlayerViewController {
-        let controller = AVPlayerViewController()
-        controller.player = player
-        controller.showsPlaybackControls = true
-        controller.allowsPictureInPicturePlayback = true
-        controller.videoGravity = .resizeAspect
-        return controller
+    final class LayerView: UIView {
+        override class var layerClass: AnyClass { AVPlayerLayer.self }
+        var playerLayer: AVPlayerLayer { layer as! AVPlayerLayer }
     }
 
-    func updateUIViewController(_ uiViewController: AVPlayerViewController, context: Context) {
-        if uiViewController.player !== player {
-            uiViewController.player = player
+    func makeUIView(context: Context) -> LayerView {
+        let view = LayerView()
+        view.backgroundColor = .black
+        view.playerLayer.videoGravity = .resizeAspect
+        view.playerLayer.player = player
+        return view
+    }
+
+    func updateUIView(_ uiView: LayerView, context: Context) {
+        if uiView.playerLayer.player !== player {
+            uiView.playerLayer.player = player
         }
     }
 }
 #else
-private struct SystemVideoPlayerRepresentable: View {
+private struct PlayerLayerView: View {
     let player: AVPlayer
     var body: some View {
         VideoPlayer(player: player)
