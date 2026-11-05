@@ -75,6 +75,58 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
     private val sessions = ConcurrentHashMap<CefBrowser, Session>()
 
     /** Lädt und startet Chromium schon beim App-Start, damit der erste Film nicht darauf warten muss. */
+    /** Sichtbare Browserfenster (z. B. die Letterboxd-Anmeldung) bekommen Seitenereignisse und JS-Meldungen. */
+    interface PageListener {
+        fun onPageLoaded(browser: CefBrowser, url: String) {}
+        fun onMessage(browser: CefBrowser, message: String) {}
+    }
+
+    private val pageListeners = ConcurrentHashMap<CefBrowser, PageListener>()
+
+    /**
+     * Browser für Seiten, die der Nutzer selbst bedient. Offscreen gerendert und in Java gezeichnet:
+     * Tastatur und Maus laufen dann über Java und kommen zuverlässig an (ein eigenes Chromium-Fenster
+     * bekommt neben der Compose-Oberfläche keine Tastatureingaben).
+     */
+    suspend fun openVisibleBrowser(url: String, listener: PageListener): CefBrowser {
+        val created = ensureClient().createBrowser(url, true, false)
+        pageListeners[created] = listener
+        return created
+    }
+
+    fun releaseVisibleBrowser(browser: CefBrowser) {
+        pageListeners.remove(browser)
+    }
+
+    /** Unsichtbarer Browser, der trotzdem Seitenereignisse und JS-Meldungen liefert (z. B. für Letterboxd). */
+    suspend fun openHiddenBrowser(url: String, listener: PageListener): CefBrowser {
+        val created = ensureClient().createBrowser(url, true, false)
+        pageListeners[created] = listener
+        SwingUtilities.invokeLater {
+            runCatching { created.createImmediately() }
+                .onFailure { AppLog.e(TAG, "Unsichtbarer Browser konnte nicht erzeugt werden", it) }
+        }
+        return created
+    }
+
+    /** Schließt einen mit [openHiddenBrowser] oder [openVisibleBrowser] geöffneten Browser. */
+    fun closeBrowser(browser: CefBrowser) {
+        pageListeners.remove(browser)
+        SwingUtilities.invokeLater {
+            runCatching {
+                browser.stopLoad()
+                browser.setCloseAllowed()
+                browser.close(true)
+            }
+        }
+    }
+
+    /** Cookie-Speicher von Chromium (erst nach dem Start von Chromium verfügbar). */
+    suspend fun cookieManager(): org.cef.network.CefCookieManager {
+        ensureClient()
+        return org.cef.network.CefCookieManager.getGlobalManager()
+    }
+
     fun prepareInBackground(scope: CoroutineScope) {
         scope.launch { runCatching { ensureClient() } }
     }
@@ -140,7 +192,10 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
                     // Prozess (z. B. eine zweite ABI-TV-Instanz) dasselbe Profil benutzt
                     cefSettings.root_cache_path = profileDir().absolutePath
                     cefSettings.windowless_rendering_enabled = true
-                    cefSettings.user_agent = HttpClient.USER_AGENT
+                    // Kein fester User-Agent mehr für alle Fenster: Seiten wie Letterboxd lehnen einen
+                    // Browser ab, dessen Kennung nicht zur echten Chromium-Version passt. Die Hoster-Seiten
+                    // bekommen die App-Kennung weiterhin pro Anfrage (siehe onBeforeResourceLoad).
+                    System.getenv("ABITV_DEVTOOLS_PORT")?.toIntOrNull()?.let { cefSettings.remote_debugging_port = it }
                     cefSettings.log_severity = CefSettings.LogSeverity.LOGSEVERITY_DISABLE
                     addJcefArgs("--mute-audio", "--autoplay-policy=no-user-gesture-required")
                     setAppHandler(object : MavenCefAppHandlerAdapter() {})
@@ -173,7 +228,12 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
                 persistent: Boolean,
                 callback: CefQueryCallback?
             ): Boolean {
-                val session = browser?.let { sessions[it] } ?: return false
+                val session = browser?.let { sessions[it] } ?: run {
+                    val listener = browser?.let { pageListeners[it] } ?: return false
+                    listener.onMessage(browser, request.orEmpty())
+                    callback?.success("")
+                    return true
+                }
                 if (DEBUG) AppLog.d(TAG, "JS meldet: ${request?.take(400)}")
                 val parts = runCatching { JsonParser.parseString(request.orEmpty()).asJsonArray }.getOrNull()
                 val url = parts?.get(0)?.asString?.trim().orEmpty()
@@ -192,6 +252,7 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
                 val session = browser?.let { sessions[it] } ?: return false
                 val url = request?.url ?: return false
                 if (DEBUG) AppLog.d(TAG, "Anfrage ${request.resourceType}: ${url.take(160)}")
+                request.setHeaderByName("User-Agent", HttpClient.USER_AGENT, true)
                 if (request.resourceType == CefRequest.ResourceType.RT_MAIN_FRAME) {
                     session.lastPageUrl = url
                     // Wie auf Android: die Hoster-Seite mit Referer laden
@@ -261,6 +322,7 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
                 if (DEBUG) AppLog.d(TAG, "Geladen HTTP $httpStatusCode (main=${frame?.isMain}): ${frame?.url}")
                 injectHook(browser, frame)
                 if (frame?.isMain == true && browser != null) {
+                    pageListeners[browser]?.onPageLoaded(browser, frame?.url.orEmpty())
                     sessions[browser]?.let { session ->
                         session.mainLoaded = true
                         startPlayKicks(browser, session)
@@ -271,7 +333,8 @@ class ChromiumStreamExtractor(private val installDir: File) : BrowserStreamExtra
 
         // Werbe-Popups gar nicht erst öffnen
         cefClient.addLifeSpanHandler(object : CefLifeSpanHandlerAdapter() {
-            override fun onBeforePopup(browser: CefBrowser?, frame: CefFrame?, targetUrl: String?, targetFrameName: String?): Boolean = true
+            override fun onBeforePopup(browser: CefBrowser?, frame: CefFrame?, targetUrl: String?, targetFrameName: String?): Boolean =
+                browser == null || !pageListeners.containsKey(browser)
         })
     }
 

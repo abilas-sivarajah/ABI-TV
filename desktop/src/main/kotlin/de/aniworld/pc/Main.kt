@@ -24,6 +24,7 @@ import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.pc.platform.AppDirs
 import de.aniworld.pc.platform.ChromiumStreamExtractor
 import de.aniworld.pc.platform.JsonFileStore
+import de.aniworld.pc.platform.LetterboxdAccount
 import de.aniworld.pc.platform.StoAnimeFilter
 import de.aniworld.pc.platform.VlcSupport
 import de.aniworld.pc.platform.WindowChrome
@@ -79,11 +80,14 @@ fun main() {
     LocalStorage.init(mainStore)
     val chromium = ChromiumStreamExtractor(File(AppDirs.cacheDir, "jcef"))
     StreamResolver.browserExtractor = chromium
+    LetterboxdAccount.chromium = chromium
     TmdbArtwork.configure(tmdbApiKey(), AppDirs.cacheDir)
     LetterboxdRatings.configure(AppDirs.cacheDir)
     LetterboxdLists.configure(AppDirs.cacheDir)
     KeylessArtwork.configure(AppDirs.cacheDir)
     chromium.prepareInBackground(backgroundScope)
+    // Gespeicherte Letterboxd-Anmeldung laden; Watchlist-Filme des Listenbesitzers in die Empfehlungsliste
+    LetterboxdAccount.start(backgroundScope)
     PcCastManager.start()
     backgroundScope.launch { AppDirs.pruneImageCache() }
     // Liste der Anime auf S.to, damit der Serien-Bereich ohne Anime auskommt

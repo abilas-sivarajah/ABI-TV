@@ -111,6 +111,7 @@ import de.aniworld.pc.ui.compat.loadCachedImage
 import de.aniworld.tv.data.remote.TmdbArtwork
 import de.aniworld.tv.data.remote.KeylessArtwork
 import de.aniworld.tv.data.remote.LetterboxdRatings
+import de.aniworld.pc.platform.LetterboxdAccount
 import de.aniworld.pc.platform.LetterboxdUsers
 import de.aniworld.tv.data.remote.LetterboxdLists
 import de.aniworld.pc.platform.withoutStoAnime
@@ -2828,6 +2829,12 @@ private fun WatchlistTabContent(
 ) {
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
     val letterboxdUsers by LetterboxdUsers.users.collectAsState()
+    // Empfehlungsliste bei jedem Öffnen des Reiters frisch laden (sie ändert sich, wenn Ilkem etwas hinzufügt)
+    val featuredListVersion by LetterboxdAccount.listVersion.collectAsState()
+    val featuredVersion = remember(featuredListVersion) {
+        letterboxdFilmsCache.keys.removeIf { it.startsWith("list:${FeaturedLetterboxdList.PATH}#") }
+        featuredListVersion
+    }
 
     // Beliebte Letterboxd-Listen (einmal pro App-Start laden)
     var popularLists by remember { mutableStateOf(letterboxdPopularListsCache) }
@@ -2835,7 +2842,7 @@ private fun WatchlistTabContent(
     LaunchedEffect(Unit) {
         if (popularLists != null) return@LaunchedEffect
         // Eine mehr laden, falls die eigene Empfehlungsliste darunter ist (sie steht ohnehin oben)
-        runCatching { LetterboxdLists.popularLists(limit = 5).filter { it.path != FeaturedLetterboxdList.path }.take(4) }
+        runCatching { LetterboxdLists.popularLists(limit = 5).filter { it.path != FeaturedLetterboxdList.PATH }.take(4) }
             .onSuccess { popularLists = it; letterboxdPopularListsCache = it }
             .onFailure { popularError = "Letterboxd-Listen nicht erreichbar (${it.message})." }
     }
@@ -2944,11 +2951,12 @@ private fun WatchlistTabContent(
         // Eigene Empfehlungsliste immer zuerst
         item(key = "wl_lb_featured") {
             LetterboxdFilmsRow(
-                cacheKey = "list:${FeaturedLetterboxdList.path}",
-                title = "⭐ ${FeaturedLetterboxdList.name}",
+                // Version + Besuch im Reiter: neu hinzugefügte Filme erscheinen ohne App-Neustart
+                cacheKey = "list:${FeaturedLetterboxdList.PATH}#$featuredVersion",
+                title = "⭐ ${FeaturedLetterboxdList.NAME}",
                 watchlistSlugs = watchlistSlugs,
                 onOpenAnime = onOpenAnime,
-                load = { LetterboxdLists.listFilms(FeaturedLetterboxdList.path, maxPages = 2).take(100) }
+                load = { LetterboxdLists.listFilms(FeaturedLetterboxdList.PATH, maxPages = 2).take(100) }
             )
         }
 
@@ -2967,11 +2975,7 @@ private fun WatchlistTabContent(
 }
 
 /** Feste Empfehlungsliste im Watchlist-Reiter (steht vor den beliebten Community-Listen). */
-private val FeaturedLetterboxdList = LetterboxdLists.ListInfo(
-    name = "Ilkems Empfehlungen",
-    owner = "nerofreyz",
-    path = "/nerofreyz/list/ilkems-empfehlungen-1/"
-)
+private val FeaturedLetterboxdList = LetterboxdAccount.FeaturedList
 
 /** Beliebte Listen und geladene Letterboxd-Filme pro Sitzung merken (Reiterwechsel lädt nicht neu). */
 private var letterboxdPopularListsCache: List<LetterboxdLists.ListInfo>? = null
@@ -3141,6 +3145,55 @@ private fun SettingsTabContent(
         )
 
         Spacer(modifier = Modifier.height(24.dp))
+
+        // Karte: Letterboxd-Konto
+        val lbUser by LetterboxdAccount.username.collectAsState()
+        val lbStatus by LetterboxdAccount.status.collectAsState()
+        Box(
+            modifier = Modifier
+                .fillMaxWidth(0.92f)
+                .clip(RoundedCornerShape(14.dp))
+                .background(BgElevated)
+                .border(1.dp, Color.White.copy(alpha = 0.12f), RoundedCornerShape(14.dp))
+                .padding(20.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = "🎬 Letterboxd", color = TextPrimary, fontSize = 17.sp, fontWeight = FontWeight.Bold)
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = lbUser?.let { "Angemeldet als $it" } ?: "Nicht angemeldet",
+                        color = if (lbUser != null) AccentCyan else TextSecondary,
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    Text(
+                        text = lbStatus ?: if (lbUser != null && LetterboxdAccount.isListOwner) {
+                            "Filme, die du auf die Watchlist setzt, kommen auch in „${LetterboxdAccount.FeaturedList.NAME}“."
+                        } else {
+                            "Die Anmeldung läuft auf der echten Letterboxd-Seite; die App sieht dein Passwort nicht."
+                        },
+                        color = TextMuted,
+                        fontSize = 12.sp
+                    )
+                }
+                if (lbUser != null) {
+                    TvFocusableButton(text = "Abmelden", onClick = { LetterboxdAccount.signOut(scope) })
+                } else {
+                    TvFocusableButton(
+                        text = "Mit Letterboxd anmelden",
+                        isPrimary = true,
+                        onClick = { LetterboxdAccount.openSignIn(scope) }
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(16.dp))
 
         // Karte: Updates
         Box(
