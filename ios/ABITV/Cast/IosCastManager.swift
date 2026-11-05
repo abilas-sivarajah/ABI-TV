@@ -84,6 +84,8 @@ public final class IosCastManager: ObservableObject {
 
     private static let prefsSuite = "aniworld_mobile_cast"
     private static let keyLastIp = "last_tv_ip"
+    /// Hat der Nutzer selbst "Trennen" gewählt? Dann nicht von allein wieder verbinden.
+    private static let keyManuallyDisconnected = "cast_manually_disconnected"
     private static let keyLastName = "last_tv_name"
     private static let keyLastPort = "last_tv_port"
     private static let keyLastId = "last_tv_id"
@@ -161,7 +163,9 @@ public final class IosCastManager: ObservableObject {
 
             if !Task.isCancelled {
                 self.isSearching = false
-                if autoConnect && self.connectedDevice == nil {
+                // Nach "Trennen" nur verbinden, wenn der Nutzer selbst ein Gerät auswählt
+                let manuallyDisconnected = self.prefs.bool(forKey: Self.keyManuallyDisconnected)
+                if autoConnect && !manuallyDisconnected && self.connectedDevice == nil {
                     if let usable = self.discoveredDevices.first(where: { self.isUsable($0) }) {
                         self.finishConnect(usable)
                     }
@@ -171,6 +175,8 @@ public final class IosCastManager: ObservableObject {
     }
 
     public func connect(_ device: CastDevice) {
+        // Bewusst gewählt: automatisches Verbinden ist wieder erlaubt
+        prefs.set(false, forKey: Self.keyManuallyDisconnected)
         Task {
             guard let info = await probe(device) else {
                 showMessage("\(device.name) antwortet nicht. Ist ABI TV auf dem Fernseher geöffnet?")
@@ -273,6 +279,7 @@ public final class IosCastManager: ObservableObject {
     }
 
     public func disconnect() {
+        prefs.set(true, forKey: Self.keyManuallyDisconnected)
         connectedDevice = nil
         tvPlaybackStatus = nil
         statusPollTask?.cancel()
@@ -346,8 +353,12 @@ public final class IosCastManager: ObservableObject {
         titleDe: String,
         preferredLangKey: Int
     ) async -> Bool {
-        var device = connectedDevice ?? discoveredDevices.first(where: { isUsable($0) })
-        if device == nil {
+        var device = connectedDevice
+        // Nach "Trennen" nicht selbst irgendein gekoppeltes Gerät (z. B. den PC) nehmen – der Nutzer wählt
+        if device == nil && !prefs.bool(forKey: Self.keyManuallyDisconnected) {
+            device = discoveredDevices.first(where: { isUsable($0) })
+        }
+        if device == nil && !prefs.bool(forKey: Self.keyManuallyDisconnected) {
             await scanLocalSubnet()
             device = discoveredDevices.first(where: { isUsable($0) })
         }
