@@ -89,6 +89,11 @@ public enum FilmpalastScraper {
         return sections
     }
 
+    /// Gemerkte Listen verwerfen (Aktualisieren durch Herunterziehen); Details bleiben.
+    public static func clearListCache() {
+        lock.withLock { categoryCache.removeAll() }
+    }
+
     public static func fetchCategory(_ categoryPath: String, page: Int = 1) async -> [AnimeCard] {
         let cacheKey = "\(normalizePath(categoryPath))_page_\(page)"
         if page == 1, let cached = lock.withLock({ categoryCache[cacheKey] }) {
