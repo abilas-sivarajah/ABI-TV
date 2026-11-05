@@ -193,11 +193,6 @@ public struct LiveTvView: View {
             .padding(.top, 4)
         }
         .background(AbiTheme.bgPrimary)
-        .refreshable {
-            let result = await LiveTvRepository.loadChannels(forceRefresh: true)
-            allChannels = result.channels
-            customError = result.customError
-        }
         .task {
             reload(force: false)
         }

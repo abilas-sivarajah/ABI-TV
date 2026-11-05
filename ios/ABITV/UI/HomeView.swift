@@ -99,8 +99,6 @@ public struct HomeView: View {
     @State private var popularLists: [LetterboxdLists.ListInfo]? = nil
     @State private var popularListsError: String? = nil
     @State private var featuredVisit = 0
-    /// Steigt beim Herunterziehen im Watchlist-Reiter: alle Letterboxd-Reihen laden neu.
-    @State private var letterboxdRefresh = 0
 
     // Info-Blatt und Einstellungen
     @State private var infoCard: AnimeCard? = nil
@@ -302,7 +300,6 @@ public struct HomeView: View {
             }
             .padding(.bottom, 24)
         }
-        .refreshable { await refreshCatalogs() }
     }
 
     // MARK: - Filme, Serien, Anime
@@ -394,15 +391,6 @@ public struct HomeView: View {
             }
             .padding(.bottom, 24)
         }
-        .refreshable {
-            if let genre = selectedGenre {
-                genreLoadedKey = nil
-                FilmpalastScraper.clearListCache()
-                onSelectGenre(genre)
-            } else {
-                await refreshCatalogs()
-            }
-        }
     }
 
     private func genreGrid(key: String) -> some View {
@@ -478,7 +466,7 @@ public struct HomeView: View {
 
                 ForEach(storage.letterboxdUsers, id: \.self) { user in
                     LetterboxdFilmsRow(
-                        cacheKey: "user:\(user)#\(letterboxdRefresh)",
+                        cacheKey: "user:\(user)",
                         title: "🎬 Watchlist von @\(user)",
                         storage: storage,
                         load: { try await LetterboxdLists.watchlist(user: user, maxPages: 3) },
@@ -498,7 +486,7 @@ public struct HomeView: View {
 
                 // Eigene Empfehlungsliste immer zuerst; bei jedem Öffnen des Reiters frisch geladen
                 LetterboxdFilmsRow(
-                    cacheKey: "featured#\(featuredVisit)-\(letterboxdAccount.listVersion)-\(letterboxdRefresh)",
+                    cacheKey: "featured#\(featuredVisit)-\(letterboxdAccount.listVersion)",
                     title: "⭐ \(LetterboxdLists.FeaturedList.name)",
                     storage: storage,
                     load: { try await LetterboxdLists.listFilms(path: LetterboxdLists.FeaturedList.path, maxPages: 2) },
@@ -507,7 +495,7 @@ public struct HomeView: View {
 
                 ForEach(popularLists ?? [], id: \.path) { list in
                     LetterboxdFilmsRow(
-                        cacheKey: "list:\(list.path)#\(letterboxdRefresh)",
+                        cacheKey: "list:\(list.path)",
                         title: "📋 \(list.name) · von \(list.owner)",
                         storage: storage,
                         load: { Array(try await LetterboxdLists.listFilms(path: list.path, maxPages: 1).prefix(60)) },
@@ -517,7 +505,6 @@ public struct HomeView: View {
             }
             .padding(.vertical, 14)
         }
-        .refreshable { await refreshLetterboxd() }
         .task { await loadPopularLists() }
     }
 
@@ -690,11 +677,6 @@ public struct HomeView: View {
                 }
                 .padding(.bottom, 24)
             }
-            .refreshable {
-                if searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).count < 2 {
-                    refreshSuggestions()
-                }
-            }
         }
     }
 
@@ -848,39 +830,6 @@ public struct HomeView: View {
                 rebuildHeroes()
             }
         }
-    }
-
-    /// Herunterziehen: Filme, Serien und Anime neu laden, Titelbilder neu mischen.
-    /// Was nicht lädt, behält den bisherigen Stand.
-    @MainActor
-    private func refreshCatalogs() async {
-        FilmpalastScraper.clearListCache()
-        async let movies = FilmpalastScraper.fetchHomeSections()
-        async let series = SerienStreamScraper.fetchHomeSections()
-        async let anime = try? await AniWorldScraper.fetchHomeCatalog()
-        let (m, s, a) = await (movies, series, anime)
-        if !m.isEmpty { movieSections = m }
-        if !s.isEmpty { seriesSections = s }
-        if let a, !a.isEmpty {
-            animeSections = a
-            animeError = nil
-        }
-        startHero = []
-        movieHero = []
-        seriesHero = []
-        animeHero = []
-        rebuildHeroes()
-    }
-
-    /// Herunterziehen im Watchlist-Reiter: Empfehlungsliste, Watchlists und beliebte Listen neu laden.
-    @MainActor
-    private func refreshLetterboxd() async {
-        LetterboxdSessionCache.films.removeAll()
-        LetterboxdSessionCache.popularLists = nil
-        popularLists = nil
-        popularListsError = nil
-        letterboxdRefresh += 1
-        await loadPopularLists()
     }
 
     private func loadMoviesCatalog() {
