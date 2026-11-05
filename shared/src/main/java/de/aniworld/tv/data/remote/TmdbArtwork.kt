@@ -155,6 +155,16 @@ object TmdbArtwork {
         return null
     }
 
+    /** Deutscher Titel eines Films (z. B. für den Abgleich von Letterboxd-Filmen mit Filmpalast). */
+    suspend fun germanMovieTitle(title: String, year: Int?): String? {
+        if (!isConfigured || title.isBlank()) return null
+        return withContext(Dispatchers.IO) {
+            runCatching { search(Kind.MOVIE, title, year) ?: year?.let { search(Kind.MOVIE, title, null) } }
+                .getOrNull()
+                ?.string("title")
+        }
+    }
+
     /** Bester Treffer: exakter Titel bevorzugt, sonst der beliebteste der ersten Ergebnisse. */
     private fun search(kind: Kind, title: String, year: Int?): JsonObject? {
         val params = buildMap {

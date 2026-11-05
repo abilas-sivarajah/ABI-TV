@@ -168,7 +168,7 @@ fun TvAnimeCard(
                         .padding(horizontal = 6.dp, vertical = 2.dp)
                 ) {
                     Text(
-                        text = "★ MERKLISTE",
+                        text = "★ WATCHLIST",
                         color = Color.White,
                         fontSize = 9.sp,
                         fontWeight = FontWeight.Bold

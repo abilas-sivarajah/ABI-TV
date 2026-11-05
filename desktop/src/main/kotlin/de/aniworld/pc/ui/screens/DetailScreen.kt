@@ -330,7 +330,7 @@ fun DetailScreen(
 
                             item {
                                 TvFocusableButton(
-                                    text = if (isBookmarked) "★ Auf Merkliste" else "+ Merkliste",
+                                    text = if (isBookmarked) "★ Auf Watchlist" else "+ Watchlist",
                                     isSelected = isBookmarked,
                                     modifier = if (savedProgress == null && firstEp == null) {
                                         Modifier.focusRequester(primaryFocusRequester)
