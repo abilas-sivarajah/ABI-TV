@@ -324,10 +324,8 @@ object SerienStreamScraper {
         val trimmed = query.trim().lowercase()
         if (trimmed.length < 2) return@withContext emptyList()
 
-        val catalog = loadAtoZSeries()
-        catalog.filter {
-            it.title.lowercase().contains(trimmed) || it.cleanSlug.lowercase().contains(trimmed)
-        }.take(30)
+        // Wortanfänge statt "enthält": "sp" findet "Marvel's Spider-Man", "spiderman" findet "Spider-Man"
+        TitleSearch.filterAndRank(loadAtoZSeries(), query).take(40)
     }
 
     private suspend fun loadAtoZSeries(): List<AnimeCard> = atoZMutex.withLock {

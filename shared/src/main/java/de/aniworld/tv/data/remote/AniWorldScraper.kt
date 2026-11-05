@@ -11,6 +11,7 @@ import de.aniworld.tv.data.model.SeasonLink
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import okhttp3.FormBody
 import okhttp3.Request
@@ -143,6 +144,55 @@ object AniWorldScraper {
         return result
     }
 
+    // ------------------- Suche in der kompletten A–Z-Liste -------------------
+
+    private data class CatalogEntry(val card: AnimeCard, val alternativeTitles: List<String>)
+
+    @Volatile
+    private var atoZCatalog: List<CatalogEntry>? = null
+    private val atoZLock = kotlinx.coroutines.sync.Mutex()
+
+    /** Alle Animes aus "/animes" (Titel und alternative Titel), einmal pro App-Start geladen. */
+    private suspend fun loadAtoZ(): List<CatalogEntry> = atoZLock.withLock {
+        atoZCatalog?.let { return@withLock it }
+        val entries = withContext(Dispatchers.IO) {
+            runCatching {
+                val (_, html) = HttpClient.getHtml("/animes")
+                Jsoup.parse(html, HttpClient.BASE_URL)
+                    .select("a[href^=\"/anime/stream/\"][data-alternative-title]")
+                    .mapNotNull { a ->
+                        val slug = a.attr("href").removePrefix("/anime/stream/").trim('/')
+                        if (slug.isBlank() || slug.contains('/')) return@mapNotNull null
+                        val title = a.text().replace("‌", "").replace("​", "").trim()
+                        if (title.isBlank()) return@mapNotNull null
+                        val alternatives = a.attr("data-alternative-title").split(',').map { it.trim() }.filter { it.isNotBlank() }
+                        CatalogEntry(AnimeCard(slug = slug, title = title, coverUrl = coverCache[slug].orEmpty()), alternatives)
+                    }
+                    .distinctBy { it.card.slug }
+            }.getOrDefault(emptyList())
+        }
+        if (entries.isNotEmpty()) atoZCatalog = entries
+        entries
+    }
+
+    /**
+     * Suche nach Wortanfängen in allen Animes (auch alternative Titel, z. B. japanische Namen).
+     * Fällt auf die Schnellsuche der Seite zurück, falls die A–Z-Liste nicht lädt.
+     */
+    suspend fun searchCatalog(query: String): List<AnimeCard> {
+        val catalog = loadAtoZ()
+        if (catalog.isEmpty()) return TitleSearch.filterAndRank(searchAnimes(query), query)
+        val byTitle = catalog.mapNotNull { entry -> TitleSearch.matchPosition(entry.card.title, query)?.let { entry to it } }
+        val byAlternative = catalog.mapNotNull { entry ->
+            entry.alternativeTitles.mapNotNull { TitleSearch.matchPosition(it, query) }.minOrNull()?.let { entry to it + 100 }
+        }
+        return (byTitle + byAlternative)
+            .sortedWith(compareBy<Pair<CatalogEntry, Int>>({ it.second }, { it.first.card.title.length }))
+            .map { (entry, _) -> entry.card.copy(coverUrl = coverCache[entry.card.slug].orEmpty().ifBlank { entry.card.coverUrl }) }
+            .distinctBy { it.slug }
+            .take(40)
+    }
+
     suspend fun searchAnimes(query: String): List<AnimeCard> = withContext(Dispatchers.IO) {
         val trimmed = query.trim()
         if (trimmed.isBlank()) return@withContext emptyList()
@@ -169,6 +219,8 @@ object AniWorldScraper {
                 val obj = elem.asJsonObject
                 val link = obj.get("link")?.asString.orEmpty()
                 if (!link.startsWith("/anime/stream/")) continue
+                // Die Schnellsuche liefert auch einzelne Folgen ("…/staffel-7/episode-4") – nur die Anime selbst
+                if (link.removePrefix("/anime/stream/").trim('/').contains('/')) continue
 
                 val slug = link.removePrefix("/anime/stream/").substringBefore("/").trim()
                 if (slug.isBlank() || !seen.add(slug)) continue
