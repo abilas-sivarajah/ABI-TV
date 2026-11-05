@@ -2834,7 +2834,8 @@ private fun WatchlistTabContent(
     var popularError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(Unit) {
         if (popularLists != null) return@LaunchedEffect
-        runCatching { LetterboxdLists.popularLists(limit = 5) }
+        // Eine mehr laden, falls die eigene Empfehlungsliste darunter ist (sie steht ohnehin oben)
+        runCatching { LetterboxdLists.popularLists(limit = 5).filter { it.path != FeaturedLetterboxdList.path }.take(4) }
             .onSuccess { popularLists = it; letterboxdPopularListsCache = it }
             .onFailure { popularError = "Letterboxd-Listen nicht erreichbar (${it.message})." }
     }
@@ -2940,6 +2941,17 @@ private fun WatchlistTabContent(
             }
         }
 
+        // Eigene Empfehlungsliste immer zuerst
+        item(key = "wl_lb_featured") {
+            LetterboxdFilmsRow(
+                cacheKey = "list:${FeaturedLetterboxdList.path}",
+                title = "⭐ ${FeaturedLetterboxdList.name}",
+                watchlistSlugs = watchlistSlugs,
+                onOpenAnime = onOpenAnime,
+                load = { LetterboxdLists.listFilms(FeaturedLetterboxdList.path, maxPages = 2).take(100) }
+            )
+        }
+
         popularLists.orEmpty().forEach { list ->
             item(key = "wl_lb_list_${list.path}") {
                 LetterboxdFilmsRow(
@@ -2953,6 +2965,13 @@ private fun WatchlistTabContent(
         }
     }
 }
+
+/** Feste Empfehlungsliste im Watchlist-Reiter (steht vor den beliebten Community-Listen). */
+private val FeaturedLetterboxdList = LetterboxdLists.ListInfo(
+    name = "Ilkems Empfehlungen",
+    owner = "nerofreyz",
+    path = "/nerofreyz/list/ilkems-empfehlungen-1/"
+)
 
 /** Beliebte Listen und geladene Letterboxd-Filme pro Sitzung merken (Reiterwechsel lädt nicht neu). */
 private var letterboxdPopularListsCache: List<LetterboxdLists.ListInfo>? = null
