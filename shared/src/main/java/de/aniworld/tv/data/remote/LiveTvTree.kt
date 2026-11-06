@@ -70,7 +70,7 @@ object LiveTvTree {
         val movies = LinkedHashMap<String, LinkedHashMap<String, MutableList<LiveTvChannel>>>()
         val series = LinkedHashMap<String, LinkedHashMap<String, MutableList<LiveTvChannel>>>()
         for (channel in channels) {
-            if (separatorName.matches(channel.name)) continue
+            if (separatorName.matches(channel.name) || separatorName.matches(cleanName(channel.name))) continue
             val country = countryOf(channel)
             countries.putIfAbsent(country.key, country)
             val group = channel.group.trim().ifBlank { "Ohne Gruppe" }

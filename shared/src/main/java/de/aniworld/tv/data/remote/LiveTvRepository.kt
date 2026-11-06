@@ -392,21 +392,33 @@ object LiveTvRepository {
     val cachedTrees: List<LiveTvNode>
         get() = customCache?.trees.orEmpty() + listOfNotNull(folderCache?.second?.tree)
 
+    /** Oberste Ebene der Senderwahl: alle Reiter (Türkiye, Deutsch, eigener Ordner, feste Reiter). */
+    const val ROOT_FOLDER_ID = "root:"
+
+    private fun presetFolder(category: String): LiveTvNode? {
+        val info = CATEGORIES.firstOrNull { it.id == category } ?: return null
+        val channels = when (category) {
+            "all" -> PRESET_CHANNELS
+            "custom" -> customCache?.takeIf { it.trees.isEmpty() }?.channels.orEmpty()
+            else -> PRESET_CHANNELS.filter { it.category == category }
+        }
+        return LiveTvNode(id = PRESET_FOLDER_PREFIX + category, title = info.title, icon = info.icon, channels = channels)
+    }
+
+    private fun rootFolder(): LiveTvNode = LiveTvNode(
+        id = ROOT_FOLDER_ID,
+        title = "Live TV",
+        icon = "📺",
+        children = cachedTrees + CATEGORIES.mapNotNull { presetFolder(it.id) }.filter { it.channels.isNotEmpty() }
+    )
+
     /**
-     * Ordner der Senderwahl: ein Reiter der eigenen Listen oder ein fester Reiter ("preset:all" usw.).
-     * Feste Reiter enthalten nur ihre Sender; eigene Listen ihre Unterordner und Sender.
+     * Ordner der Senderwahl: ein Reiter der eigenen Listen, ein fester Reiter ("preset:all" usw.)
+     * oder die oberste Ebene mit allen Reitern. Feste Reiter enthalten nur ihre Sender.
      */
     fun findFolder(id: String): LiveTvNode? {
-        if (id.startsWith(PRESET_FOLDER_PREFIX)) {
-            val category = id.removePrefix(PRESET_FOLDER_PREFIX)
-            val info = CATEGORIES.firstOrNull { it.id == category } ?: return null
-            val channels = when (category) {
-                "all" -> PRESET_CHANNELS
-                "custom" -> customCache?.takeIf { it.trees.isEmpty() }?.channels.orEmpty()
-                else -> PRESET_CHANNELS.filter { it.category == category }
-            }
-            return LiveTvNode(id = id, title = info.title, icon = info.icon, channels = channels)
-        }
+        if (id == ROOT_FOLDER_ID) return rootFolder()
+        if (id.startsWith(PRESET_FOLDER_PREFIX)) return presetFolder(id.removePrefix(PRESET_FOLDER_PREFIX))
         fun search(nodes: List<LiveTvNode>): LiveTvNode? {
             for (node in nodes) {
                 if (node.id == id) return node
@@ -417,17 +429,19 @@ object LiveTvRepository {
         return search(cachedTrees)
     }
 
-    /** Übergeordneter Ordner (null = schon ganz oben). */
+    /** Übergeordneter Ordner; über den Reitern liegt die oberste Ebene (null = schon ganz oben). */
     fun parentFolder(id: String): LiveTvNode? {
-        if (id.startsWith(PRESET_FOLDER_PREFIX)) return null
-        fun search(parent: LiveTvNode?, nodes: List<LiveTvNode>): LiveTvNode? {
+        if (id == ROOT_FOLDER_ID) return null
+        if (id.startsWith(PRESET_FOLDER_PREFIX)) return rootFolder()
+        fun search(parent: LiveTvNode, nodes: List<LiveTvNode>): LiveTvNode? {
             for (node in nodes) {
                 if (node.id == id) return parent
                 search(node, node.children)?.let { return it }
             }
             return null
         }
-        return search(null, cachedTrees)
+        val root = rootFolder()
+        return search(root, cachedTrees)
     }
 
     private fun loadCustomList(forceRefresh: Boolean, errors: MutableList<String>): CustomList? {

@@ -70,7 +70,7 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.LiveTvNode
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.rememberLazyListState
 import de.aniworld.tv.platform.M3uFolderAndroid
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -454,19 +454,27 @@ private fun TreeBrowser(
     Column(modifier = Modifier.fillMaxSize()) {
         view.levels.forEach { level ->
             when (level) {
-                is TreeLevel.Chips -> FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                    modifier = Modifier.padding(bottom = 10.dp)
-                ) {
-                    level.children.forEach { child ->
-                        val selected = child.id == level.selectedId
-                        TvFocusableButton(
-                            text = listOf(child.icon, child.title).filter { it.isNotBlank() }.joinToString(" "),
-                            isSelected = selected,
-                            isPrimary = selected,
-                            onClick = { onPathChange(path.take(level.depth) + child.id) }
-                        )
+                is TreeLevel.Chips -> {
+                    // Eine Zeile, seitlich scrollbar (statt viele Zeilen untereinander)
+                    val selectedIndex = level.children.indexOfFirst { it.id == level.selectedId }.coerceAtLeast(0)
+                    val rowState = rememberLazyListState(initialFirstVisibleItemIndex = (selectedIndex - 1).coerceAtLeast(0))
+                    LazyRow(
+                        state = rowState,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        contentPadding = PaddingValues(end = 24.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 10.dp)
+                    ) {
+                        items(level.children, key = { it.id }) { child ->
+                            val selected = child.id == level.selectedId
+                            TvFocusableButton(
+                                text = listOf(child.icon, child.title).filter { it.isNotBlank() }.joinToString(" "),
+                                isSelected = selected,
+                                isPrimary = selected,
+                                onClick = { onPathChange(path.take(level.depth) + child.id) }
+                            )
+                        }
                     }
                 }
                 is TreeLevel.Back -> Row(
