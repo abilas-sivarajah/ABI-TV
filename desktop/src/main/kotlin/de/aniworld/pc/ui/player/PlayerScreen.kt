@@ -159,9 +159,6 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
 
     var controlsVisible by remember { mutableStateOf(true) }
     var sidePanel by remember { mutableStateOf<PlayerPanel?>(null) }
-    // Zuletzt gemessene Höhe der Leisten (bleibt beim Ausblenden als schwarzer Platz stehen)
-    var topBarHeightPx by remember { mutableStateOf(0) }
-    var bottomBarHeightPx by remember { mutableStateOf(0) }
     var lastInteraction by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val pairingNotice by CastPairing.notice.collectAsState()
 
@@ -286,7 +283,8 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         }
     }
 
-    val showBars = !isFullscreen || controlsVisible || controller.isResolving || controller.isStarting ||
+    // Leisten blenden sich (auch im Fenster) nach kurzer Zeit ohne Maus aus und liegen über dem Bild
+    val showBars = controlsVisible || controller.isResolving || controller.isStarting ||
         controller.errorMessage != null || sidePanel != null
     // Mauszeiger im Vollbild mit den Leisten ausblenden
     LaunchedEffect(showBars) {
@@ -391,15 +389,15 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         }
     )
 
-    // Im Vollbild liegen die Leisten in eigenen Fenstern über dem Bild (Compose kann nicht über VLC
-    // zeichnen) – das Bild behält dabei immer die ganze Bildschirmgröße
-    FullscreenBarOverlay(visible = isFullscreen && showBars, atTop = true, onInteraction = { keepControlsAlive() }) {
+    // Leisten liegen (im Fenster und im Vollbild) in eigenen Fenstern über dem Bild, weil Compose nicht
+    // über VLC zeichnen kann – das Bild behält dabei immer die ganze Größe des Players
+    FullscreenBarOverlay(visible = showBars, area = videoBounds, atTop = true, onInteraction = { keepControlsAlive() }) {
         PlayerTopBar(onClose = onClose)
     }
-    FullscreenBarOverlay(visible = isFullscreen && showBars, atTop = false, onInteraction = { keepControlsAlive() }) {
+    FullscreenBarOverlay(visible = showBars, area = videoBounds, atTop = false, onInteraction = { keepControlsAlive() }) {
         PlayerBottomBar(
             controller = controller,
-            isFullscreen = true,
+            isFullscreen = isFullscreen,
             activePanel = sidePanel,
             onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
             onToggleFullscreen = { toggleFullscreen() },
@@ -412,16 +410,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Außerhalb des Vollbilds bleibt der Platz der Leisten schwarz frei; im Vollbild füllt das Bild
-        // den ganzen Bildschirm, sobald die Leisten verschwinden (Fensterhintergrund ist dunkel, kein Weißblitz).
-        if (showBars && !isFullscreen) {
-            Box(modifier = Modifier.onSizeChanged { topBarHeightPx = it.height }) {
-                PlayerTopBar(onClose = onClose)
-            }
-        } else if (!isFullscreen) {
-            Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { topBarHeightPx.toDp() }))
-        }
-
+        // Das Bild füllt den ganzen Player; die Leisten liegen in eigenen Fenstern darüber (siehe oben)
         Row(
             modifier = Modifier
                 .weight(1f)
@@ -503,21 +492,6 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
                 )
                 null -> Unit
             }
-        }
-
-        if (showBars && !isFullscreen) {
-            Box(modifier = Modifier.onSizeChanged { bottomBarHeightPx = it.height }) {
-                PlayerBottomBar(
-                    controller = controller,
-                    isFullscreen = isFullscreen,
-                    activePanel = sidePanel,
-                    onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
-                    onToggleFullscreen = { toggleFullscreen() },
-                    onInteraction = { keepControlsAlive() }
-                )
-            }
-        } else if (!isFullscreen) {
-            Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { bottomBarHeightPx.toDp() }))
         }
     }
 }
@@ -667,6 +641,7 @@ private fun StatusCard(content: @Composable () -> Unit) {
 @Composable
 private fun FullscreenBarOverlay(
     visible: Boolean,
+    area: java.awt.Rectangle?,
     atTop: Boolean,
     onInteraction: () -> Unit,
     content: @Composable () -> Unit
@@ -710,12 +685,12 @@ private fun FullscreenBarOverlay(
         onDispose { window.dispose() }
     }
 
-    LaunchedEffect(visible, heightPt) {
-        if (!visible) {
+    LaunchedEffect(visible, heightPt, area) {
+        // Über dem Bildbereich des Players (im Fenster unter der Titelleiste, im Vollbild der ganze Bildschirm)
+        if (!visible || area == null || area.width < 200 || area.height < 150) {
             window.isVisible = false
             return@LaunchedEffect
         }
-        val area = owner.bounds
         val y = if (atTop) area.y else area.y + area.height - heightPt
         window.setBounds(area.x, y, area.width, heightPt)
         window.validate()
