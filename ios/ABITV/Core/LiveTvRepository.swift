@@ -621,7 +621,7 @@ public enum LiveTvRepository {
         var currentHeaders: [String: String] = [:]
         var usedFallback = Set<String>()
 
-        for rawLine in content.split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+        for rawLine in content.split(omittingEmptySubsequences: true, whereSeparator: { $0.isNewline }) {  // auch "\r\n": für Swift ein einziges Zeichen
             let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
             let head = trimmed.prefix(11).lowercased()
             if head.hasPrefix("#extinf") {

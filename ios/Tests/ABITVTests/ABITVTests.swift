@@ -603,4 +603,18 @@ final class ABITVTests: XCTestCase {
         XCTAssertTrue(LiveTvTree.isVod("http://srv.example:8080/movie/u/p/4.mkv"))
         XCTAssertFalse(LiveTvTree.isVod("http://srv.example:8080/u/p/1"))
     }
+
+    func testM3uWithWindowsLineEndingsIsParsed() {
+        // Viele IPTV-Server liefern CRLF; "\r\n" ist in Swift ein einziges Zeichen
+        let m3u = "#EXTM3U\r\n" +
+            "#EXTINF:-1 tvg-logo=\"http://logo.example/a.png\" group-title=\"TR SPOR\",TR: Kanal A\r\n" +
+            "http://srv.example:8080/u/p/1\r\n" +
+            "#EXTINF:-1 group-title=\"DE SPORT\",DE: Kanal B\r\n" +
+            "http://srv.example:8080/u/p/2\r\n"
+        let channels = LiveTvRepository.parseM3u(m3u)
+        XCTAssertEqual(channels.count, 2)
+        XCTAssertEqual(channels.first?.streamUrl, "http://srv.example:8080/u/p/1")
+        XCTAssertEqual(channels.first?.group, "TR SPOR")
+        XCTAssertEqual(channels.last?.streamUrl, "http://srv.example:8080/u/p/2")
+    }
 }
