@@ -135,6 +135,7 @@ import de.aniworld.tv.data.remote.KissAsianScraper
 import de.aniworld.tv.data.remote.SerienStreamScraper
 import de.aniworld.tv.data.remote.HttpClient
 import de.aniworld.tv.data.remote.LiveTvRepository
+import de.aniworld.tv.data.remote.LiveTvTree
 import de.aniworld.tv.data.remote.StreamResolver
 import de.aniworld.tv.ui.components.LanguageBadge
 import de.aniworld.tv.ui.components.TvFocusableButton
@@ -178,6 +179,8 @@ class PlayerActivity : ComponentActivity() {
     private var errorMessage by mutableStateOf<String?>(null)
 
     private var isBuffering by mutableStateOf(false)
+    /** Seit wann der Live-Sender puffert (0 = gerade nicht). */
+    private var liveStallSince = 0L
     private var isPlaying by mutableStateOf(true)
     private var currentPositionMs by mutableLongStateOf(0L)
     private var durationMs by mutableLongStateOf(0L)
@@ -344,6 +347,7 @@ class PlayerActivity : ComponentActivity() {
                     currentPositionMs = p.currentPosition.coerceAtLeast(0L)
                     durationMs = p.duration.coerceAtLeast(0L)
                     isPlaying = p.isPlaying
+                    checkLiveStall(p)
 
                     currentEpisode?.let { currentEp ->
                         TvCastManager.updatePlaybackStatus(
@@ -394,7 +398,8 @@ class PlayerActivity : ComponentActivity() {
 
         // Pausen-Ansicht wie bei Netflix: nach kurzer Pause ohne Eingabe Titel und Beschreibung über dem Bild
         // (idleTick zählt jede Sekunde hoch, damit diese Zeitbedingung neu geprüft wird)
-        val pausedIdle = idleTick >= 0 && !isPlaying && videoReady && sidePanel == null &&
+        // Nicht bei Live TV: Dort kam sie bei Hängern des Senders, obwohl niemand pausiert hatte
+        val pausedIdle = idleTick >= 0 && !isLiveStream && !isPlaying && videoReady && sidePanel == null &&
             System.currentTimeMillis() - lastInteractionTime > PAUSE_INFO_DELAY_MS
         pauseInfoVisible = pausedIdle
 
@@ -1296,7 +1301,12 @@ class PlayerActivity : ComponentActivity() {
             player.prepare()
             return
         }
-        // Kurze Aussetzer der Quelle selbst abfangen, statt sofort einen Fehler zu zeigen
+        reconnectLive(error.errorCodeName)
+    }
+
+    /** Kurze Aussetzer der Quelle selbst abfangen, statt sofort einen Fehler zu zeigen. */
+    private fun reconnectLive(reason: String) {
+        liveStallSince = 0L
         if (liveRetryCount < MAX_LIVE_RETRIES) {
             liveRetryCount++
             isResolving = true
@@ -1309,7 +1319,26 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         isResolving = false
-        errorMessage = "Der Sender ist gerade nicht erreichbar (${error.errorCodeName})."
+        errorMessage = "Der Sender ist gerade nicht erreichbar ($reason)."
+    }
+
+    /** Filme/Folgen aus IPTV-Listen laufen auch als "Live", haben aber ein echtes Ende. */
+    private fun isDirectVod(): Boolean = directStreamUrl?.let { LiveTvTree.isVod(it) } == true
+
+    /** Live-Sender hängt (puffert ohne Fortschritt): nach einer Weile selbst neu verbinden. */
+    private fun checkLiveStall(player: ExoPlayer) {
+        val stalled = isLiveStream && !isResolving && errorMessage == null && player.playWhenReady &&
+            player.playbackState == Player.STATE_BUFFERING
+        if (!stalled) {
+            liveStallSince = 0L
+            return
+        }
+        val now = System.currentTimeMillis()
+        if (liveStallSince == 0L) {
+            liveStallSince = now
+        } else if (now - liveStallSince > LIVE_STALL_MS) {
+            reconnectLive("Sender hängt")
+        }
     }
 
     private fun loadEpisodeAndPlay(episode: EpisodeItem) {
@@ -1472,6 +1501,9 @@ class PlayerActivity : ComponentActivity() {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
                         if (playbackState == Player.STATE_READY) liveRetryCount = 0
+                        if (isLiveStream && playbackState == Player.STATE_ENDED && !isDirectVod()) {
+                            reconnectLive("Sender unterbrochen")
+                        }
                         if (!isLiveStream && playbackState == Player.STATE_ENDED) {
                             LocalStorage.markEpisodeWatched(episode.path)
                             val next = findNextEpisode()
@@ -2010,6 +2042,8 @@ class PlayerActivity : ComponentActivity() {
         /** Kennzeichnet Live-Sender im Status für die Handy-Fernbedienung. */
         const val LIVE_SEASON_LABEL = "LIVE"
         private const val MAX_LIVE_RETRIES = 3
+        /** So lange darf ein Live-Sender puffern, bevor neu verbunden wird. */
+        private const val LIVE_STALL_MS = 15_000L
         /** Senderwahl ohne Eingabe nach so langer Zeit schließen. */
         private const val CHANNEL_MENU_HIDE_MS = 20_000L
         private val EPISODE_NAME = Regex("^S\\d+ E\\d+.*")
