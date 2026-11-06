@@ -379,6 +379,57 @@ object LiveTvRepository {
     /** Ist die eigene Liste nach Ländern sortiert (dann zeigt der PC sie nur in deren Reitern)? */
     val isCustomListGrouped: Boolean get() = customCache?.trees?.isNotEmpty() == true
 
+    // ------------------- Senderwahl im Player (TV) -------------------
+
+    /** Ordner des zuletzt in Live TV gestarteten Senders (TV: Senderwahl im Player); null = keiner. */
+    @Volatile
+    var playFolderId: String? = null
+
+    /** Kennung für die festen Reiter ("preset:main" …) als Ordner der Senderwahl. */
+    const val PRESET_FOLDER_PREFIX = "preset:"
+
+    /** Zuletzt geladene Bäume (eigene Liste und Ordner), für die Senderwahl im Player. */
+    val cachedTrees: List<LiveTvNode>
+        get() = customCache?.trees.orEmpty() + listOfNotNull(folderCache?.second?.tree)
+
+    /**
+     * Ordner der Senderwahl: ein Reiter der eigenen Listen oder ein fester Reiter ("preset:all" usw.).
+     * Feste Reiter enthalten nur ihre Sender; eigene Listen ihre Unterordner und Sender.
+     */
+    fun findFolder(id: String): LiveTvNode? {
+        if (id.startsWith(PRESET_FOLDER_PREFIX)) {
+            val category = id.removePrefix(PRESET_FOLDER_PREFIX)
+            val info = CATEGORIES.firstOrNull { it.id == category } ?: return null
+            val channels = when (category) {
+                "all" -> PRESET_CHANNELS
+                "custom" -> customCache?.takeIf { it.trees.isEmpty() }?.channels.orEmpty()
+                else -> PRESET_CHANNELS.filter { it.category == category }
+            }
+            return LiveTvNode(id = id, title = info.title, icon = info.icon, channels = channels)
+        }
+        fun search(nodes: List<LiveTvNode>): LiveTvNode? {
+            for (node in nodes) {
+                if (node.id == id) return node
+                search(node.children)?.let { return it }
+            }
+            return null
+        }
+        return search(cachedTrees)
+    }
+
+    /** Übergeordneter Ordner (null = schon ganz oben). */
+    fun parentFolder(id: String): LiveTvNode? {
+        if (id.startsWith(PRESET_FOLDER_PREFIX)) return null
+        fun search(parent: LiveTvNode?, nodes: List<LiveTvNode>): LiveTvNode? {
+            for (node in nodes) {
+                if (node.id == id) return parent
+                search(node, node.children)?.let { return it }
+            }
+            return null
+        }
+        return search(null, cachedTrees)
+    }
+
     private fun loadCustomList(forceRefresh: Boolean, errors: MutableList<String>): CustomList? {
         val customUrl = LocalStorage.customM3uUrl.trim()
         if (customUrl.isBlank()) return null

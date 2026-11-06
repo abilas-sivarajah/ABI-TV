@@ -57,6 +57,10 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
         StoAnimeFilter.configure(cacheDir)
         val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         appScope.launch { runCatching { StoAnimeFilter.load() } }
+        // Eigene M3U-Liste/Ordner bei jedem Start frisch laden, damit Live TV gleich bereit ist
+        if (LocalStorage.customM3uUrl.isNotBlank() || LocalStorage.m3uFolder.isNotBlank()) {
+            appScope.launch { runCatching { de.aniworld.tv.data.remote.LiveTvRepository.loadChannels(forceRefresh = true) } }
+        }
         // Gemerkte Letterboxd-Anmeldung; Watchlist-Filme des Listenbesitzers in die Empfehlungsliste
         LetterboxdAccountAndroid.start(this, appScope)
     }

@@ -1,5 +1,9 @@
 package de.aniworld.tv.ui.player
 
+import de.aniworld.tv.data.model.LiveTvChannel
+import de.aniworld.tv.data.model.LiveTvNode
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.focusable
@@ -137,6 +141,7 @@ import de.aniworld.tv.ui.components.TvPairingOverlay
 import de.aniworld.tv.ui.theme.AccentCyan
 import de.aniworld.tv.ui.theme.AniWorldTvTheme
 import de.aniworld.tv.ui.theme.BgElevated
+import de.aniworld.tv.ui.theme.BgPrimary
 import de.aniworld.tv.ui.theme.BgSurface
 import de.aniworld.tv.ui.theme.TextMuted
 import de.aniworld.tv.ui.theme.TextPrimary
@@ -194,6 +199,16 @@ class PlayerActivity : ComponentActivity() {
     private var overlayButtonVisible = false
     /** Wird die Pausen-Ansicht gezeigt? Dann spielt OK weiter. */
     private var pauseInfoVisible = false
+
+    // ------------------- Senderwahl (wie am Fernseher) -------------------
+    /** Ordner des laufenden Live-Senders; nur dann öffnet OK die Senderwahl. */
+    private var channelFolderId by mutableStateOf<String?>(null)
+    /** Offene Senderwahl: der gezeigte Ordner (null = zu). */
+    private var channelMenuNode by mutableStateOf<LiveTvNode?>(null)
+    private var channelMenuIndex by mutableIntStateOf(0)
+    private var channelMenuLastInput by mutableLongStateOf(0L)
+    /** So viele Zeilen passen gerade auf den Bildschirm (für Links/Rechts = eine Seite weiter). */
+    private var channelMenuPageSize = 8
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -266,6 +281,8 @@ class PlayerActivity : ComponentActivity() {
         selectedLangKey = newLangKey
 
         if (live && !directUrl.isNullOrBlank()) {
+            channelFolderId = intent.getStringExtra(EXTRA_FOLDER_ID)
+            channelMenuNode = null
             // Läuft gerade eine Folge (z. B. per Handy umgeschaltet), deren Fortschritt vorher sichern
             persistCurrentProgress()
             resolveJob?.cancel()
@@ -529,6 +546,8 @@ class PlayerActivity : ComponentActivity() {
                     }
                 }
             }
+
+            channelMenuNode?.let { ChannelMenuOverlay(it) }
         }
     }
 
@@ -1544,6 +1563,19 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Offene Senderwahl bekommt alle Tasten (auch das Loslassen, damit nichts dahinter auslöst)
+        val menu = channelMenuNode
+        if (menu != null) {
+            if (event.action == KeyEvent.ACTION_DOWN) handleChannelMenuKey(event.keyCode, menu)
+            return true
+        }
+        // Live-Sender aus Live TV: OK öffnet die Senderwahl des Ordners (wie die OK-Taste am Fernseher)
+        if (event.action == KeyEvent.ACTION_DOWN && isLiveStream && channelFolderId != null &&
+            errorMessage == null && sidePanel == null &&
+            (event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER)
+        ) {
+            if (openChannelMenu()) return true
+        }
         if (event.action == KeyEvent.ACTION_DOWN) {
             val wasPauseInfo = pauseInfoVisible
             lastInteractionTime = System.currentTimeMillis()
@@ -1631,6 +1663,176 @@ class PlayerActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
+    /** Einträge eines Ordners in der Senderwahl: erst Unterordner, dann Sender. */
+    private fun channelMenuItems(node: LiveTvNode): List<Any> = node.children + node.channels
+
+    private fun openChannelMenu(): Boolean {
+        val node = channelFolderId?.let { LiveTvRepository.findFolder(it) } ?: return false
+        val items = channelMenuItems(node)
+        if (items.isEmpty()) return false
+        channelMenuIndex = items.indexOfFirst { (it as? LiveTvChannel)?.streamUrl == directStreamUrl }.coerceAtLeast(0)
+        channelMenuLastInput = System.currentTimeMillis()
+        channelMenuNode = node
+        controlsVisible = false
+        return true
+    }
+
+    private fun handleChannelMenuKey(keyCode: Int, node: LiveTvNode) {
+        channelMenuLastInput = System.currentTimeMillis()
+        val items = channelMenuItems(node)
+        val last = (items.size - 1).coerceAtLeast(0)
+        when (keyCode) {
+            KeyEvent.KEYCODE_DPAD_UP -> channelMenuIndex = (channelMenuIndex - 1).coerceIn(0, last)
+            KeyEvent.KEYCODE_DPAD_DOWN -> channelMenuIndex = (channelMenuIndex + 1).coerceIn(0, last)
+            // Links/Rechts: eine Seite zurück bzw. weiter
+            KeyEvent.KEYCODE_DPAD_LEFT -> channelMenuIndex = (channelMenuIndex - channelMenuPageSize).coerceIn(0, last)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> channelMenuIndex = (channelMenuIndex + channelMenuPageSize).coerceIn(0, last)
+            KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_NUMPAD_ENTER -> {
+                when (val item = items.getOrNull(channelMenuIndex)) {
+                    is LiveTvNode -> {
+                        channelMenuNode = item
+                        channelMenuIndex = 0
+                    }
+                    is LiveTvChannel -> {
+                        channelMenuNode = null
+                        channelFolderId = node.id
+                        startChannelFromMenu(item, node)
+                    }
+                }
+            }
+            // Play/Pause: in den übergeordneten Ordner
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, KeyEvent.KEYCODE_HEADSETHOOK,
+            KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE -> {
+                val parent = LiveTvRepository.parentFolder(node.id) ?: return
+                channelMenuNode = parent
+                channelMenuIndex = channelMenuItems(parent).indexOfFirst { (it as? LiveTvNode)?.id == node.id }.coerceAtLeast(0)
+            }
+            KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU -> channelMenuNode = null
+        }
+    }
+
+    /** Sender aus der Senderwahl starten (Serienfolgen bekommen den Serientitel davor). */
+    private fun startChannelFromMenu(channel: LiveTvChannel, folder: LiveTvNode) {
+        val parent = LiveTvRepository.parentFolder(folder.id)
+        val showTitle = if (folder.title.startsWith("Staffel ") || folder.title == "Weitere") parent?.title else folder.title
+        val title = if (showTitle != null && EPISODE_NAME.matches(channel.name)) {
+            "$showTitle · ${channel.name}"
+        } else {
+            channel.name
+        }
+        handleIntent(
+            liveIntent(this, title, channel.streamUrl, channel.logoUrl, HashMap(channel.headers), folder.id)
+        )
+    }
+
+    @Composable
+    private fun ChannelMenuOverlay(node: LiveTvNode) {
+        val items = channelMenuItems(node)
+        val listState = rememberLazyListState()
+        val index = channelMenuIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
+        // Auswahl immer sichtbar halten
+        LaunchedEffect(node.id, index) {
+            val visible = listState.layoutInfo.visibleItemsInfo
+            if (visible.isNotEmpty()) channelMenuPageSize = (visible.size - 1).coerceAtLeast(1)
+            val first = visible.firstOrNull()?.index ?: 0
+            val lastVisible = visible.lastOrNull()?.index ?: 0
+            if (visible.isEmpty() || index < first + 1 || index > lastVisible - 1) {
+                listState.scrollToItem((index - channelMenuPageSize / 2).coerceAtLeast(0))
+            }
+        }
+        // Ohne Eingabe nach einer Weile wieder schließen
+        LaunchedEffect(channelMenuLastInput) {
+            delay(CHANNEL_MENU_HIDE_MS)
+            if (System.currentTimeMillis() - channelMenuLastInput >= CHANNEL_MENU_HIDE_MS) channelMenuNode = null
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.35f))
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxHeight()
+                    .width(520.dp)
+                    .background(BgPrimary.copy(alpha = 0.95f))
+                    .padding(horizontal = 24.dp, vertical = 20.dp)
+            ) {
+                Text(
+                    text = listOf(node.icon, node.title).filter { it.isNotBlank() }.joinToString(" "),
+                    color = TextPrimary,
+                    fontSize = 22.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                val hasParent = LiveTvRepository.parentFolder(node.id) != null
+                Text(
+                    text = "${index + 1} / ${items.size}" +
+                        (if (hasParent) "  ·  ▶❚❚ übergeordneter Ordner" else "") + "  ·  ◀ ▶ Seite",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
+                    items(items.size) { i ->
+                        val item = items[i]
+                        val selected = i == index
+                        val playing = (item as? LiveTvChannel)?.streamUrl == directStreamUrl
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(if (selected) AccentCyan.copy(alpha = 0.22f) else Color.Transparent)
+                                .border(
+                                    width = if (selected) 2.dp else 0.dp,
+                                    color = if (selected) AccentCyan else Color.Transparent,
+                                    shape = RoundedCornerShape(8.dp)
+                                )
+                                .padding(horizontal = 12.dp, vertical = 9.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            when (item) {
+                                is LiveTvNode -> {
+                                    Text("📁", fontSize = 18.sp)
+                                    Spacer(modifier = Modifier.width(12.dp))
+                                    Text(
+                                        text = item.title,
+                                        color = TextPrimary,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.SemiBold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Text("${item.total}", color = TextMuted, fontSize = 13.sp)
+                                }
+                                is LiveTvChannel -> {
+                                    Text(
+                                        text = "${i + 1 - node.children.size}",
+                                        color = TextMuted,
+                                        fontSize = 13.sp,
+                                        modifier = Modifier.width(44.dp)
+                                    )
+                                    Text(
+                                        text = item.name,
+                                        color = if (playing) AccentCyan else TextPrimary,
+                                        fontSize = 16.sp,
+                                        fontWeight = if (playing || selected) FontWeight.Bold else FontWeight.Normal,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    if (playing) Text("▶", color = AccentCyan, fontSize = 14.sp)
+                                }
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(2.dp))
+                    }
+                }
+            }
+        }
+    }
+
     override fun onPause() {
         super.onPause()
         persistCurrentProgress()
@@ -1694,6 +1896,9 @@ class PlayerActivity : ComponentActivity() {
         /** Kennzeichnet Live-Sender im Status für die Handy-Fernbedienung. */
         const val LIVE_SEASON_LABEL = "LIVE"
         private const val MAX_LIVE_RETRIES = 3
+        /** Senderwahl ohne Eingabe nach so langer Zeit schließen. */
+        private const val CHANNEL_MENU_HIDE_MS = 20_000L
+        private val EPISODE_NAME = Regex("^S\\d+ E\\d+.*")
 
         /** Leisten nach so langer Zeit ohne Eingabe ausblenden. */
         private const val CONTROLS_HIDE_MS = 5_000L
@@ -1714,15 +1919,19 @@ class PlayerActivity : ComponentActivity() {
         private const val EXTRA_EPISODE = "extra_episode"
         private const val EXTRA_SEASON_EPISODES = "extra_season_episodes"
         private const val EXTRA_PREFERRED_LANG_KEY = "extra_preferred_lang_key"
+        /** Ordner des Live-Senders (Live TV): OK öffnet die Senderwahl dieses Ordners. */
+        private const val EXTRA_FOLDER_ID = "extra_folder_id"
 
         fun liveIntent(
             context: Context,
             channelName: String,
             streamUrl: String,
             logoUrl: String = "",
-            headers: HashMap<String, String> = HashMap()
+            headers: HashMap<String, String> = HashMap(),
+            folderId: String? = null
         ): Intent = Intent(context, PlayerActivity::class.java).apply {
             putExtra(EXTRA_IS_LIVE, true)
+            putExtra(EXTRA_FOLDER_ID, folderId)
             putExtra(EXTRA_ANIME_TITLE, channelName)
             putExtra(EXTRA_COVER_URL, logoUrl)
             putExtra(EXTRA_DIRECT_STREAM_URL, streamUrl)

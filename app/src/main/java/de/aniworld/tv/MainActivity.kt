@@ -80,7 +80,9 @@ class MainActivity : ComponentActivity() {
                                 channelName = channel.name,
                                 streamUrl = channel.streamUrl,
                                 logoUrl = channel.logoUrl,
-                                headers = HashMap(channel.headers)
+                                headers = HashMap(channel.headers),
+                                // Ordner des Senders: OK im Player öffnet dessen Senderwahl
+                                folderId = de.aniworld.tv.data.remote.LiveTvRepository.playFolderId
                             )
                             startActivity(liveIntent)
                         },

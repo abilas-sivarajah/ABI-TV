@@ -108,6 +108,7 @@ fun LiveTvScreen(
     var trees by remember { mutableStateOf<List<LiveTvNode>>(emptyList()) }
     var customGrouped by remember { mutableStateOf(false) }
     var selectedCategory by remember { mutableStateOf("all") }
+    var userPickedTab by remember { mutableStateOf(false) }
     // Gewählte Unterreiter je Ebene unterhalb des Land-/Ordner-Reiters
     var treePath by remember { mutableStateOf<List<String>>(emptyList()) }
     var query by remember { mutableStateOf("") }
@@ -123,6 +124,11 @@ fun LiveTvScreen(
             customError = result.customError
             trees = result.trees
             customGrouped = LiveTvRepository.isCustomListGrouped
+            // Beim ersten Öffnen gleich die erste eigene Liste zeigen
+            if (selectedCategory == "all" && trees.isNotEmpty() && !userPickedTab) {
+                selectedCategory = TREE_PREFIX + trees.first().id
+                treePath = emptyList()
+            }
             // Reiter eines entfernten Ordners/einer entfernten Liste gibt es nicht mehr
             val selectedTree = selectedCategory.removePrefix(TREE_PREFIX)
             if (selectedCategory.startsWith(TREE_PREFIX) && trees.none { it.id == selectedTree }) {
@@ -212,11 +218,28 @@ fun LiveTvScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Hauptreiter: feste Kategorien, danach je Land bzw. Ordner der eigenen Listen
+        // Hauptreiter: zuerst je Land bzw. Ordner der eigenen Listen, danach die festen Kategorien
         ScrollLazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
+            // Eigene Listen (Länder, Ordner) ganz vorne
+            items(trees, key = { TREE_PREFIX + it.id }) { root ->
+                val isSelected = selectedCategory == TREE_PREFIX + root.id
+                TvFocusableButton(
+                    text = "${root.icon} ${root.title}".trim(),
+                    isSelected = isSelected,
+                    isPrimary = isSelected,
+                    onClick = {
+                        userPickedTab = true
+                        if (!isSelected) {
+                            selectedCategory = TREE_PREFIX + root.id
+                            treePath = emptyList()
+                            query = ""
+                        }
+                    }
+                )
+            }
             items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
                 val isSelected = selectedCategory == cat.id
                 TvFocusableButton(
@@ -225,22 +248,8 @@ fun LiveTvScreen(
                     isPrimary = isSelected,
                     onClick = {
                         selectedCategory = cat.id
+                        userPickedTab = true
                         query = ""
-                    }
-                )
-            }
-            items(trees, key = { TREE_PREFIX + it.id }) { root ->
-                val isSelected = selectedCategory == TREE_PREFIX + root.id
-                TvFocusableButton(
-                    text = "${root.icon} ${root.title}".trim(),
-                    isSelected = isSelected,
-                    isPrimary = isSelected,
-                    onClick = {
-                        if (!isSelected) {
-                            selectedCategory = TREE_PREFIX + root.id
-                            treePath = emptyList()
-                            query = ""
-                        }
                     }
                 )
             }
