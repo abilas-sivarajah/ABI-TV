@@ -613,7 +613,7 @@ class PlayerController(private val scope: CoroutineScope) {
 
     private suspend fun startPlayback(episode: EpisodeItem, stream: ResolvedStream) {
         val mp = mediaPlayer ?: return
-        AppLog.i(TAG, "Starte VLC url=${stream.streamUrl}, headers=${stream.headers}")
+        AppLog.i(TAG, "Starte VLC url=${LiveTvRepository.maskCredentials(stream.streamUrl)}, headers=${stream.headers}")
         pendingSeekMs = when {
             isLiveStream -> 0L
             currentPositionMs > 5_000L -> currentPositionMs

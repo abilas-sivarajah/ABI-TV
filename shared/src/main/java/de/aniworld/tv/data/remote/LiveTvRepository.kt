@@ -525,6 +525,17 @@ object LiveTvRepository {
 
     private val xtreamLive = Regex("""^https?://[^/]+(/live)?/[^/]+/[^/]+/\d+(\.ts)?$""", RegexOption.IGNORE_CASE)
 
+    private val credentialPath = Regex("""(https?://[^/]+/(?:live/|movie/|series/)?)[^/?#]+/[^/?#]+/(?=[^/?#]+$)""", RegexOption.IGNORE_CASE)
+    private val credentialQuery = Regex("""(?i)((?:username|password|user|pass)=)[^&#]*""")
+
+    /** Adresse ohne Zugangsdaten (für Protokolle und Anzeigen). */
+    fun maskCredentials(url: String): String =
+        url.replace(credentialPath, "$1***/***/").replace(credentialQuery, "$1***")
+
+    /** Nur der Server einer Adresse, z. B. "iptv.example.com" (ohne Zugangsdaten). */
+    fun hostOf(url: String): String =
+        runCatching { java.net.URI(url).host }.getOrNull()?.takeIf { it.isNotBlank() } ?: "eigener Server"
+
     /** Live-Sender eines IPTV-Servers im Xtream-Format (http://server:8080/benutzer/passwort/12345). */
     fun isXtreamLivePath(url: String): Boolean = xtreamLive.matches(url.substringBefore('?').substringBefore('#'))
 

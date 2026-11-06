@@ -21,6 +21,15 @@ object AppLog {
     fun e(tag: String, message: String, error: Throwable? = null) = sink(Level.ERROR, tag, message, error)
 }
 
+/**
+ * Verschlüsselt Geheimnisse wie den Link zur eigenen IPTV-Liste (enthält Benutzername und Passwort).
+ * PC: Windows-Verschlüsselung des Benutzerkontos (DPAPI). [decrypt] liefert null, wenn es nicht geht.
+ */
+interface SecretCodec {
+    fun encrypt(plain: String): String
+    fun decrypt(stored: String): String?
+}
+
 /** Einfacher Schlüssel-Wert-Speicher (Android: SharedPreferences, PC: JSON-Datei). */
 interface KeyValueStore {
     fun getString(key: String, default: String?): String?

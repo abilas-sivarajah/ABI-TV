@@ -100,9 +100,23 @@ object LocalStorage {
 
     // ------------------- Live TV / M3U -------------------
 
+    /** Verschlüsselt den Link zur eigenen Liste auf der Platte (PC); null = Klartext. */
+    @Volatile
+    var secretCodec: de.aniworld.tv.platform.SecretCodec? = null
+
+    private const val SECRET_PREFIX = "enc:"
+
     var customM3uUrl: String
-        get() = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
-        set(value) = prefs.putString(KEY_CUSTOM_M3U_URL, value)
+        get() {
+            val raw = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
+            if (!raw.startsWith(SECRET_PREFIX)) return raw
+            return secretCodec?.decrypt(raw.removePrefix(SECRET_PREFIX)).orEmpty()
+        }
+        set(value) {
+            val codec = secretCodec
+            val stored = if (value.isBlank() || codec == null) value else runCatching { SECRET_PREFIX + codec.encrypt(value) }.getOrDefault(value)
+            prefs.putString(KEY_CUSTOM_M3U_URL, stored)
+        }
 
     /** Eigener Ordner mit M3U-Dateien (PC: Pfad, Android: Ordner-Freigabe content://…); leer = keiner. */
     var m3uFolder: String

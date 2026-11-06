@@ -663,8 +663,8 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
     val textFieldFocusRequester = remember { FocusRequester() }
     val boxFocusRequester = remember { FocusRequester() }
     var savedUrl by remember { mutableStateOf(LocalStorage.customM3uUrl) }
-    // Mit Cursor am Textende: Das Feld wird bei jedem Öffnen neu angelegt und hätte ihn sonst am Anfang (wie im Suchfeld)
-    var draft by remember { mutableStateOf(TextFieldValue(savedUrl, TextRange(savedUrl.length))) }
+    // Der gespeicherte Link (mit Benutzername und Passwort) wird nie wieder angezeigt: das Feld startet leer
+    var draft by remember { mutableStateOf(TextFieldValue("")) }
     var isEditing by remember { mutableStateOf(false) }
     var isBoxFocused by remember { mutableStateOf(false) }
     var inputError by remember { mutableStateOf<String?>(null) }
@@ -674,9 +674,14 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
         keyboardController?.hide()
         // Fokus aufs Feld holen, solange das Textfeld noch da ist (sonst Absturz beim nächsten OK, wie im Suchfeld)
         runCatching { boxFocusRequester.requestFocus() }
+        // Leeres Feld bestätigt: nichts ändern (Entfernen nur über den Knopf)
+        if (value.isBlank() && savedUrl.isNotBlank()) {
+            draft = TextFieldValue("")
+            return
+        }
         if (LiveTvRepository.saveCustomM3uUrl(value)) {
             savedUrl = LocalStorage.customM3uUrl
-            draft = TextFieldValue(savedUrl, TextRange(savedUrl.length))
+            draft = TextFieldValue("")
             inputError = null
             onSaved()
         } else {
@@ -708,7 +713,7 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
 
     BackHandler(enabled = isEditing) {
         isEditing = false
-        draft = TextFieldValue(savedUrl, TextRange(savedUrl.length))
+        draft = TextFieldValue("")
         keyboardController?.hide()
         runCatching { boxFocusRequester.requestFocus() }
     }
@@ -763,8 +768,8 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                             text = when {
                                 savedUrl.isBlank() -> "📂 Link zur eigenen M3U-Liste eingeben"
                                 savedUrl.startsWith("file:", true) ->
-                                    "📄 Datei: " + runCatching { File(URI(savedUrl)).name }.getOrDefault(savedUrl)
-                                else -> savedUrl
+                                    "📄 Datei: " + runCatching { File(URI(savedUrl)).name }.getOrDefault("eigene Datei")
+                                else -> "🔒 Eigene Liste gespeichert · ${LiveTvRepository.hostOf(savedUrl)} (OK: neuen Link eingeben)"
                             },
                             color = if (savedUrl.isBlank()) TextMuted else TextPrimary,
                             fontSize = 14.sp,
@@ -818,7 +823,13 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
             if (savedUrl.isNotBlank()) {
                 TvFocusableButton(
                     text = "✕ Entfernen",
-                    onClick = { save("") }
+                    onClick = {
+                        LiveTvRepository.saveCustomM3uUrl("")
+                        savedUrl = ""
+                        draft = TextFieldValue("")
+                        inputError = null
+                        onSaved()
+                    }
                 )
             }
         }
