@@ -1,5 +1,11 @@
 package de.aniworld.pc.ui.player
 
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.awt.ComposePanel
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.onPointerEvent
+import de.aniworld.pc.ui.theme.AniWorldTvTheme
+import javax.swing.JWindow
 import de.aniworld.pc.ui.compat.ScrollLazyRow
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.TooltipArea
@@ -385,6 +391,22 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         }
     )
 
+    // Im Vollbild liegen die Leisten in eigenen Fenstern über dem Bild (Compose kann nicht über VLC
+    // zeichnen) – das Bild behält dabei immer die ganze Bildschirmgröße
+    FullscreenBarOverlay(visible = isFullscreen && showBars, atTop = true, onInteraction = { keepControlsAlive() }) {
+        PlayerTopBar(onClose = onClose)
+    }
+    FullscreenBarOverlay(visible = isFullscreen && showBars, atTop = false, onInteraction = { keepControlsAlive() }) {
+        PlayerBottomBar(
+            controller = controller,
+            isFullscreen = true,
+            activePanel = sidePanel,
+            onTogglePanel = { panel -> sidePanel = if (sidePanel == panel) null else panel },
+            onToggleFullscreen = { toggleFullscreen() },
+            onInteraction = { keepControlsAlive() }
+        )
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -392,7 +414,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     ) {
         // Außerhalb des Vollbilds bleibt der Platz der Leisten schwarz frei; im Vollbild füllt das Bild
         // den ganzen Bildschirm, sobald die Leisten verschwinden (Fensterhintergrund ist dunkel, kein Weißblitz).
-        if (showBars) {
+        if (showBars && !isFullscreen) {
             Box(modifier = Modifier.onSizeChanged { topBarHeightPx = it.height }) {
                 PlayerTopBar(onClose = onClose)
             }
@@ -483,7 +505,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             }
         }
 
-        if (showBars) {
+        if (showBars && !isFullscreen) {
             Box(modifier = Modifier.onSizeChanged { bottomBarHeightPx = it.height }) {
                 PlayerBottomBar(
                     controller = controller,
@@ -633,6 +655,71 @@ private fun StatusCard(content: @Composable () -> Unit) {
             .padding(horizontal = 28.dp, vertical = 22.dp)
     ) {
         content()
+    }
+}
+
+/**
+ * Leiste im Vollbild als eigenes, halbdurchsichtiges Fenster über dem oberen bzw. unteren Bildrand.
+ * Es nimmt keinen Tastaturfokus (Tasten gehen weiter an den Player) und meldet Mausbewegungen,
+ * damit die Leisten sichtbar bleiben, solange man sie benutzt.
+ */
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun FullscreenBarOverlay(
+    visible: Boolean,
+    atTop: Boolean,
+    onInteraction: () -> Unit,
+    content: @Composable () -> Unit
+) {
+    val owner = LocalComposeWindow.current ?: return
+    // Das Fenster hat eine eigene Komposition: Inhalt und Rückruf über Zustände weiterreichen
+    val contentState = remember { mutableStateOf(content) }
+    val interactionState = remember { mutableStateOf(onInteraction) }
+    contentState.value = content
+    interactionState.value = onInteraction
+    // Höhe in Fensterpunkten; zuerst geschätzt, dann gemessen
+    var heightPt by remember { mutableStateOf(if (atTop) 64 else 140) }
+
+    val window = remember {
+        JWindow(owner).apply {
+            focusableWindowState = false
+            background = java.awt.Color.BLACK
+            runCatching { opacity = 0.82f }
+            val panel = ComposePanel().apply {
+                setContent {
+                    AniWorldTvTheme {
+                        val density = LocalDensity.current.density
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .onSizeChanged { size ->
+                                    val pt = (size.height / density).toInt()
+                                    if (pt > 0 && pt != heightPt) heightPt = pt
+                                }
+                                .onPointerEvent(PointerEventType.Move) { interactionState.value() }
+                        ) {
+                            contentState.value()
+                        }
+                    }
+                }
+            }
+            contentPane.add(panel)
+        }
+    }
+    DisposableEffect(Unit) {
+        onDispose { window.dispose() }
+    }
+
+    LaunchedEffect(visible, heightPt) {
+        if (!visible) {
+            window.isVisible = false
+            return@LaunchedEffect
+        }
+        val area = owner.bounds
+        val y = if (atTop) area.y else area.y + area.height - heightPt
+        window.setBounds(area.x, y, area.width, heightPt)
+        window.validate()
+        if (!window.isVisible) window.isVisible = true
     }
 }
 
