@@ -425,6 +425,8 @@ public struct LiveTvChannel: Codable, Hashable, Identifiable, Sendable {
     public let category: String
     public let qualityBadge: String
     public let headers: [String: String]
+    /// Gruppe aus der M3U-Liste (group-title), z. B. "TR SPOR" oder "(V|DE) Filme - 2024".
+    public let group: String?
 
     public init(
         id: String,
@@ -433,7 +435,8 @@ public struct LiveTvChannel: Codable, Hashable, Identifiable, Sendable {
         streamUrl: String,
         category: String,
         qualityBadge: String = "HD",
-        headers: [String: String] = [:]
+        headers: [String: String] = [:],
+        group: String? = nil
     ) {
         self.id = id
         self.name = name
@@ -442,6 +445,7 @@ public struct LiveTvChannel: Codable, Hashable, Identifiable, Sendable {
         self.category = category
         self.qualityBadge = qualityBadge
         self.headers = headers
+        self.group = group
     }
 }
 
@@ -450,11 +454,18 @@ public struct LiveTvLoadResult: Sendable {
     public let customError: String?
     /// Reiter: die festen Kategorien plus je ein Reiter pro Ordner der eigenen M3U-Sammlung.
     public let categories: [LiveTvCategory]
+    /// Eigene Listen als Baum: je Land bzw. Ordner ein Reiter mit Unterreitern.
+    public let trees: [LiveTvNode]
+    /// Ist die eigene Liste nach Ländern sortiert (dann steht sie nur in deren Reitern)?
+    public let customGrouped: Bool
 
-    public init(channels: [LiveTvChannel], customError: String? = nil, categories: [LiveTvCategory] = []) {
+    public init(channels: [LiveTvChannel], customError: String? = nil, categories: [LiveTvCategory] = [],
+                trees: [LiveTvNode] = [], customGrouped: Bool = false) {
         self.channels = channels
         self.customError = customError
         self.categories = categories
+        self.trees = trees
+        self.customGrouped = customGrouped
     }
 }
 

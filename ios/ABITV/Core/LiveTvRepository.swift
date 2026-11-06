@@ -304,7 +304,7 @@ public enum LiveTvRepository {
     ]
 
     private static let lock = NSLock()
-    private static var customCache: (url: String, channels: [LiveTvChannel])?
+    private static var customCache: (url: String, channels: [LiveTvChannel], trees: [LiveTvNode])?
     private static let nonHlsExtensions = [".ts", ".mp4", ".mkv", ".mp3", ".aac", ".flv", ".mpd"]
 
     public static func loadChannels(forceRefresh: Bool = false) async -> LiveTvLoadResult {
@@ -316,24 +316,34 @@ public enum LiveTvRepository {
         return LiveTvLoadResult(
             channels: presetChannels + custom.channels + folder.channels,
             customError: errors.isEmpty ? nil : errors.joined(separator: " "),
-            categories: categories + folder.categories
+            categories: categories + folder.categories,
+            trees: custom.trees + (folder.tree.map { [$0] } ?? []),
+            customGrouped: !custom.trees.isEmpty
         )
     }
 
-    private static func loadCustomList(forceRefresh: Bool) async -> (channels: [LiveTvChannel], error: String?) {
+    private static func loadCustomList(forceRefresh: Bool) async -> (channels: [LiveTvChannel], trees: [LiveTvNode], error: String?) {
         let customUrl = LocalStorage.shared.customM3uUrl.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !customUrl.isEmpty else { return ([], nil) }
+        guard !customUrl.isEmpty else { return ([], [], nil) }
 
         let cached = lock.withLock { customCache }
-        if !forceRefresh, let cached, cached.url == customUrl { return (cached.channels, nil) }
+        if !forceRefresh, let cached, cached.url == customUrl { return (cached.channels, cached.trees, nil) }
 
         do {
-            let (_, body) = try await HttpClient.getHtml(customUrl, referer: customUrl)
+            var request = URLRequest(url: HttpClient.rewriteUrl(customUrl) ?? URL(string: "about:blank")!)
+            request.timeoutInterval = 90
+            let (data, _) = try await HttpClient.perform(request)
+            let body = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
             let custom = parseM3u(body)
-            lock.withLock { customCache = (customUrl, custom) }
-            return (custom, custom.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil)
+            let trees = LiveTvTree.hasGroups(custom) ? LiveTvTree.buildGrouped(custom, idPrefix: "iptv:") : []
+            lock.withLock { customCache = (customUrl, custom, trees) }
+            return (custom, trees, custom.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil)
         } catch {
-            return ([], "Eigene Liste nicht erreichbar (\(error.localizedDescription)).")
+            // Kurzer Aussetzer: die zuletzt geladene Liste dieser Adresse weiter zeigen
+            if let cached, cached.url == customUrl {
+                return (cached.channels, cached.trees, "Eigene Liste gerade nicht erreichbar.")
+            }
+            return ([], [], "Eigene Liste nicht erreichbar (\(error.localizedDescription)).")
         }
     }
 
@@ -343,31 +353,33 @@ public enum LiveTvRepository {
     public static let folderMaxDepth = 8
     public static let folderMaxFileBytes = 8 * 1024 * 1024
     private static let folderPrefix = "folder:"
-    private static var folderCache: (key: String, categories: [LiveTvCategory], channels: [LiveTvChannel])?
+    private static var folderCache: (key: String, categories: [LiveTvCategory], channels: [LiveTvChannel], tree: LiveTvNode?)?
 
     public enum FolderError: LocalizedError {
         case unreadable
         public var errorDescription: String? { "Ordner nicht lesbar" }
     }
 
-    private static func loadFolder(forceRefresh: Bool) -> (categories: [LiveTvCategory], channels: [LiveTvChannel], error: String?) {
+    private static func loadFolder(forceRefresh: Bool) -> (categories: [LiveTvCategory], channels: [LiveTvChannel], tree: LiveTvNode?, error: String?) {
         let bookmark = LocalStorage.shared.m3uFolderBookmark
-        guard !bookmark.isEmpty else { return ([], [], nil) }
+        guard !bookmark.isEmpty else { return ([], [], nil, nil) }
 
         let cached = lock.withLock { folderCache }
-        if !forceRefresh, let cached, cached.key == bookmark { return (cached.categories, cached.channels, nil) }
+        if !forceRefresh, let cached, cached.key == bookmark { return (cached.categories, cached.channels, cached.tree, nil) }
 
         guard let data = Data(base64Encoded: bookmark), let url = resolveFolderBookmark(data) else {
-            return ([], [], "Ordner nicht mehr erreichbar – bitte neu auswählen.")
+            return ([], [], nil, "Ordner nicht mehr erreichbar – bitte neu auswählen.")
         }
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         guard let files = try? readFolder(url) else {
-            return ([], [], "Ordner nicht lesbar – bitte neu auswählen.")
+            return ([], [], nil, "Ordner nicht lesbar – bitte neu auswählen.")
         }
         let rootName = LocalStorage.shared.m3uFolderName.isEmpty ? "Eigener Ordner" : LocalStorage.shared.m3uFolderName
         let result = buildFolderChannels(rootName: rootName, files: files)
-        lock.withLock { folderCache = (bookmark, result.categories, result.channels) }
+        let built = LiveTvTree.buildFolder(rootName: rootName, files: files, idPrefix: "folder-tree:")
+        let tree: LiveTvNode? = built.total > 0 ? built : nil
+        lock.withLock { folderCache = (bookmark, result.categories, result.channels, tree) }
         let error: String?
         if files.isEmpty {
             error = "Im Ordner wurden keine M3U-Dateien gefunden."
@@ -376,7 +388,7 @@ public enum LiveTvRepository {
         } else {
             error = nil
         }
-        return (result.categories, result.channels, error)
+        return (result.categories, result.channels, tree, error)
     }
 
     private static func resolveFolderBookmark(_ data: Data) -> URL? {
@@ -542,18 +554,20 @@ public enum LiveTvRepository {
         var channels: [LiveTvChannel] = []
         var currentName = ""
         var currentLogo = ""
+        var currentGroup = ""
         var currentHeaders: [String: String] = [:]
+        var usedFallback = Set<String>()
 
-        for rawLine in content.components(separatedBy: .newlines) {
-            let trimmed = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
-            if trimmed.lowercased().hasPrefix("#extinf") {
+        for rawLine in content.split(omittingEmptySubsequences: true, whereSeparator: { $0 == "\n" || $0 == "\r" }) {
+            let trimmed = rawLine.trimmingCharacters(in: .whitespaces)
+            let head = trimmed.prefix(11).lowercased()
+            if head.hasPrefix("#extinf") {
                 let title = extinfTitle(trimmed)
-                currentName = !title.isEmpty
-                    ? title
-                    : (HtmlParser.firstMatch(in: trimmed, pattern: #"tvg-name="([^"]*)""#, dotMatchesAll: false) ?? "")
-                currentLogo = HtmlParser.firstMatch(in: trimmed, pattern: #"tvg-logo="([^"]*)""#, dotMatchesAll: false) ?? ""
+                currentName = !title.isEmpty ? title : attribute(trimmed, "tvg-name")
+                currentLogo = attribute(trimmed, "tvg-logo")
+                currentGroup = attribute(trimmed, "group-title")
                 currentHeaders.removeAll()
-            } else if trimmed.lowercased().hasPrefix("#extvlcopt:") {
+            } else if head.hasPrefix("#extvlcopt:") {
                 let option = String(trimmed.dropFirst("#extvlcopt:".count))
                 guard let eqIdx = option.firstIndex(of: "=") else { continue }
                 let key = option[..<eqIdx].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -565,10 +579,10 @@ public enum LiveTvRepository {
                 case "http-origin": currentHeaders["Origin"] = value
                 default: break
                 }
-            } else if trimmed.lowercased().hasPrefix("http://") || trimmed.lowercased().hasPrefix("https://") {
+            } else if head.hasPrefix("http://") || head.hasPrefix("https://") {
                 var name = currentName
                 if name.isEmpty && !fallbackName.isEmpty {
-                    name = channels.contains(where: { $0.name == fallbackName }) ? "\(fallbackName) \(channels.count + 1)" : fallbackName
+                    name = usedFallback.insert(fallbackName).inserted ? fallbackName : "\(fallbackName) \(channels.count + 1)"
                 }
                 if !name.isEmpty {
                     channels.append(
@@ -579,16 +593,26 @@ public enum LiveTvRepository {
                             streamUrl: trimmed,
                             category: category,
                             qualityBadge: "M3U",
-                            headers: currentHeaders
+                            headers: currentHeaders,
+                            group: currentGroup.isEmpty ? nil : currentGroup
                         )
                     )
                 }
                 currentName = ""
                 currentLogo = ""
+                currentGroup = ""
                 currentHeaders.removeAll()
             }
         }
         return channels
+    }
+
+    /// Wert eines Attributs wie tvg-logo="…" (ohne reguläre Ausdrücke – große Listen haben 100.000+ Zeilen).
+    private static func attribute(_ line: String, _ name: String) -> String {
+        guard let start = line.range(of: name + "=\"", options: .caseInsensitive) else { return "" }
+        let rest = line[start.upperBound...]
+        guard let end = rest.firstIndex(of: "\"") else { return "" }
+        return String(rest[..<end])
     }
 
     private static func extinfTitle(_ line: String) -> String {

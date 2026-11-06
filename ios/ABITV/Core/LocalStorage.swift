@@ -189,9 +189,27 @@ public final class LocalStorage: ObservableObject {
 
     // ------------------- Live TV / M3U -------------------
 
+    /// Link zur eigenen Liste: enthält bei IPTV Benutzername und Passwort, darum im Schlüsselbund
+    /// (Keychain) statt in den normalen Einstellungen. Ein alter Eintrag wird beim ersten Lesen umgezogen.
     public var customM3uUrl: String {
-        get { store.getString(Self.keyCustomM3uUrl, default: "") ?? "" }
-        set { store.putString(Self.keyCustomM3uUrl, value: newValue) }
+        get {
+            if let secret = SecretStore.read(Self.keyCustomM3uUrl) { return secret }
+            let legacy = store.getString(Self.keyCustomM3uUrl, default: "") ?? ""
+            if !legacy.isEmpty, SecretStore.write(Self.keyCustomM3uUrl, legacy) {
+                store.putString(Self.keyCustomM3uUrl, value: "")
+            }
+            return legacy
+        }
+        set {
+            if newValue.isEmpty {
+                SecretStore.delete(Self.keyCustomM3uUrl)
+                store.putString(Self.keyCustomM3uUrl, value: "")
+            } else if SecretStore.write(Self.keyCustomM3uUrl, newValue) {
+                store.putString(Self.keyCustomM3uUrl, value: "")
+            } else {
+                store.putString(Self.keyCustomM3uUrl, value: newValue)
+            }
+        }
     }
 
     /// Eigener Ordner mit M3U-Dateien als Lesezeichen (Base64), damit die App ihn nach Neustarts weiter lesen darf.

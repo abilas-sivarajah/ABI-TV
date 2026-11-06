@@ -566,4 +566,41 @@ final class ABITVTests: XCTestCase {
         XCTAssertEqual(LiveTvRepository.unsupportedOnIos("http://srv.example:8080/movie/u/p/99.mkv"), "MKV")
         XCTAssertNil(LiveTvRepository.unsupportedOnIos("http://srv.example:8080/movie/u/p/99.mp4"))
     }
+
+    func testIptvListBecomesCountryTabsWithSubTabs() {
+        let m3u = """
+        #EXTM3U
+        #EXTINF:-1 tvg-name="DE: Das Erste" tvg-logo="https://l/1.png" group-title="DE DEUTSCHLAND",----- DEUTSCHLAND -----
+        http://srv.example:8080/u/p/1
+        #EXTINF:-1 tvg-logo="" group-title="DE DEUTSCHLAND",DE: DAS ERSTE HD
+        http://srv.example:8080/u/p/2
+        #EXTINF:-1 group-title="TR SPOR",TR: TRT SPOR
+        http://srv.example:8080/u/p/3
+        #EXTINF:-1 group-title="(V|TR) Yerli Film",(TR-) Film A - 2024
+        http://srv.example:8080/movie/u/p/4.mkv
+        #EXTINF:-1 group-title="(S|DE) Deutsche Serien",(DE-) Dark S01 E02
+        http://srv.example:8080/series/u/p/5.mkv
+        #EXTINF:-1 group-title="(S|DE) Deutsche Serien",(DE-) Dark S01 E01
+        http://srv.example:8080/series/u/p/6.mkv
+        #EXTINF:-1 group-title="(S|DE) Deutsche Serien",(DE-) Dark S02 E01
+        http://srv.example:8080/series/u/p/7.mkv
+        """
+        let channels = LiveTvRepository.parseM3u(m3u)
+        XCTAssertEqual(channels.count, 7)
+        XCTAssertEqual(channels[1].group, "DE DEUTSCHLAND")
+        XCTAssertEqual(channels[0].logoUrl, "https://l/1.png")
+        XCTAssertTrue(LiveTvTree.hasGroups(channels))
+        let trees = LiveTvTree.buildGrouped(channels, idPrefix: "iptv:")
+        XCTAssertEqual(trees.map(\.title), ["Türkiye", "Deutsch"])
+        XCTAssertEqual(trees[0].children.map(\.title), ["TR SPOR", "Filme (VOD)"])
+        XCTAssertEqual(trees[0].children[0].channels.first?.name, "TRT SPOR")
+        XCTAssertEqual(trees[1].children.map(\.title), ["DE DEUTSCHLAND", "Serien"])
+        XCTAssertEqual(trees[1].children[0].channels.map(\.name), ["DAS ERSTE HD"])
+        let dark = trees[1].children[1].children[0].children[0]
+        XCTAssertEqual(dark.title, "Dark")
+        XCTAssertEqual(dark.children.map(\.title), ["Staffel 1", "Staffel 2"])
+        XCTAssertEqual(dark.children[0].channels.map(\.name), ["S01 E01", "S01 E02"])
+        XCTAssertTrue(LiveTvTree.isVod("http://srv.example:8080/movie/u/p/4.mkv"))
+        XCTAssertFalse(LiveTvTree.isVod("http://srv.example:8080/u/p/1"))
+    }
 }
