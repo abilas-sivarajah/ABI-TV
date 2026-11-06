@@ -15,6 +15,9 @@ public final class HttpClient: @unchecked Sendable {
     public static let shared = HttpClient()
 
     public let session: URLSession
+    /// Für große Downloads (eigene IPTV-Liste, oft 30 MB und mehr): Die normale Sitzung bricht
+    /// jede Anfrage nach 25 Sekunden ab, im Mobilfunk reicht das für so eine Liste nicht.
+    private let largeSession: URLSession
     private let redirectHandler = RedirectHandler()
     private let dnsLock = NSLock()
     private var encryptedDnsActive = false
@@ -55,6 +58,11 @@ public final class HttpClient: @unchecked Sendable {
             "Accept-Language": "de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7"
         ]
         self.session = URLSession(configuration: config, delegate: redirectHandler, delegateQueue: nil)
+
+        let largeConfig = config.copy() as! URLSessionConfiguration
+        largeConfig.timeoutIntervalForRequest = 45
+        largeConfig.timeoutIntervalForResource = 600
+        self.largeSession = URLSession(configuration: largeConfig, delegate: redirectHandler, delegateQueue: nil)
     }
 
     /// Mit `required == true` muss jede Namensauflösung der App verschlüsselt laufen: über den DNS des
@@ -87,6 +95,15 @@ public final class HttpClient: @unchecked Sendable {
             return try await shared.session.data(for: request)
         } catch let error as URLError where isPossibleDnsFailure(error) && shared.disableEncryptedDns() {
             return try await shared.session.data(for: request)
+        }
+    }
+
+    /// Wie `perform`, aber mit langem Zeitlimit für große Dateien.
+    public static func performLarge(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await shared.largeSession.data(for: request)
+        } catch let error as URLError where isPossibleDnsFailure(error) && shared.disableEncryptedDns() {
+            return try await shared.largeSession.data(for: request)
         }
     }
 

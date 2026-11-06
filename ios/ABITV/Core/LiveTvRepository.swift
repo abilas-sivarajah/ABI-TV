@@ -330,21 +330,83 @@ public enum LiveTvRepository {
         if !forceRefresh, let cached, cached.url == customUrl { return (cached.channels, cached.trees, nil) }
 
         do {
-            var request = URLRequest(url: HttpClient.rewriteUrl(customUrl) ?? URL(string: "about:blank")!)
-            request.timeoutInterval = 90
-            let (data, _) = try await HttpClient.perform(request)
-            let body = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
-            let custom = parseM3u(body)
-            let trees = LiveTvTree.hasGroups(custom) ? LiveTvTree.buildGrouped(custom, idPrefix: "iptv:") : []
-            lock.withLock { customCache = (customUrl, custom, trees) }
-            return (custom, trees, custom.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil)
+            guard let url = HttpClient.rewriteUrl(customUrl) else { throw URLError(.badURL) }
+            var request = URLRequest(url: url)
+            request.timeoutInterval = 45
+            let (data, response) = try await HttpClient.performLarge(request)
+            if let status = (response as? HTTPURLResponse)?.statusCode, !(200..<300).contains(status) {
+                throw URLError(.badServerResponse)
+            }
+            let result = buildCustom(data, url: customUrl)
+            if !result.channels.isEmpty { saveCustomCopy(data, url: customUrl) }
+            return (result.channels, result.trees, result.channels.isEmpty ? "Die eigene Liste enthält keine abspielbaren Sender." : nil)
         } catch {
             // Kurzer Aussetzer: die zuletzt geladene Liste dieser Adresse weiter zeigen
             if let cached, cached.url == customUrl {
                 return (cached.channels, cached.trees, "Eigene Liste gerade nicht erreichbar.")
             }
+            // Sonst die zuletzt gespeicherte Kopie vom Gerät
+            if let data = readCustomCopy(url: customUrl) {
+                let result = buildCustom(data, url: customUrl)
+                if !result.channels.isEmpty {
+                    return (result.channels, result.trees, "Eigene Liste gerade nicht erreichbar – zeige die zuletzt geladene.")
+                }
+            }
             return ([], [], "Eigene Liste nicht erreichbar (\(error.localizedDescription)).")
         }
+    }
+
+    private static func buildCustom(_ data: Data, url: String) -> (channels: [LiveTvChannel], trees: [LiveTvNode]) {
+        let body = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+        let custom = parseM3u(body)
+        let trees = LiveTvTree.hasGroups(custom) ? LiveTvTree.buildGrouped(custom, idPrefix: "iptv:") : []
+        lock.withLock { customCache = (url, custom, trees) }
+        return (custom, trees)
+    }
+
+    // MARK: - Kopie der eigenen Liste auf dem Gerät
+
+    /// Liegt in „Application Support“ (nicht in Backups), geschützt bis zum ersten Entsperren.
+    private static var customCopyFile: URL? {
+        guard let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
+        return dir.appendingPathComponent("LiveTv", isDirectory: true).appendingPathComponent("custom-list.m3u")
+    }
+
+    private static var customCopyKeyFile: URL? { customCopyFile?.appendingPathExtension("key") }
+
+    /// Merkt sich zur Kopie nur einen Fingerabdruck der Adresse, nicht die Adresse selbst.
+    private static func copyKey(_ url: String) -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for byte in url.utf8 { hash = (hash ^ UInt64(byte)) &* 0x100000001b3 }
+        return String(hash, radix: 16)
+    }
+
+    private static func saveCustomCopy(_ data: Data, url: String) {
+        guard let file = customCopyFile, let keyFile = customCopyKeyFile else { return }
+        do {
+            var dir = file.deletingLastPathComponent()
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            var values = URLResourceValues()
+            values.isExcludedFromBackup = true
+            try? dir.setResourceValues(values)
+            try data.write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            try Data(copyKey(url).utf8).write(to: keyFile, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+        } catch {
+            // Ohne Kopie geht es auch, dann eben nur aus dem Netz
+        }
+    }
+
+    private static func readCustomCopy(url: String) -> Data? {
+        guard let file = customCopyFile, let keyFile = customCopyKeyFile,
+              let key = try? String(contentsOf: keyFile, encoding: .utf8),
+              key == copyKey(url) else { return nil }
+        return try? Data(contentsOf: file)
+    }
+
+    private static func deleteCustomCopy() {
+        guard let file = customCopyFile, let keyFile = customCopyKeyFile else { return }
+        try? FileManager.default.removeItem(at: file)
+        try? FileManager.default.removeItem(at: keyFile)
     }
 
     // MARK: - Eigener Ordner mit M3U-Dateien
@@ -506,6 +568,7 @@ public enum LiveTvRepository {
         }
         LocalStorage.shared.customM3uUrl = normalized
         lock.withLock { customCache = nil }
+        if normalized.isEmpty { deleteCustomCopy() }
         return true
     }
 
