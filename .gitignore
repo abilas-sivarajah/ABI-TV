@@ -23,3 +23,6 @@ keystore.properties
 .build/
 .swiftpm/
 xcuserdata/
+
+# MobileVLCKit wird beim Bauen geladen (ios/scripts/fetch-vlckit.sh)
+ios/Frameworks/

@@ -64,6 +64,11 @@ public struct PlayerView: View {
     @State private var hosterLanguages: [LanguageOption] = []
 
     @State private var player: AVPlayer? = nil
+    /// VLC für IPTV (MPEG-TS) und MKV/AVI; `usesVlc` sagt, welcher Player gerade läuft.
+    @State private var vlc = VlcPlayback()
+    @State private var usesVlc = false
+    @State private var forceVlc = false
+    @State private var vlcStartedAt = Date()
     @State private var timeObserverToken: Any? = nil
     @State private var uiTimeObserverToken: Any? = nil
     @State private var statusObserver: NSKeyValueObservation? = nil
@@ -118,7 +123,10 @@ public struct PlayerView: View {
         return seasons.dropFirst(index + 1).first { !$0.isMovies }
     }
 
-    private var videoReady: Bool { player != nil && !isLoading && errorMessage == nil }
+    private var videoReady: Bool { (player != nil || usesVlc) && !isLoading && errorMessage == nil }
+
+    /// Spulen geht bei Folgen/Filmen und bei Filmen aus IPTV-Listen (VLC kennt dann die Länge).
+    private var seekable: Bool { !item.isLiveStream || (usesVlc && durationSec > 0) }
 
     /// "Intro überspringen" in den ersten 5 Minuten, "Nächste Folge" in den letzten 100 Sekunden.
     private var showIntroSkip: Bool {
@@ -140,7 +148,10 @@ public struct PlayerView: View {
         ZStack {
             Color.black.ignoresSafeArea()
 
-            if let player = player, errorMessage == nil {
+            if usesVlc, errorMessage == nil {
+                VlcVideoView(playback: vlc)
+                    .ignoresSafeArea()
+            } else if let player = player, errorMessage == nil {
                 PlayerLayerView(player: player)
                     .ignoresSafeArea()
             }
@@ -178,7 +189,7 @@ public struct PlayerView: View {
                     .transition(.opacity)
                     .onTapGesture {
                         lastInteraction = Date()
-                        player?.play()
+                        if usesVlc { vlc.resume() } else { player?.play() }
                     }
             }
 
@@ -212,6 +223,7 @@ public struct PlayerView: View {
         .task { await loadSeasons() }
         .onReceive(ticker) { date in
             now = date
+            if usesVlc { pollVlc(date) }
             // Bedienung nach 4 Sekunden ohne Eingabe ausblenden, solange abgespielt wird
             if controlsVisible && isPlaying && !showEpisodes && !showLanguages && date.timeIntervalSince(lastInteraction) > 4 {
                 controlsVisible = false
@@ -308,11 +320,11 @@ public struct PlayerView: View {
 
                 // Mitte: 10 s zurück, Play/Pause, 10 s vor
                 HStack(spacing: 44) {
-                    if !item.isLiveStream {
+                    if seekable {
                         centerButton("gobackward.10", size: 30) { seek(by: -10) }
                     }
                     centerButton(isPlaying ? "pause.fill" : "play.fill", size: 44) { togglePause() }
-                    if !item.isLiveStream {
+                    if seekable {
                         centerButton("goforward.10", size: 30) { seek(by: 10) }
                     }
                 }
@@ -321,7 +333,7 @@ public struct PlayerView: View {
 
                 // Unten: Fortschritt mit Restzeit, darunter Folgen, Sprache, nächste Folge
                 VStack(spacing: 6) {
-                    if item.isLiveStream {
+                    if !seekable {
                         HStack(spacing: 6) {
                             Circle().fill(AbiTheme.liveRed).frame(width: 9, height: 9)
                             Text("LIVE").font(.system(size: 13, weight: .bold)).foregroundColor(AbiTheme.liveRed)
@@ -542,19 +554,52 @@ public struct PlayerView: View {
     // MARK: - Steuerung
 
     private func togglePause() {
+        if usesVlc {
+            if vlc.isPlaying { vlc.pause() } else { vlc.resume() }
+            isPlaying = !isPlaying
+            return
+        }
         guard let player else { return }
         if player.timeControlStatus == .paused { player.play() } else { player.pause() }
     }
 
     private func seek(by seconds: Double) {
-        guard let player, !item.isLiveStream else { return }
-        let target = max(0, CMTimeGetSeconds(player.currentTime()) + seconds)
+        guard seekable else { return }
+        let position = usesVlc ? vlc.currentSec : (player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0)
+        let target = max(0, position + seconds)
         seek(to: durationSec > 0 ? min(target, durationSec) : target)
     }
 
     private func seek(to seconds: Double) {
-        player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        if usesVlc {
+            vlc.seek(to: seconds)
+        } else {
+            player?.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero)
+        }
         currentSec = seconds
+    }
+
+    /// Zustand des VLC-Players übernehmen (alle 0,5 s): Start, Zeit, Länge, Fehler.
+    private func pollVlc(_ date: Date) {
+        guard vlc.isActive else { return }
+        if vlc.failed || (vlc.ended && item.isLiveStream) {
+            if let stream = resolvedStream { handlePlaybackFailure(for: stream, reason: "VLC-Fehler") }
+            return
+        }
+        if isLoading {
+            if vlc.hasStarted {
+                isLoading = false
+                liveRetryCount = 0
+            } else if date.timeIntervalSince(vlcStartedAt) > 25, let stream = resolvedStream {
+                handlePlaybackFailure(for: stream, reason: "Zeitüberschreitung")
+                return
+            }
+        }
+        isPlaying = vlc.isPlaying
+        let position = vlc.currentSec
+        if position > 0 { currentSec = position }
+        let length = vlc.durationSec
+        if length > 0 { durationSec = length }
     }
 
     /// Andere Folge (auch aus einer anderen Staffel) in der gemerkten Sprache spielen.
@@ -634,10 +679,13 @@ public struct PlayerView: View {
 
     private func handOffToTv() {
         // Stelle merken, bevor das iPhone anhält: Fernseher/PC setzen genau dort fort
-        let positionMs = player.map { Int64(max(0, CMTimeGetSeconds($0.currentTime())) * 1000) } ?? -1
+        let positionMs = usesVlc
+            ? Int64(vlc.currentSec * 1000)
+            : (player.map { Int64(max(0, CMTimeGetSeconds($0.currentTime())) * 1000) } ?? -1)
         let durationMs = Int64(max(0, durationSec) * 1000)
         saveCurrentProgress()
         player?.pause()
+        vlc.pause()
         guard castManager.connectedDevice != nil else {
             castManager.startDiscovery()
             onOpenCastSheet()
@@ -679,11 +727,19 @@ public struct PlayerView: View {
         }
 
         if let channel = item.liveChannel {
-            // MKV/AVI aus IPTV-Listen kann AVPlayer nicht: klar sagen statt ewig neu zu verbinden
-            if let format = LiveTvRepository.unsupportedOnIos(channel.streamUrl) {
+            // IPTV-Sender (rohes MPEG-TS), MKV/AVI und andere Dateien: VLC. HLS-Sender weiter mit AVPlayer.
+            if forceVlc || LiveTvRepository.xtreamLiveParts(channel.streamUrl) != nil || !LiveTvRepository.isLikelyHls(channel.streamUrl) {
+                let stream = ResolvedStream(
+                    streamUrl: channel.streamUrl,
+                    isHls: false,
+                    hosterName: "Live TV",
+                    language: .gerDub,
+                    headers: channel.headers
+                )
                 await MainActor.run {
-                    errorMessage = "\(format)-Dateien kann das iPhone nicht abspielen. Mit „Auf TV“ läuft der Titel auf dem Fernseher oder PC."
-                    isLoading = false
+                    self.resolvedStream = stream
+                    self.activeRedirectPath = ""
+                    startVlc(with: stream)
                 }
                 return
             }
@@ -768,6 +824,27 @@ public struct PlayerView: View {
                 isLoading = false
             }
         }
+    }
+
+    @MainActor
+    private func startVlc(with stream: ResolvedStream) {
+        cleanupPlayer()
+        guard let url = URL(string: stream.streamUrl) ?? HttpClient.rewriteUrl(stream.streamUrl) else {
+            handlePlaybackFailure(for: stream, reason: "Ungültige Stream-URL")
+            return
+        }
+        #if os(iOS)
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .moviePlayback)
+        try? AVAudioSession.sharedInstance().setActive(true)
+        #endif
+        usesVlc = true
+        currentSec = 0
+        durationSec = 0
+        vlcStartedAt = Date()
+        statusText = liveRetryCount > 0 ? statusText : "Verbinde …"
+        vlc.play(url: url, headers: stream.headers, isLive: !LiveTvTree.isVod(stream.streamUrl))
+        lastInteraction = Date()
+        controlsVisible = true
     }
 
     @MainActor
@@ -890,6 +967,14 @@ public struct PlayerView: View {
     @MainActor
     private func handlePlaybackFailure(for stream: ResolvedStream, reason: String) {
         if item.isLiveStream {
+            // AVPlayer kann den Sender nicht: einmal mit VLC versuchen
+            if !usesVlc && !forceVlc {
+                forceVlc = true
+                statusText = "Starte mit VLC …"
+                isLoading = true
+                reloadTrigger += 1
+                return
+            }
             if liveRetryCount < 3 {
                 liveRetryCount += 1
                 statusText = "Verbinde neu (\(liveRetryCount)/3) …"
@@ -959,6 +1044,8 @@ public struct PlayerView: View {
         endObserver = nil
         player?.pause()
         player = nil
+        vlc.stop()
+        usesVlc = false
     }
 
     private func formatTime(_ seconds: Double) -> String {

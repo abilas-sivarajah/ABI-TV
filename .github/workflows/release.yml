@@ -167,6 +167,10 @@ jobs:
         working-directory: ios
         run: swift test
 
+      - name: VLC-Player (MobileVLCKit) laden
+        working-directory: ios
+        run: bash scripts/fetch-vlckit.sh
+
       - name: Generate Xcode Project with XcodeGen
         working-directory: ios
         run: |

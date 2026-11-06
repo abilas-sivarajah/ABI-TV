@@ -21,6 +21,16 @@ targets:
       - path: ABITV
         excludes:
           - "Info.plist"
+    # VLC-Player für IPTV (MPEG-TS) sowie MKV/AVI; wird von scripts/fetch-vlckit.sh geladen
+    dependencies:
+      - framework: Frameworks/MobileVLCKit.xcframework
+        embed: true
+        codeSign: false
+      - sdk: libc++.tbd
+      - sdk: libxml2.tbd
+      - sdk: libz.tbd
+      - sdk: libbz2.tbd
+      - sdk: libiconv.tbd
     # Bewusst kein "info:"-Block: XcodeGen würde die Info.plist damit bei jedem Generieren überschreiben
     # (ATS, Bonjour, Version und Anzeigename gingen verloren). INFOPLIST_FILE reicht.
     settings:

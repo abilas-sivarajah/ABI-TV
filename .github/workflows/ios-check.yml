@@ -27,6 +27,10 @@ jobs:
             exit 1
           }
 
+      - name: VLC-Player (MobileVLCKit) laden
+        working-directory: ios
+        run: bash scripts/fetch-vlckit.sh
+
       - name: Xcode-Projekt erzeugen
         working-directory: ios
         run: |
