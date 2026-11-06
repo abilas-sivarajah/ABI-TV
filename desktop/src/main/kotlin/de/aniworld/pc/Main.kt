@@ -83,6 +83,8 @@ fun main() {
     // Liste der Anime auf S.to, damit der Serien-Bereich ohne Anime auskommt
     StoAnimeFilter.configure(AppDirs.cacheDir)
     backgroundScope.launch { StoAnimeFilter.load() }
+    // Eigene M3U-Liste und Ordner bei jedem Start frisch laden, damit Live TV gleich bereit ist
+    backgroundScope.launch { runCatching { de.aniworld.tv.data.remote.LiveTvRepository.loadChannels(forceRefresh = true) } }
 
     // Auch bei exitProcess (z. B. nach dem Update) Merkliste & Verlauf sicher schreiben
     Runtime.getRuntime().addShutdownHook(Thread {

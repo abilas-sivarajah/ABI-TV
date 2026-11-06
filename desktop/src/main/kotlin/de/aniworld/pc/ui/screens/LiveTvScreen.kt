@@ -72,7 +72,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import de.aniworld.pc.ui.compat.AsyncImage
 import de.aniworld.tv.data.local.LocalStorage
-import de.aniworld.tv.data.model.LiveTvCategory
+import de.aniworld.tv.data.model.LiveTvNode
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.remote.LiveTvRepository
 import de.aniworld.pc.ui.components.TvFocusableButton
@@ -103,8 +105,12 @@ fun LiveTvScreen(
 ) {
     var allChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
     var customError by remember { mutableStateOf<String?>(null) }
-    var categories by remember { mutableStateOf(LiveTvRepository.CATEGORIES) }
+    var trees by remember { mutableStateOf<List<LiveTvNode>>(emptyList()) }
+    var customGrouped by remember { mutableStateOf(false) }
     var selectedCategory by remember { mutableStateOf("all") }
+    // Gewählte Unterreiter je Ebene unterhalb des Land-/Ordner-Reiters
+    var treePath by remember { mutableStateOf<List<String>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
     var isLoading by remember { mutableStateOf(true) }
     var focusedChannel by remember { mutableStateOf<LiveTvChannel?>(null) }
     val scope = rememberCoroutineScope()
@@ -115,21 +121,39 @@ fun LiveTvScreen(
             val result = LiveTvRepository.loadChannels(forceRefresh = force)
             allChannels = result.channels
             customError = result.customError
-            categories = result.categories.ifEmpty { LiveTvRepository.CATEGORIES }
-            // Reiter eines entfernten Ordners gibt es nicht mehr
-            if (categories.none { it.id == selectedCategory }) selectedCategory = CUSTOM_CATEGORY
+            trees = result.trees
+            customGrouped = LiveTvRepository.isCustomListGrouped
+            // Reiter eines entfernten Ordners/einer entfernten Liste gibt es nicht mehr
+            val selectedTree = selectedCategory.removePrefix(TREE_PREFIX)
+            if (selectedCategory.startsWith(TREE_PREFIX) && trees.none { it.id == selectedTree }) {
+                selectedCategory = CUSTOM_CATEGORY
+                treePath = emptyList()
+            }
             isLoading = false
         }
     }
 
     LaunchedEffect(Unit) { reload(force = false) }
 
-    val filteredChannels = remember(allChannels, selectedCategory) {
-        if (selectedCategory == "all") {
-            allChannels
-        } else {
-            allChannels.filter { it.category == selectedCategory }
+    val selectedRoot = trees.firstOrNull { TREE_PREFIX + it.id == selectedCategory }
+
+    // Flache Reiter: feste Sender und eine Liste ohne Gruppen; sortierte Listen und Ordner haben eigene Reiter
+    val filteredChannels = remember(allChannels, selectedCategory, customGrouped, trees) {
+        val flat = allChannels.filter { channel ->
+            !channel.category.startsWith("folder:") && !(customGrouped && channel.category == CUSTOM_CATEGORY)
         }
+        if (selectedCategory == "all") flat else flat.filter { it.category == selectedCategory }
+    }
+
+    fun play(channel: LiveTvChannel, context: List<LiveTvNode>) {
+        // Serienfolgen heißen im Raster nur "S01 E05": für den Player den Serientitel davorsetzen
+        val showTitle = context.lastOrNull { !it.title.startsWith("Staffel ") && it.title != "Weitere" }?.title
+        val named = if (showTitle != null && EPISODE_NAME.matches(channel.name)) {
+            channel.copy(name = "$showTitle · ${channel.name}")
+        } else {
+            channel
+        }
+        onPlayChannel(named)
     }
 
     Column(
@@ -163,7 +187,7 @@ fun LiveTvScreen(
                 }
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = focusedChannel?.name ?: "Wähle einen Sender mit dem Steuerkreuz",
+                    text = focusedChannel?.name ?: "Wähle einen Sender",
                     color = TextPrimary,
                     fontSize = 20.sp,
                     fontWeight = FontWeight.Bold,
@@ -172,6 +196,14 @@ fun LiveTvScreen(
                 )
             }
 
+            if (selectedRoot != null) {
+                TreeSearchField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = "In ${selectedRoot.title} suchen …"
+                )
+                Spacer(modifier = Modifier.width(10.dp))
+            }
             TvFocusableButton(
                 text = "🔄 Liste aktualisieren",
                 onClick = { reload(force = true) }
@@ -180,18 +212,36 @@ fun LiveTvScreen(
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Kategorien-Auswahl (Tabs mit D-Pad Steuerbarkeit)
+        // Hauptreiter: feste Kategorien, danach je Land bzw. Ordner der eigenen Listen
         ScrollLazyRow(
             horizontalArrangement = Arrangement.spacedBy(10.dp),
             contentPadding = PaddingValues(vertical = 4.dp)
         ) {
-            items(categories, key = { it.id }) { cat ->
+            items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
                 val isSelected = selectedCategory == cat.id
                 TvFocusableButton(
                     text = "${cat.icon} ${cat.title}",
                     isSelected = isSelected,
                     isPrimary = isSelected,
-                    onClick = { selectedCategory = cat.id }
+                    onClick = {
+                        selectedCategory = cat.id
+                        query = ""
+                    }
+                )
+            }
+            items(trees, key = { TREE_PREFIX + it.id }) { root ->
+                val isSelected = selectedCategory == TREE_PREFIX + root.id
+                TvFocusableButton(
+                    text = "${root.icon} ${root.title}".trim(),
+                    isSelected = isSelected,
+                    isPrimary = isSelected,
+                    onClick = {
+                        if (!isSelected) {
+                            selectedCategory = TREE_PREFIX + root.id
+                            treePath = emptyList()
+                            query = ""
+                        }
+                    }
                 )
             }
         }
@@ -202,58 +252,326 @@ fun LiveTvScreen(
             CustomM3uInput(onSaved = { reload(force = true) })
             Spacer(modifier = Modifier.height(10.dp))
             M3uFolderRow(
-                folderCategories = categories.filter { it.id.startsWith("folder:") },
-                folderChannelCount = allChannels.count { it.category.startsWith("folder:") },
+                folderTabCount = trees.filter { it.id.startsWith("folder-tree:") }.sumOf { it.children.size.coerceAtLeast(1) },
+                folderChannelCount = trees.filter { it.id.startsWith("folder-tree:") }.sumOf { it.total },
                 onChanged = { reload(force = true) }
             )
+            if (customGrouped) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    text = "Deine Liste ist nach Ländern sortiert: " +
+                        trees.filter { it.id.startsWith("iptv:") }.joinToString(" · ") { "${it.icon} ${it.title} (${it.total})" },
+                    color = TextSecondary,
+                    fontSize = 13.sp
+                )
+            }
         }
-        if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all")) {
+        if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all" || selectedRoot != null)) {
             Spacer(modifier = Modifier.height(8.dp))
             Text(text = customError.orEmpty(), color = LiveRed, fontSize = 13.sp)
         }
 
         Spacer(modifier = Modifier.height(14.dp))
 
-        // Senderliste Grid
-        if (isLoading) {
+        if (isLoading && allChannels.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 CircularProgressIndicator(color = AccentCyan)
             }
+        } else if (selectedRoot != null) {
+            TreeBrowser(
+                root = selectedRoot,
+                path = treePath,
+                query = query,
+                onPathChange = {
+                    treePath = it
+                    query = ""
+                },
+                onPlay = ::play,
+                onFocused = { focusedChannel = it }
+            )
         } else if (filteredChannels.isEmpty()) {
             Box(
                 modifier = Modifier.fillMaxSize(),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = if (selectedCategory == CUSTOM_CATEGORY) {
-                        "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Liste ein oder wähle eine M3U-Datei aus."
-                    } else {
-                        "Keine Sender in dieser Kategorie gefunden."
+                    text = when {
+                        selectedCategory == CUSTOM_CATEGORY && customGrouped -> "Die Sender stehen in den Länder-Reitern oben."
+                        selectedCategory == CUSTOM_CATEGORY ->
+                            "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Liste ein oder wähle eine M3U-Datei aus."
+                        else -> "Keine Sender in dieser Kategorie gefunden."
                     },
                     color = TextMuted,
                     fontSize = 15.sp
                 )
             }
         } else {
-            LazyVerticalGrid(
-                columns = GridCells.Adaptive(minSize = 180.dp),
-                horizontalArrangement = Arrangement.spacedBy(14.dp),
-                verticalArrangement = Arrangement.spacedBy(14.dp),
-                contentPadding = PaddingValues(bottom = 24.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(filteredChannels, key = { it.id }) { channel ->
-                    TvChannelCard(
-                        channel = channel,
-                        onClick = { onPlayChannel(channel) },
-                        onFocused = { focusedChannel = channel }
+            ChannelGrid(filteredChannels, onPlay = { onPlayChannel(it) }, onFocused = { focusedChannel = it })
+        }
+    }
+}
+
+private const val TREE_PREFIX = "tree:"
+/** Bis zu so vielen Unterreitern als Knöpfe (umbrechend), darüber als Kacheln (z. B. Serien). */
+private const val CHIP_LIMIT = 60
+private const val SEARCH_LIMIT = 400
+private val EPISODE_NAME = Regex("""^S\d+ E\d+.*""")
+
+@Composable
+private fun ChannelGrid(
+    channels: List<LiveTvChannel>,
+    onPlay: (LiveTvChannel) -> Unit,
+    onFocused: (LiveTvChannel) -> Unit
+) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 180.dp),
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        verticalArrangement = Arrangement.spacedBy(14.dp),
+        contentPadding = PaddingValues(bottom = 24.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        items(channels, key = { it.id }) { channel ->
+            TvChannelCard(
+                channel = channel,
+                onClick = { onPlay(channel) },
+                onFocused = { onFocused(channel) }
+            )
+        }
+    }
+}
+
+/** Eine Ebene der Unterreiter: Knöpfe (wenige) oder "Zurück" (wenn aus Kacheln gewählt wurde). */
+private sealed interface TreeLevel {
+    val depth: Int
+    data class Chips(override val depth: Int, val children: List<LiveTvNode>, val selectedId: String) : TreeLevel
+    data class Back(override val depth: Int, val parent: LiveTvNode, val selected: LiveTvNode) : TreeLevel
+}
+
+/** Was im Baum gerade zu sehen ist: Ebenen oben, darunter Kacheln oder die Sender des gewählten Reiters. */
+private class TreeView(
+    val levels: List<TreeLevel>,
+    val tiles: List<LiveTvNode>?,
+    val tilesDepth: Int,
+    val leaf: LiveTvNode?,
+    /** Gewählte Reiter von oben nach unten (für Serientitel beim Abspielen). */
+    val trail: List<LiveTvNode>
+)
+
+private fun resolveTree(root: LiveTvNode, path: List<String>): TreeView {
+    val levels = mutableListOf<TreeLevel>()
+    val trail = mutableListOf(root)
+    var node = root
+    var depth = 0
+    while (true) {
+        val children = node.children
+        if (children.isEmpty()) return TreeView(levels, null, depth, node, trail)
+        val chosen = children.firstOrNull { it.id == path.getOrNull(depth) }
+        if (children.size <= CHIP_LIMIT) {
+            // Wenige Unterreiter: als Knöpfe, ohne Auswahl der erste
+            val selected = chosen ?: children.first()
+            levels += TreeLevel.Chips(depth, children, selected.id)
+            node = selected
+        } else {
+            // Viele (z. B. Serien einer Gruppe): als Kacheln; gewählt mit "Zurück" darüber
+            if (chosen == null) return TreeView(levels, children, depth, null, trail)
+            levels += TreeLevel.Back(depth, node, chosen)
+            node = chosen
+        }
+        trail += node
+        depth++
+    }
+}
+
+/** Pfad (Reiter-Kennungen ab der ersten Ebene) zu allen Reitern, deren Titel [query] enthält. */
+private fun searchNodes(root: LiveTvNode, query: String, limit: Int): List<Pair<List<String>, LiveTvNode>> {
+    val result = mutableListOf<Pair<List<String>, LiveTvNode>>()
+    fun walk(node: LiveTvNode, path: List<String>) {
+        for (child in node.children) {
+            if (result.size >= limit) return
+            val childPath = path + child.id
+            if (child.title.contains(query, ignoreCase = true)) result += childPath to child
+            walk(child, childPath)
+        }
+    }
+    walk(root, emptyList())
+    return result
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun TreeBrowser(
+    root: LiveTvNode,
+    path: List<String>,
+    query: String,
+    onPathChange: (List<String>) -> Unit,
+    onPlay: (LiveTvChannel, List<LiveTvNode>) -> Unit,
+    onFocused: (LiveTvChannel) -> Unit
+) {
+    val trimmed = query.trim()
+    if (trimmed.length >= 2) {
+        // Suche im ganzen Land/Ordner: passende Reiter (z. B. Serien) und passende Sender/Filme
+        val nodes = remember(root, trimmed) { searchNodes(root, trimmed, 60) }
+        val channels = remember(root, trimmed) {
+            root.allChannels().filter { it.name.contains(trimmed, ignoreCase = true) }.take(SEARCH_LIMIT).toList()
+        }
+        Column(modifier = Modifier.fillMaxSize()) {
+            if (nodes.isNotEmpty()) {
+                Text("Reiter", color = TextSecondary, fontSize = 13.sp, fontWeight = FontWeight.Bold)
+                Spacer(modifier = Modifier.height(6.dp))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    nodes.forEach { (nodePath, node) ->
+                        TvFocusableButton(
+                            text = "${node.title} (${node.total})",
+                            onClick = { onPathChange(nodePath) }
+                        )
+                    }
+                }
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+            if (channels.isEmpty() && nodes.isEmpty()) {
+                Text("Nichts gefunden für „$trimmed“.", color = TextMuted, fontSize = 15.sp)
+            } else if (channels.isNotEmpty()) {
+                Text(
+                    if (channels.size >= SEARCH_LIMIT) "Die ersten $SEARCH_LIMIT Treffer" else "${channels.size} Treffer",
+                    color = TextSecondary,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
+                Spacer(modifier = Modifier.height(6.dp))
+                ChannelGrid(channels, onPlay = { onPlay(it, emptyList()) }, onFocused = onFocused)
+            }
+        }
+        return
+    }
+
+    val view = remember(root, path) { resolveTree(root, path) }
+    Column(modifier = Modifier.fillMaxSize()) {
+        view.levels.forEach { level ->
+            when (level) {
+                is TreeLevel.Chips -> FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    level.children.forEach { child ->
+                        val selected = child.id == level.selectedId
+                        TvFocusableButton(
+                            text = listOf(child.icon, child.title).filter { it.isNotBlank() }.joinToString(" "),
+                            isSelected = selected,
+                            isPrimary = selected,
+                            onClick = { onPathChange(path.take(level.depth) + child.id) }
+                        )
+                    }
+                }
+                is TreeLevel.Back -> Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier.padding(bottom = 10.dp)
+                ) {
+                    TvFocusableButton(
+                        text = "‹ ${level.parent.title}",
+                        onClick = { onPathChange(path.take(level.depth)) }
+                    )
+                    Spacer(modifier = Modifier.width(12.dp))
+                    Text(
+                        text = level.selected.title,
+                        color = TextPrimary,
+                        fontSize = 18.sp,
+                        fontWeight = FontWeight.Bold,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
                     )
                 }
             }
         }
+        Spacer(modifier = Modifier.height(4.dp))
+        val tiles = view.tiles
+        val leaf = view.leaf
+        when {
+            tiles != null -> NodeTileGrid(tiles) { child -> onPathChange(path.take(view.tilesDepth) + child.id) }
+            leaf != null && leaf.channels.isEmpty() ->
+                Text("Keine Sender in diesem Reiter.", color = TextMuted, fontSize = 15.sp)
+            leaf != null -> ChannelGrid(leaf.channels, onPlay = { onPlay(it, view.trail) }, onFocused = onFocused)
+        }
+    }
+}
+
+/** Kacheln für viele Unterreiter (z. B. alle Serien einer Gruppe). */
+@Composable
+private fun NodeTileGrid(nodes: List<LiveTvNode>, onOpen: (LiveTvNode) -> Unit) {
+    LazyVerticalGrid(
+        columns = GridCells.Adaptive(minSize = 200.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+        contentPadding = PaddingValues(bottom = 24.dp),
+        modifier = Modifier.fillMaxSize()
+    ) {
+        items(nodes, key = { it.id }) { node ->
+            val hoverSource = remember { MutableInteractionSource() }
+            val hovered by hoverSource.collectIsHoveredAsState()
+            Column(
+                modifier = Modifier
+                    .hoverable(hoverSource)
+                    .pointerHoverIcon(PointerIcon.Hand)
+                    .clip(RoundedCornerShape(10.dp))
+                    .background(if (hovered) BgSurface else BgElevated)
+                    .border(
+                        width = if (hovered) 2.dp else 1.dp,
+                        color = if (hovered) FocusBorder else Color.White.copy(alpha = 0.08f),
+                        shape = RoundedCornerShape(10.dp)
+                    )
+                    .clickable { onOpen(node) }
+                    .padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Text(
+                    text = node.title,
+                    color = TextPrimary,
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                val seasons = node.children.size
+                Text(
+                    text = if (seasons > 0) "$seasons Staffeln · ${node.total} Folgen" else "${node.total} Titel",
+                    color = TextSecondary,
+                    fontSize = 12.sp
+                )
+            }
+        }
+    }
+}
+
+/** Suchfeld über dem Baum (Maus/Tastatur am PC). */
+@Composable
+private fun TreeSearchField(value: String, onValueChange: (String) -> Unit, placeholder: String) {
+    Box(
+        modifier = Modifier
+            .width(280.dp)
+            .height(42.dp)
+            .clip(RoundedCornerShape(10.dp))
+            .background(BgSurface)
+            .border(1.dp, Color.White.copy(alpha = 0.15f), RoundedCornerShape(10.dp))
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.CenterStart
+    ) {
+        if (value.isEmpty()) {
+            Text(placeholder, color = TextMuted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        BasicTextField(
+            value = value,
+            onValueChange = onValueChange,
+            singleLine = true,
+            textStyle = TextStyle(color = TextPrimary, fontSize = 14.sp),
+            cursorBrush = SolidColor(AccentCyan),
+            modifier = Modifier.fillMaxWidth()
+        )
     }
 }
 
@@ -263,7 +581,7 @@ fun LiveTvScreen(
  */
 @Composable
 private fun M3uFolderRow(
-    folderCategories: List<LiveTvCategory>,
+    folderTabCount: Int,
     folderChannelCount: Int,
     onChanged: () -> Unit
 ) {
@@ -310,7 +628,7 @@ private fun M3uFolderRow(
                 text = if (folder.isBlank()) {
                     "Unterordner werden eigene Reiter, die Dateien darin ihre Sender."
                 } else {
-                    "$folderChannelCount Sender in ${folderCategories.size} Reitern · neue Dateien mit „Liste aktualisieren“ laden"
+                    "$folderChannelCount Sender in $folderTabCount Reitern · neue Dateien mit „Liste aktualisieren“ laden"
                 },
                 color = TextSecondary,
                 fontSize = 12.sp,

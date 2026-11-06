@@ -4,7 +4,10 @@ import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvCategory
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.LiveTvLoadResult
+import de.aniworld.tv.data.model.LiveTvNode
 import de.aniworld.tv.data.model.M3uFolderFile
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import de.aniworld.tv.platform.AppLog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -317,7 +320,15 @@ object LiveTvRepository {
 
     // Eigene M3U-Liste nur einmal pro Adresse laden; "Liste aktualisieren" erzwingt ein Neuladen
     @Volatile
-    private var customCache: Pair<String, List<LiveTvChannel>>? = null
+    private var customCache: CustomList? = null
+
+    /** Geladene eigene Liste; [trees] nur, wenn sie Gruppen hat (IPTV: je Land ein Reiter). */
+    private class CustomList(val url: String, val channels: List<LiveTvChannel>, val trees: List<LiveTvNode>)
+
+    private val groupAttr = Regex("""group-title="([^"]*)"""", RegexOption.IGNORE_CASE)
+
+    // Start-Vorladen und Live-TV-Bildschirm sollen die (große) Liste nicht doppelt laden
+    private val loadMutex = Mutex()
 
     private val logoAttr = Regex("""tvg-logo="([^"]*)"""", RegexOption.IGNORE_CASE)
     private val nameAttr = Regex("""tvg-name="([^"]*)"""", RegexOption.IGNORE_CASE)
@@ -341,40 +352,55 @@ object LiveTvRepository {
     var folderReader: (folder: String) -> List<M3uFolderFile> = ::readFolderFromDisk
 
     /** Reiter und Sender aus dem eigenen Ordner. */
-    data class FolderChannels(val categories: List<LiveTvCategory>, val channels: List<LiveTvChannel>)
+    data class FolderChannels(
+        val categories: List<LiveTvCategory>,
+        val channels: List<LiveTvChannel>,
+        val tree: LiveTvNode? = null
+    )
 
     // Gemerkt, bis "Liste aktualisieren" oder ein anderer Ordner kommt
     @Volatile
     private var folderCache: Pair<String, FolderChannels>? = null
 
     suspend fun loadChannels(forceRefresh: Boolean = false): LiveTvLoadResult = withContext(Dispatchers.IO) {
-        val errors = mutableListOf<String>()
-        val custom = loadCustomList(forceRefresh, errors)
-        val folder = loadFolder(forceRefresh, errors)
-        LiveTvLoadResult(
-            channels = PRESET_CHANNELS + custom + folder.channels,
-            customError = errors.joinToString(" ").ifBlank { null },
-            categories = CATEGORIES + folder.categories
-        )
+        loadMutex.withLock {
+            val errors = mutableListOf<String>()
+            val custom = loadCustomList(forceRefresh, errors)
+            val folder = loadFolder(forceRefresh, errors)
+            LiveTvLoadResult(
+                channels = PRESET_CHANNELS + (custom?.channels.orEmpty()) + folder.channels,
+                customError = errors.joinToString(" ").ifBlank { null },
+                categories = CATEGORIES + folder.categories,
+                trees = custom?.trees.orEmpty() + listOfNotNull(folder.tree)
+            )
+        }
     }
 
-    private fun loadCustomList(forceRefresh: Boolean, errors: MutableList<String>): List<LiveTvChannel> {
+    /** Ist die eigene Liste nach Ländern sortiert (dann zeigt der PC sie nur in deren Reitern)? */
+    val isCustomListGrouped: Boolean get() = customCache?.trees?.isNotEmpty() == true
+
+    private fun loadCustomList(forceRefresh: Boolean, errors: MutableList<String>): CustomList? {
         val customUrl = LocalStorage.customM3uUrl.trim()
-        if (customUrl.isBlank()) return emptyList()
+        if (customUrl.isBlank()) return null
 
         val cached = customCache
-        if (!forceRefresh && cached != null && cached.first == customUrl) return cached.second
+        if (!forceRefresh && cached != null && cached.url == customUrl) return cached
 
         return try {
+            val started = System.currentTimeMillis()
             val custom = fetchM3u(customUrl)
-            customCache = customUrl to custom
+            val trees = if (LiveTvTree.hasGroups(custom)) LiveTvTree.buildGrouped(custom, "iptv:") else emptyList()
+            AppLog.i(TAG, "Eigene Liste: ${custom.size} Einträge, ${trees.size} Länder (${System.currentTimeMillis() - started} ms)")
+            val list = CustomList(customUrl, custom, trees)
+            customCache = list
             if (custom.isEmpty()) errors += "Die eigene Liste enthält keine abspielbaren Sender."
-            custom
+            list
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             errors += "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
-            emptyList()
+            // Kurzer Aussetzer beim Start: die zuletzt geladene Liste dieser Adresse weiter zeigen
+            customCache?.takeIf { it.url == customUrl }
         }
     }
 
@@ -387,7 +413,10 @@ object LiveTvRepository {
 
         return try {
             val files = folderReader(folder)
-            val result = buildFolderChannels(LocalStorage.m3uFolderName.ifBlank { "Eigener Ordner" }, files)
+            val rootName = LocalStorage.m3uFolderName.ifBlank { "Eigener Ordner" }
+            val result = buildFolderChannels(rootName, files).copy(
+                tree = LiveTvTree.buildFolder(rootName, files, "folder-tree:").takeIf { it.total > 0 }
+            )
             folderCache = folder to result
             if (files.isEmpty()) {
                 errors += "Im Ordner wurden keine M3U-Dateien gefunden."
@@ -528,6 +557,7 @@ object LiveTvRepository {
         val channels = mutableListOf<LiveTvChannel>()
         var currentName = ""
         var currentLogo = ""
+        var currentGroup = ""
         val currentHeaders = mutableMapOf<String, String>()
 
         for (line in content.lineSequence()) {
@@ -538,6 +568,7 @@ object LiveTvRepository {
                         nameAttr.find(trimmed)?.groupValues?.get(1).orEmpty()
                     }
                     currentLogo = logoAttr.find(trimmed)?.groupValues?.get(1).orEmpty()
+                    currentGroup = groupAttr.find(trimmed)?.groupValues?.get(1).orEmpty()
                     currentHeaders.clear()
                 }
 
@@ -571,12 +602,14 @@ object LiveTvRepository {
                                 streamUrl = trimmed,
                                 category = category,
                                 qualityBadge = "M3U",
-                                headers = HashMap(currentHeaders)
+                                headers = HashMap(currentHeaders),
+                                group = currentGroup
                             )
                         )
                     }
                     currentName = ""
                     currentLogo = ""
+                    currentGroup = ""
                     currentHeaders.clear()
                 }
             }

@@ -53,7 +53,9 @@ sealed interface PlayRequest {
         val channelName: String,
         val streamUrl: String,
         val logoUrl: String,
-        val headers: Map<String, String>
+        val headers: Map<String, String>,
+        /** Film oder Serienfolge aus einer IPTV-Liste: mit Zeitleiste und Spulen statt Live-Wiederverbindung. */
+        val isVod: Boolean = false
     ) : PlayRequest
 }
 
@@ -81,6 +83,9 @@ class PlayerController(private val scope: CoroutineScope) {
     private val failedHosterPaths = mutableSetOf<String>()
 
     var isLiveStream by mutableStateOf(false)
+        private set
+    /** Film/Folge aus einer IPTV-Liste: direkte Adresse, aber mit Zeitleiste (kein Hoster, kein Fortschritt im Weiterschauen). */
+    var isDirectVod by mutableStateOf(false)
         private set
     private var directStreamUrl: String? = null
     private var streamHeaders: Map<String, String> = emptyMap()
@@ -169,7 +174,9 @@ class PlayerController(private val scope: CoroutineScope) {
                 // Läuft gerade eine Folge (z. B. per Handy umgeschaltet), deren Fortschritt vorher sichern
                 persistCurrentProgress()
                 resolveJob?.cancel()
-                isLiveStream = true
+                isLiveStream = !request.isVod
+                isDirectVod = request.isVod
+                animeSlug = ""
                 directStreamUrl = request.streamUrl
                 streamHeaders = request.headers
                 activeHoster = null
@@ -182,17 +189,18 @@ class PlayerController(private val scope: CoroutineScope) {
                 coverUrl = request.logoUrl
                 currentEpisode = EpisodeItem(
                     number = 1,
-                    seasonLabel = LIVE_SEASON_LABEL,
-                    path = "live_stream",
+                    seasonLabel = if (request.isVod) "" else LIVE_SEASON_LABEL,
+                    path = if (request.isVod) request.streamUrl else "live_stream",
                     titleDe = request.channelName.ifBlank { "Live TV" },
                     titleEn = "",
                     languages = emptyList()
                 )
-                statusMessage = "Starte Live Stream..."
+                statusMessage = if (request.isVod) "Starte …" else "Starte Live Stream..."
                 playLive()
             }
 
             is PlayRequest.Episode -> {
+                isDirectVod = false
                 animeSlug = request.animeSlug
                 animeTitle = request.animeTitle
                 coverUrl = request.coverUrl
@@ -441,7 +449,7 @@ class PlayerController(private val scope: CoroutineScope) {
     }
 
     fun retry() {
-        if (isLiveStream) reconnectLive() else currentEpisode?.let { loadEpisodeAndPlay(it) }
+        if (isLiveStream || isDirectVod) reconnectLive() else currentEpisode?.let { loadEpisodeAndPlay(it) }
     }
 
     /** Wird jede Sekunde vom Bildschirm aufgerufen (Handy-Status, Fortschritt sichern). */
@@ -672,6 +680,7 @@ class PlayerController(private val scope: CoroutineScope) {
             handleLiveError("Sender hat die Übertragung beendet")
             return
         }
+        if (isDirectVod) return
         val ep = currentEpisode ?: return
         // VLC meldet auch kaputte Streams als "beendet": Ende ohne Laufzeit oder mitten im Film
         val endedEarly = durationMs <= 0L || currentPositionMs < durationMs - 60_000L
@@ -688,7 +697,14 @@ class PlayerController(private val scope: CoroutineScope) {
 
     private fun onPlaybackError(reason: String) {
         isStarting = false
-        if (isLiveStream) handleLiveError(reason) else fallbackToRemainingHosters(reason)
+        when {
+            isLiveStream -> handleLiveError(reason)
+            isDirectVod -> {
+                isResolving = false
+                errorMessage = "Wiedergabe fehlgeschlagen ($reason)."
+            }
+            else -> fallbackToRemainingHosters(reason)
+        }
     }
 
     // ------------------- Live TV -------------------
@@ -740,7 +756,7 @@ class PlayerController(private val scope: CoroutineScope) {
     // ------------------- Fortschritt -------------------
 
     fun persistCurrentProgress() {
-        if (isLiveStream) return
+        if (isLiveStream || isDirectVod) return
         val ep = currentEpisode ?: return
         val pos = currentPositionMs
         val dur = durationMs

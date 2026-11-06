@@ -142,7 +142,14 @@ fun DesktopApp(chromium: ChromiumStreamExtractor) {
                         )
                     },
                     onPlayLiveChannel = { channel ->
-                        playRequest = PlayRequest.Live(channel.name, channel.streamUrl, channel.logoUrl, channel.headers)
+                        playRequest = PlayRequest.Live(
+                            channel.name,
+                            channel.streamUrl,
+                            channel.logoUrl,
+                            channel.headers,
+                            // Filme/Folgen aus IPTV-Listen mit Zeitleiste
+                            isVod = de.aniworld.tv.data.remote.LiveTvTree.isVod(channel.streamUrl)
+                        )
                     },
                     onUpdateFound = { release -> availableRelease = release },
                     onPlayTitle = { detail, episode, episodeList, lang ->
