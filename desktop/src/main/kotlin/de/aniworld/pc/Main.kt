@@ -118,7 +118,7 @@ fun main() {
             // Keine weiße Windows-Titelleiste – die App zeichnet ihre eigene (AppTitleBar)
             undecorated = true,
             // Größe ändern (Ränder ziehen) nur im normalen Fenster, nicht maximiert oder im Vollbild
-            resizable = windowState.placement == WindowPlacement.Floating,
+            resizable = windowState.placement == WindowPlacement.Floating && !de.aniworld.pc.ui.components.AppFullscreen.active,
             onPreviewKeyEvent = { KeyDispatcher.dispatch(it) }
         ) {
             LaunchedEffect(Unit) {
@@ -136,7 +136,7 @@ fun main() {
                     var showIntro by remember { mutableStateOf(true) }
                     Column(modifier = Modifier.fillMaxSize().background(BgPrimary)) {
                         // Im Vollbild (Player) ohne Titelleiste
-                        if (windowState.placement != WindowPlacement.Fullscreen) {
+                        if (!de.aniworld.pc.ui.components.AppFullscreen.active) {
                             AppTitleBar(icon = icon, onClose = closeApp)
                         }
                         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {

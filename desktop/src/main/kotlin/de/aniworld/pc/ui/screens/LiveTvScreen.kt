@@ -769,7 +769,7 @@ private fun CustomM3uInput(onSaved: () -> Unit) {
                                 savedUrl.isBlank() -> "📂 Link zur eigenen M3U-Liste eingeben"
                                 savedUrl.startsWith("file:", true) ->
                                     "📄 Datei: " + runCatching { File(URI(savedUrl)).name }.getOrDefault("eigene Datei")
-                                else -> "🔒 Eigene Liste gespeichert · ${LiveTvRepository.hostOf(savedUrl)} (OK: neuen Link eingeben)"
+                                else -> "🔒 Eigene Liste gespeichert"
                             },
                             color = if (savedUrl.isBlank()) TextMuted else TextPrimary,
                             fontSize = 14.sp,

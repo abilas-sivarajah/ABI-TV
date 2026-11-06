@@ -113,6 +113,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.WindowPlacement
+import de.aniworld.pc.ui.components.AppFullscreen
 import de.aniworld.pc.cast.PcCastManager
 import de.aniworld.pc.ui.compat.BackHandler
 import de.aniworld.pc.ui.compat.LocalComposeWindow
@@ -148,8 +149,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     val controller = remember { PlayerController(scope) }
     val windowState = LocalWindowState.current
     val composeWindow = LocalComposeWindow.current
-    val isFullscreen = windowState.placement == WindowPlacement.Fullscreen
-    var placementBeforeFullscreen by remember { mutableStateOf(WindowPlacement.Maximized) }
+    val isFullscreen = AppFullscreen.active
 
     var controlsVisible by remember { mutableStateOf(true) }
     var sidePanel by remember { mutableStateOf<PlayerPanel?>(null) }
@@ -164,38 +164,21 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         lastInteraction = System.currentTimeMillis()
     }
 
-    /**
-     * Compose Desktop beendet das Vollbild nur beim Wechsel auf "Floating": "Maximized" setzt
-     * lediglich das Maximiert-Flag – das ist bei unserem Fenster aber schon gesetzt, also blieb
-     * das Vollbild bestehen. Darum am Fenster selbst erst auf Floating, dann aufs Ziel wechseln.
-     */
-    fun exitFullscreen() {
-        val target = placementBeforeFullscreen.takeIf { it != WindowPlacement.Fullscreen } ?: WindowPlacement.Maximized
-        val window = composeWindow
-        if (window == null) {
-            windowState.placement = WindowPlacement.Floating
-            return
-        }
-        // App wird gerade geschlossen: Fenster ist schon weg, dann nichts mehr umschalten
-        if (!window.isDisplayable) return
-        window.placement = WindowPlacement.Floating
-        if (target == WindowPlacement.Maximized) window.placement = WindowPlacement.Maximized
-        windowState.placement = target
-    }
+    // Randloses Vollbild über den Bildschirm des Fensters (bleibt, wenn man auf einen anderen Bildschirm klickt)
+    fun exitFullscreen() = AppFullscreen.exit(composeWindow, windowState)
 
     fun toggleFullscreen() {
-        if (windowState.placement == WindowPlacement.Fullscreen) {
+        if (AppFullscreen.active) {
             exitFullscreen()
         } else {
-            placementBeforeFullscreen = windowState.placement
-            windowState.placement = WindowPlacement.Fullscreen
+            composeWindow?.let { AppFullscreen.enter(it, windowState) }
         }
         keepControlsAlive()
     }
 
     // Direkt aus einem Banner gestartet: gleich ins Vollbild
     LaunchedEffect(Unit) {
-        if (startFullscreen && windowState.placement != WindowPlacement.Fullscreen) toggleFullscreen()
+        if (startFullscreen && !AppFullscreen.active) toggleFullscreen()
     }
 
     // Neuer Auftrag (auch vom Handy, während der Player schon läuft)
@@ -219,7 +202,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
         onDispose {
             PcCastManager.activePlayerControl = null
             controller.release()
-            if (windowState.placement == WindowPlacement.Fullscreen) {
+            if (AppFullscreen.active) {
                 exitFullscreen()
             }
         }
@@ -242,7 +225,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
     BackHandler {
         when {
             sidePanel != null -> sidePanel = null
-            windowState.placement == WindowPlacement.Fullscreen -> toggleFullscreen()
+            AppFullscreen.active -> toggleFullscreen()
             else -> onClose()
         }
     }
@@ -407,13 +390,13 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Leisten ausblenden, ihren Platz aber schwarz freihalten: Ändert das Videobild seine Größe,
-        // füllt Windows die neue Fläche kurz weiß, bis VLC dort zeichnet – das wirkte wie Flackern.
+        // Außerhalb des Vollbilds bleibt der Platz der Leisten schwarz frei; im Vollbild füllt das Bild
+        // den ganzen Bildschirm, sobald die Leisten verschwinden (Fensterhintergrund ist dunkel, kein Weißblitz).
         if (showBars) {
             Box(modifier = Modifier.onSizeChanged { topBarHeightPx = it.height }) {
                 PlayerTopBar(onClose = onClose)
             }
-        } else {
+        } else if (!isFullscreen) {
             Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { topBarHeightPx.toDp() }))
         }
 
@@ -511,7 +494,7 @@ fun PlayerScreen(request: PlayRequest, onClose: () -> Unit, startFullscreen: Boo
                     onInteraction = { keepControlsAlive() }
                 )
             }
-        } else {
+        } else if (!isFullscreen) {
             Spacer(modifier = Modifier.fillMaxWidth().height(with(LocalDensity.current) { bottomBarHeightPx.toDp() }))
         }
     }
