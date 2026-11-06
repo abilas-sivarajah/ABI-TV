@@ -24,6 +24,7 @@ object LocalStorage {
     private const val KEY_CUSTOM_M3U_URL = "custom_m3u_url_v1"
     private const val KEY_M3U_FOLDER = "m3u_folder_v1"
     private const val KEY_M3U_FOLDER_NAME = "m3u_folder_name_v1"
+    private const val KEY_FAVORITE_CHANNELS = "live_favorite_channels_v1"
     private const val KEY_LETTERBOXD_USERS = "letterboxd_users_v1"
 
     private val gson = Gson()
@@ -35,6 +36,10 @@ object LocalStorage {
 
     // Erst in init() befüllen: Beim Laden des Objekts gibt es noch keinen Speicher, und eine
     // leer gelesene Merkliste würde beim nächsten Speichern die echte überschreiben
+    private val _favoriteChannelsFlow = MutableStateFlow<Set<String>>(emptySet())
+    /** Favorisierte Live-Sender (Stream-Adressen); stehen in jedem Ordner ganz oben. */
+    val favoriteChannelsFlow: StateFlow<Set<String>> = _favoriteChannelsFlow.asStateFlow()
+
     private val _watchlistFlow = MutableStateFlow<List<AnimeCard>>(emptyList())
     val watchlistFlow: StateFlow<List<AnimeCard>> = _watchlistFlow.asStateFlow()
 
@@ -51,12 +56,26 @@ object LocalStorage {
     /** Muss beim App-Start vor dem ersten Zugriff aufgerufen werden. */
     fun init(store: KeyValueStore) {
         storeRef = store
+        _favoriteChannelsFlow.value = prefs.getStringSet(KEY_FAVORITE_CHANNELS, emptySet())
         _watchlistFlow.value = readWatchlist()
         _progressFlow.value = readProgressList()
         _watchedEpisodesFlow.value = readWatchedEpisodes()
         _letterboxdUsersFlow.value = runCatching {
             gson.fromJson<List<String>>(prefs.getString(KEY_LETTERBOXD_USERS, "[]") ?: "[]", object : TypeToken<List<String>>() {}.type)
         }.getOrNull().orEmpty()
+    }
+
+    // ------------------- Favorisierte Sender -------------------
+
+    fun isFavoriteChannel(streamUrl: String): Boolean = streamUrl in _favoriteChannelsFlow.value
+
+    /** Sender favorisieren bzw. entfernen; true = jetzt Favorit. */
+    fun toggleFavoriteChannel(streamUrl: String): Boolean {
+        val current = _favoriteChannelsFlow.value
+        val updated = if (streamUrl in current) current - streamUrl else current + streamUrl
+        prefs.putStringSet(KEY_FAVORITE_CHANNELS, updated)
+        _favoriteChannelsFlow.value = updated
+        return streamUrl in updated
     }
 
     // ------------------- Letterboxd-Benutzer -------------------

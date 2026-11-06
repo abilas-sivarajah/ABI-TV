@@ -1,5 +1,6 @@
 package de.aniworld.tv.ui.screens
 
+import androidx.compose.runtime.collectAsState
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.animateFloatAsState
@@ -315,6 +316,13 @@ private fun ChannelGrid(
     onPlay: (LiveTvChannel) -> Unit,
     onFocused: (LiveTvChannel) -> Unit
 ) {
+    val favorites by LocalStorage.favoriteChannelsFlow.collectAsState()
+    // Favoriten stehen in jedem Ordner ganz oben
+    val sorted = remember(channels, favorites) {
+        val (fav, rest) = channels.partition { it.streamUrl in favorites }
+        fav + rest
+    }
+    var optionsFor by remember { mutableStateOf<LiveTvChannel?>(null) }
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = 180.dp),
         horizontalArrangement = Arrangement.spacedBy(14.dp),
@@ -322,13 +330,76 @@ private fun ChannelGrid(
         contentPadding = PaddingValues(bottom = 24.dp),
         modifier = Modifier.fillMaxSize()
     ) {
-        items(channels, key = { it.id }) { channel ->
+        items(sorted, key = { it.id }) { channel ->
             TvChannelCard(
                 channel = channel,
                 onClick = { onPlay(channel) },
-                onFocused = { onFocused(channel) }
+                onFocused = { onFocused(channel) },
+                isFavorite = channel.streamUrl in favorites,
+                onLongPress = { optionsFor = channel }
             )
         }
+    }
+    optionsFor?.let { channel ->
+        ChannelOptionsDialog(
+            channel = channel,
+            isFavorite = channel.streamUrl in favorites,
+            onPlay = {
+                optionsFor = null
+                onPlay(channel)
+            },
+            onToggleFavorite = {
+                optionsFor = null
+                LocalStorage.toggleFavoriteChannel(channel.streamUrl)
+            },
+            onDismiss = { optionsFor = null }
+        )
+    }
+}
+
+/** Optionen zu einem Sender: oben Abspielen, darunter Favorisieren (Hoch/Runter, OK). */
+@Composable
+private fun ChannelOptionsDialog(
+    channel: LiveTvChannel,
+    isFavorite: Boolean,
+    onPlay: () -> Unit,
+    onToggleFavorite: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    val firstFocus = remember { FocusRequester() }
+    androidx.compose.ui.window.Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .width(420.dp)
+                .clip(RoundedCornerShape(14.dp))
+                .background(BgElevated)
+                .padding(18.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Text(
+                text = channel.name,
+                color = TextPrimary,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+            TvFocusableButton(
+                text = "▶  Abspielen",
+                isPrimary = true,
+                modifier = Modifier.fillMaxWidth().focusRequester(firstFocus),
+                onClick = onPlay
+            )
+            TvFocusableButton(
+                text = if (isFavorite) "☆  Aus Favoriten entfernen" else "★  Favorisieren",
+                modifier = Modifier.fillMaxWidth(),
+                onClick = onToggleFavorite
+            )
+        }
+    }
+    LaunchedEffect(Unit) {
+        delay(80)
+        runCatching { firstFocus.requestFocus() }
     }
 }
 
@@ -683,9 +754,13 @@ fun TvChannelCard(
     channel: LiveTvChannel,
     onClick: () -> Unit,
     onFocused: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    isFavorite: Boolean = false,
+    /** OK lange gehalten (z. B. Optionen zum Favorisieren). */
+    onLongPress: (() -> Unit)? = null
 ) {
     var isFocused by remember { mutableStateOf(false) }
+    var longPressed by remember { mutableStateOf(false) }
     var logoFailed by remember(channel.logoUrl) { mutableStateOf(false) }
     val scale by animateFloatAsState(
         targetValue = if (isFocused) 1.06f else 1.0f,
@@ -712,6 +787,29 @@ fun TvChannelCard(
                 color = if (isFocused) borderColor else Color.White.copy(alpha = 0.08f),
                 shape = RoundedCornerShape(12.dp)
             )
+            // OK lange gehalten: Optionen statt Abspielen (das Loslassen danach löst keinen Klick aus)
+            .onPreviewKeyEvent { event ->
+                val center = event.key == Key.DirectionCenter || event.key == Key.Enter || event.key == Key.NumPadEnter
+                if (!center || onLongPress == null) return@onPreviewKeyEvent false
+                when {
+                    event.type == KeyEventType.KeyDown && event.nativeKeyEvent.repeatCount == 0 -> {
+                        longPressed = false
+                        false
+                    }
+                    event.type == KeyEventType.KeyDown -> {
+                        if (!longPressed) {
+                            longPressed = true
+                            onLongPress()
+                        }
+                        true
+                    }
+                    event.type == KeyEventType.KeyUp && longPressed -> {
+                        longPressed = false
+                        true
+                    }
+                    else -> false
+                }
+            }
             // clickable ist selbst fokussierbar; ein zusätzliches focusable() erzeugt einen zweiten
             // Fokusknoten, auf dem OK nichts auslöst
             .clickable { onClick() }
@@ -766,9 +864,9 @@ fun TvChannelCard(
 
         Spacer(modifier = Modifier.height(10.dp))
 
-        // Sender Name
+        // Sender Name (Favoriten mit Stern)
         Text(
-            text = channel.name,
+            text = if (isFavorite) "★ ${channel.name}" else channel.name,
             color = if (isFocused) Color.White else TextPrimary,
             fontSize = 13.sp,
             fontWeight = FontWeight.Bold,

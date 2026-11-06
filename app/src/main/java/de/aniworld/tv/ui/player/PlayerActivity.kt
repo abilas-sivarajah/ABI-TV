@@ -1,5 +1,6 @@
 package de.aniworld.tv.ui.player
 
+import androidx.compose.runtime.collectAsState
 import de.aniworld.tv.data.model.LiveTvChannel
 import de.aniworld.tv.data.model.LiveTvNode
 import androidx.compose.foundation.lazy.LazyColumn
@@ -209,6 +210,12 @@ class PlayerActivity : ComponentActivity() {
     private var channelMenuLastInput by mutableLongStateOf(0L)
     /** So viele Zeilen passen gerade auf den Bildschirm (für Links/Rechts = eine Seite weiter). */
     private var channelMenuPageSize = 8
+    /** OK gedrückt (kurz = auswählen, lang gehalten = Optionen); wird beim Loslassen ausgewertet. */
+    private var menuCenterDown = false
+    private var menuLongHandled = false
+    /** Optionen zu einem Sender (Abspielen / Favorisieren); null = zu. */
+    private var channelOptions by mutableStateOf<LiveTvChannel?>(null)
+    private var channelOptionsIndex by mutableIntStateOf(0)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -1566,7 +1573,7 @@ class PlayerActivity : ComponentActivity() {
         // Offene Senderwahl bekommt alle Tasten (auch das Loslassen, damit nichts dahinter auslöst)
         val menu = channelMenuNode
         if (menu != null) {
-            if (event.action == KeyEvent.ACTION_DOWN) handleChannelMenuKey(event.keyCode, menu)
+            handleChannelMenuEvent(event, menu)
             return true
         }
         // Live-Sender aus Live TV: OK öffnet die Senderwahl des Ordners (wie die OK-Taste am Fernseher)
@@ -1663,8 +1670,69 @@ class PlayerActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    /** Einträge eines Ordners in der Senderwahl: erst Unterordner, dann Sender. */
-    private fun channelMenuItems(node: LiveTvNode): List<Any> = node.children + node.channels
+    /** Einträge eines Ordners in der Senderwahl: erst Unterordner, dann Favoriten, dann die übrigen Sender. */
+    private fun channelMenuItems(node: LiveTvNode): List<Any> {
+        val favorites = LocalStorage.favoriteChannelsFlow.value
+        val (fav, rest) = node.channels.partition { it.streamUrl in favorites }
+        return node.children + fav + rest
+    }
+
+    /** OK kurz = wie bisher; OK gehalten = Optionen zum Sender; Optionen haben eigene Tasten. */
+    private fun handleChannelMenuEvent(event: KeyEvent, node: LiveTvNode) {
+        val isCenter = event.keyCode == KeyEvent.KEYCODE_DPAD_CENTER || event.keyCode == KeyEvent.KEYCODE_ENTER ||
+            event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER
+        channelMenuLastInput = System.currentTimeMillis()
+        if (isCenter) {
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> if (event.repeatCount == 0) {
+                    menuCenterDown = true
+                    menuLongHandled = false
+                } else if (menuCenterDown && !menuLongHandled) {
+                    // Lang gehalten: Optionen zum gewählten Sender
+                    menuLongHandled = true
+                    if (channelOptions == null) {
+                        (channelMenuItems(node).getOrNull(channelMenuIndex) as? LiveTvChannel)?.let {
+                            channelOptions = it
+                            channelOptionsIndex = 0
+                        }
+                    }
+                }
+                KeyEvent.ACTION_UP -> {
+                    val shortPress = menuCenterDown && !menuLongHandled
+                    menuCenterDown = false
+                    if (shortPress) {
+                        val options = channelOptions
+                        if (options != null) runChannelOption(options, node) else handleChannelMenuKey(KeyEvent.KEYCODE_DPAD_CENTER, node)
+                    }
+                }
+            }
+            return
+        }
+        if (event.action != KeyEvent.ACTION_DOWN) return
+        if (channelOptions != null) {
+            when (event.keyCode) {
+                KeyEvent.KEYCODE_DPAD_UP -> channelOptionsIndex = 0
+                KeyEvent.KEYCODE_DPAD_DOWN -> channelOptionsIndex = 1
+                KeyEvent.KEYCODE_BACK, KeyEvent.KEYCODE_MENU -> channelOptions = null
+            }
+            return
+        }
+        handleChannelMenuKey(event.keyCode, node)
+    }
+
+    private fun runChannelOption(channel: LiveTvChannel, node: LiveTvNode) {
+        channelOptions = null
+        if (channelOptionsIndex == 0) {
+            channelMenuNode = null
+            channelFolderId = node.id
+            startChannelFromMenu(channel, node)
+        } else {
+            LocalStorage.toggleFavoriteChannel(channel.streamUrl)
+            // Auswahl bleibt auf dem Sender, auch wenn er durch das Favorisieren nach oben/unten wandert
+            channelMenuIndex = channelMenuItems(node).indexOfFirst { (it as? LiveTvChannel)?.streamUrl == channel.streamUrl }
+                .coerceAtLeast(0)
+        }
+    }
 
     private fun openChannelMenu(): Boolean {
         val node = channelFolderId?.let { LiveTvRepository.findFolder(it) } ?: return false
@@ -1727,7 +1795,9 @@ class PlayerActivity : ComponentActivity() {
 
     @Composable
     private fun ChannelMenuOverlay(node: LiveTvNode) {
-        val items = channelMenuItems(node)
+        // Neu zeichnen, wenn sich die Favoriten ändern
+        val favorites by LocalStorage.favoriteChannelsFlow.collectAsState()
+        val items = remember(node, favorites) { channelMenuItems(node) }
         val listState = rememberLazyListState()
         val index = channelMenuIndex.coerceIn(0, (items.size - 1).coerceAtLeast(0))
         // Auswahl immer sichtbar halten
@@ -1773,6 +1843,10 @@ class PlayerActivity : ComponentActivity() {
                     fontSize = 12.sp
                 )
                 Spacer(modifier = Modifier.height(12.dp))
+                channelOptions?.let { channel ->
+                    ChannelOptionsBox(channel = channel, isFavorite = channel.streamUrl in favorites)
+                    Spacer(modifier = Modifier.height(10.dp))
+                }
                 LazyColumn(state = listState, modifier = Modifier.fillMaxSize()) {
                     items(items.size) { i ->
                         val item = items[i]
@@ -1813,6 +1887,10 @@ class PlayerActivity : ComponentActivity() {
                                         fontSize = 13.sp,
                                         modifier = Modifier.width(44.dp)
                                     )
+                                    if (item.streamUrl in favorites) {
+                                        Text("★", color = Color(0xFFFFC94D), fontSize = 14.sp)
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
                                     Text(
                                         text = item.name,
                                         color = if (playing) AccentCyan else TextPrimary,
@@ -1829,6 +1907,42 @@ class PlayerActivity : ComponentActivity() {
                         Spacer(modifier = Modifier.height(2.dp))
                     }
                 }
+            }
+        }
+    }
+
+    /** Optionen zum Sender: oben Abspielen, darunter Favorisieren (Hoch/Runter wählt, OK bestätigt). */
+    @Composable
+    private fun ChannelOptionsBox(channel: LiveTvChannel, isFavorite: Boolean) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(10.dp))
+                .background(BgElevated)
+                .border(1.dp, AccentCyan.copy(alpha = 0.6f), RoundedCornerShape(10.dp))
+                .padding(10.dp)
+        ) {
+            Text(
+                text = channel.name,
+                color = TextSecondary,
+                fontSize = 13.sp,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(start = 6.dp, bottom = 6.dp)
+            )
+            listOf("▶  Abspielen", if (isFavorite) "☆  Aus Favoriten entfernen" else "★  Favorisieren").forEachIndexed { i, label ->
+                val selected = i == channelOptionsIndex
+                Text(
+                    text = label,
+                    color = if (selected) Color.White else TextPrimary,
+                    fontSize = 16.sp,
+                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(8.dp))
+                        .background(if (selected) AccentCyan.copy(alpha = 0.35f) else Color.Transparent)
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                )
             }
         }
     }
