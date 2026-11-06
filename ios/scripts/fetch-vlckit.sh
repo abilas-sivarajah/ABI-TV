@@ -27,6 +27,11 @@ mkdir -p Frameworks
 mv "$WORK/MobileVLCKit-binary/MobileVLCKit.xcframework" "$TARGET"
 # Debug-Symbole und alte 32-Bit-Teile weglassen: Die App wird damit deutlich kleiner
 find "$TARGET" -name dSYMs -type d -prune -exec rm -rf {} +
+# … und den Verweis darauf aus der Beschreibung entfernen, sonst bricht Xcode ab
+COUNT=$(/usr/libexec/PlistBuddy -c "Print :AvailableLibraries" "$TARGET/Info.plist" | grep -c "LibraryIdentifier")
+for ((i = 0; i < COUNT; i++)); do
+  /usr/libexec/PlistBuddy -c "Delete :AvailableLibraries:$i:DebugSymbolsPath" "$TARGET/Info.plist" 2>/dev/null || true
+done
 DEVICE_BIN="$TARGET/ios-arm64_armv7_armv7s/MobileVLCKit.framework/MobileVLCKit"
 if command -v lipo >/dev/null 2>&1 && lipo -info "$DEVICE_BIN" | grep -q armv7; then
   lipo "$DEVICE_BIN" -thin arm64 -output "$WORK/MobileVLCKit-arm64"
