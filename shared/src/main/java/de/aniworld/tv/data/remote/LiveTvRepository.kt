@@ -488,9 +488,16 @@ object LiveTvRepository {
         return when {
             path.endsWith(".m3u8") || path.endsWith(".m3u") -> true
             nonHlsExtensions.any { path.endsWith(it) } -> false
+            // IPTV-Server (Xtream): /benutzer/passwort/12345 liefert rohes MPEG-TS, kein HLS
+            isXtreamLivePath(path) -> false
             else -> true
         }
     }
+
+    private val xtreamLive = Regex("""^https?://[^/]+(/live)?/[^/]+/[^/]+/\d+(\.ts)?$""", RegexOption.IGNORE_CASE)
+
+    /** Live-Sender eines IPTV-Servers im Xtream-Format (http://server:8080/benutzer/passwort/12345). */
+    fun isXtreamLivePath(url: String): Boolean = xtreamLive.matches(url.substringBefore('?').substringBefore('#'))
 
     private fun fetchM3u(url: String): List<LiveTvChannel> {
         if (url.startsWith("file:", ignoreCase = true)) {

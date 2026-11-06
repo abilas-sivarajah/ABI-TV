@@ -511,6 +511,32 @@ public enum LiveTvRepository {
         return true
     }
 
+    /// Live-Sender eines IPTV-Servers im Xtream-Format (http://server:8080/benutzer/passwort/12345):
+    /// liefert rohes MPEG-TS, das das iPhone nicht abspielt.
+    public static func xtreamLiveParts(_ url: String) -> (base: String, user: String, pass: String, id: String)? {
+        let clean = url.components(separatedBy: "?").first?.components(separatedBy: "#").first ?? url
+        guard let m = HtmlParser.allMatches(in: clean, pattern: #"^(https?://[^/]+)(?:/live)?/([^/]+)/([^/]+)/(\d+)(?:\.ts)?$"#).first,
+              m.count == 5 else { return nil }
+        return (m[1], m[2], m[3], m[4])
+    }
+
+    /// Adressen, die das iPhone der Reihe nach probiert: Xtream-Live zuerst als HLS (/live/…/12345.m3u8),
+    /// dann wie in der Liste angegeben.
+    public static func playbackCandidates(_ url: String) -> [String] {
+        guard let parts = xtreamLiveParts(url) else { return [url] }
+        let hls = "\(parts.base)/live/\(parts.user)/\(parts.pass)/\(parts.id).m3u8"
+        return hls == url ? [url] : [hls, url]
+    }
+
+    /// Formate, die AVPlayer auf dem iPhone nicht abspielen kann (MKV, AVI …).
+    public static func unsupportedOnIos(_ url: String) -> String? {
+        let path = (url.components(separatedBy: "?").first ?? url).lowercased()
+        for ext in ["mkv", "avi", "flv", "wmv", "mpg", "mpeg"] where path.hasSuffix(".\(ext)") {
+            return ext.uppercased()
+        }
+        return nil
+    }
+
     /// Sender aus einer M3U-Liste; `fallbackName` benennt Adressen ohne #EXTINF-Zeile (Datei mit nur einem Sender).
     public static func parseM3u(_ content: String, category: String = "custom", idPrefix: String = "custom_", fallbackName: String = "") -> [LiveTvChannel] {
         var channels: [LiveTvChannel] = []

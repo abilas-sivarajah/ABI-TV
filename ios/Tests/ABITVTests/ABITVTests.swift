@@ -555,4 +555,15 @@ final class ABITVTests: XCTestCase {
         XCTAssertEqual(result.channels.last?.category, "folder:Sport/DAZN")
         XCTAssertEqual(Set(result.channels.map(\.id)).count, 4)
     }
+
+    func testIptvLiveUrlsGetHlsCandidateAndMkvIsFlagged() {
+        XCTAssertEqual(LiveTvRepository.playbackCandidates("http://srv.example:8080/user1/pass1/12345"),
+                       ["http://srv.example:8080/live/user1/pass1/12345.m3u8", "http://srv.example:8080/user1/pass1/12345"])
+        XCTAssertEqual(LiveTvRepository.playbackCandidates("http://srv.example:8080/live/u/p/7.ts").first,
+                       "http://srv.example:8080/live/u/p/7.m3u8")
+        XCTAssertEqual(LiveTvRepository.playbackCandidates("https://a.example/hls/master.m3u8"), ["https://a.example/hls/master.m3u8"])
+        XCTAssertEqual(LiveTvRepository.playbackCandidates("http://srv.example:8080/movie/u/p/99.mkv").count, 1)
+        XCTAssertEqual(LiveTvRepository.unsupportedOnIos("http://srv.example:8080/movie/u/p/99.mkv"), "MKV")
+        XCTAssertNil(LiveTvRepository.unsupportedOnIos("http://srv.example:8080/movie/u/p/99.mp4"))
+    }
 }

@@ -502,6 +502,19 @@ public struct PlayerView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
+                // Formate, die das iPhone nicht kann (MKV, AVI): auf Fernseher oder PC weiterschicken
+                if let channel = item.liveChannel, LiveTvRepository.unsupportedOnIos(channel.streamUrl) != nil {
+                    Button { handOffToTv() } label: {
+                        Text("Auf TV")
+                            .font(.system(size: 13, weight: .bold))
+                            .foregroundColor(AbiTheme.onAccent)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 10)
+                            .background(AbiTheme.accentCyan)
+                            .clipShape(RoundedRectangle(cornerRadius: 10))
+                    }
+                    .buttonStyle(.plain)
+                } else {
                 Button {
                     failedRedirectPaths.removeAll()
                     liveRetryCount = 0
@@ -516,6 +529,7 @@ public struct PlayerView: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
+                }
             }
             .padding(.top, 4)
         }
@@ -665,9 +679,20 @@ public struct PlayerView: View {
         }
 
         if let channel = item.liveChannel {
+            // MKV/AVI aus IPTV-Listen kann AVPlayer nicht: klar sagen statt ewig neu zu verbinden
+            if let format = LiveTvRepository.unsupportedOnIos(channel.streamUrl) {
+                await MainActor.run {
+                    errorMessage = "\(format)-Dateien kann das iPhone nicht abspielen. Mit „Auf TV“ läuft der Titel auf dem Fernseher oder PC."
+                    isLoading = false
+                }
+                return
+            }
+            // IPTV-Live (rohes MPEG-TS) erst als HLS versuchen, bei Fehlern abwechselnd die Originaladresse
+            let candidates = LiveTvRepository.playbackCandidates(channel.streamUrl)
+            let streamUrl = candidates[liveRetryCount % candidates.count]
             let direct = ResolvedStream(
-                streamUrl: channel.streamUrl,
-                isHls: LiveTvRepository.isLikelyHls(channel.streamUrl),
+                streamUrl: streamUrl,
+                isHls: LiveTvRepository.isLikelyHls(streamUrl),
                 hosterName: "Live TV",
                 language: .gerDub,
                 headers: channel.headers
