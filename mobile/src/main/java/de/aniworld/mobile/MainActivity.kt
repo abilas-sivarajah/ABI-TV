@@ -90,7 +90,9 @@ class MainActivity : ComponentActivity() {
                                         channelName = channel.name,
                                         streamUrl = channel.streamUrl,
                                         logoUrl = channel.logoUrl,
-                                        headers = HashMap(channel.headers)
+                                        headers = HashMap(channel.headers),
+                                        // Ordner des Senders: Im Player lässt sich darin umschalten
+                                        folderId = de.aniworld.tv.data.remote.LiveTvRepository.playFolderId
                                     )
                                 )
                             },

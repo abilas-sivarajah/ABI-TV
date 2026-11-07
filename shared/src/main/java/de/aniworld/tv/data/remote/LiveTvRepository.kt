@@ -322,6 +322,15 @@ object LiveTvRepository {
     @Volatile
     private var customCache: CustomList? = null
 
+    /** Ordner für die Kopie der eigenen Liste (Android); null = keine Kopie (PC). */
+    @Volatile
+    private var copyDir: File? = null
+
+    /** Kopie der eigenen Liste erlauben: Ist der Server nicht erreichbar, bleiben die Sender da. */
+    fun configure(storageDir: File) {
+        copyDir = File(storageDir, "live-tv")
+    }
+
     /** Geladene eigene Liste; [trees] nur, wenn sie Gruppen hat (IPTV: je Land ein Reiter). */
     private class CustomList(val url: String, val channels: List<LiveTvChannel>, val trees: List<LiveTvNode>)
 
@@ -453,19 +462,79 @@ object LiveTvRepository {
 
         return try {
             val started = System.currentTimeMillis()
-            val custom = fetchM3u(customUrl)
-            val trees = if (LiveTvTree.hasGroups(custom)) LiveTvTree.buildGrouped(custom, "iptv:") else emptyList()
-            AppLog.i(TAG, "Eigene Liste: ${custom.size} Einträge, ${trees.size} Länder (${System.currentTimeMillis() - started} ms)")
-            val list = CustomList(customUrl, custom, trees)
-            customCache = list
-            if (custom.isEmpty()) errors += "Die eigene Liste enthält keine abspielbaren Sender."
+            val body = fetchM3uText(customUrl)
+            val list = buildCustomList(customUrl, body)
+            AppLog.i(TAG, "Eigene Liste: ${list.channels.size} Einträge, ${list.trees.size} Länder (${System.currentTimeMillis() - started} ms)")
+            if (list.channels.isEmpty()) {
+                errors += "Die eigene Liste enthält keine abspielbaren Sender."
+            } else {
+                saveCustomCopy(customUrl, body)
+            }
             list
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
-            errors += "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
-            // Kurzer Aussetzer beim Start: die zuletzt geladene Liste dieser Adresse weiter zeigen
+        } catch (e: OutOfMemoryError) {
+            // Riesige Listen dürfen die App nicht beenden; die festen Sender bleiben nutzbar
+            AppLog.w(TAG, "Eigene Liste zu groß für den Speicher")
+            errors += "Die eigene Liste ist zu groß für dieses Gerät."
             customCache?.takeIf { it.url == customUrl }
+        } catch (e: Exception) {
+            // Kurzer Aussetzer: die zuletzt geladene Liste dieser Adresse weiter zeigen
+            customCache?.takeIf { it.url == customUrl }?.let {
+                errors += "Eigene Liste gerade nicht erreichbar."
+                return it
+            }
+            // Sonst die zuletzt gespeicherte Kopie vom Gerät
+            readCustomCopy(customUrl)?.let { body ->
+                val list = buildCustomList(customUrl, body)
+                if (list.channels.isNotEmpty()) {
+                    errors += "Eigene Liste gerade nicht erreichbar – zeige die zuletzt geladene."
+                    return list
+                }
+            }
+            errors += "Eigene Liste nicht erreichbar (${e.message ?: e.javaClass.simpleName})."
+            null
+        }
+    }
+
+    private fun buildCustomList(url: String, body: String): CustomList {
+        val custom = parseM3u(body)
+        val trees = if (LiveTvTree.hasGroups(custom)) LiveTvTree.buildGrouped(custom, "iptv:") else emptyList()
+        return CustomList(url, custom, trees).also { customCache = it }
+    }
+
+    // ------------------- Kopie der eigenen Liste -------------------
+
+    /** Neben der Kopie steht nur ein Fingerabdruck der Adresse, nicht die Adresse selbst. */
+    private fun copyKey(url: String): String =
+        java.security.MessageDigest.getInstance("SHA-256")
+            .digest(url.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it) }
+
+    private fun saveCustomCopy(url: String, body: String) {
+        if (url.startsWith("file:", ignoreCase = true)) return
+        val dir = copyDir ?: return
+        runCatching {
+            dir.mkdirs()
+            File(dir, "custom-list.m3u").writeText(body, Charsets.UTF_8)
+            File(dir, "custom-list.key").writeText(copyKey(url), Charsets.UTF_8)
+        }.onFailure { AppLog.w(TAG, "Kopie der eigenen Liste nicht gespeichert", it) }
+    }
+
+    private fun readCustomCopy(url: String): String? {
+        val dir = copyDir ?: return null
+        return runCatching {
+            val keyFile = File(dir, "custom-list.key")
+            if (!keyFile.isFile || keyFile.readText(Charsets.UTF_8) != copyKey(url)) null
+            else File(dir, "custom-list.m3u").takeIf { it.isFile }?.readText(Charsets.UTF_8)
+        }.getOrNull()
+    }
+
+    private fun deleteCustomCopy() {
+        val dir = copyDir ?: return
+        runCatching {
+            File(dir, "custom-list.m3u").delete()
+            File(dir, "custom-list.key").delete()
         }
     }
 
@@ -573,6 +642,7 @@ object LiveTvRepository {
         }
         LocalStorage.customM3uUrl = normalized
         customCache = null
+        if (normalized.isEmpty()) deleteCustomCopy()
         return true
     }
 
@@ -582,6 +652,8 @@ object LiveTvRepository {
         return when {
             path.endsWith(".m3u8") || path.endsWith(".m3u") -> true
             nonHlsExtensions.any { path.endsWith(it) } -> false
+            // Filme und Serienfolgen aus IPTV-Listen (.avi, .mov, /movie/benutzer/passwort/123 …) sind Dateien
+            LiveTvTree.isVod(path) -> false
             // IPTV-Server (Xtream): /benutzer/passwort/12345 liefert rohes MPEG-TS, kein HLS
             isXtreamLivePath(path) -> false
             else -> true
@@ -604,19 +676,26 @@ object LiveTvRepository {
     /** Live-Sender eines IPTV-Servers im Xtream-Format (http://server:8080/benutzer/passwort/12345). */
     fun isXtreamLivePath(url: String): Boolean = xtreamLive.matches(url.substringBefore('?').substringBefore('#'))
 
-    private fun fetchM3u(url: String): List<LiveTvChannel> {
+    // IPTV-Server erzeugen große Listen oft erst auf Anfrage und schweigen dabei lange
+    private val listClient by lazy {
+        HttpClient.okHttp.newBuilder()
+            .readTimeout(120, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+    }
+
+    private fun fetchM3uText(url: String): String {
         if (url.startsWith("file:", ignoreCase = true)) {
             val file = java.io.File(java.net.URI(url))
             if (!file.isFile) throw IOException("Datei nicht gefunden: ${file.name}")
-            return parseM3u(file.readText(Charsets.UTF_8))
+            return file.readText(Charsets.UTF_8)
         }
         val req = Request.Builder()
             .url(url)
             .header("User-Agent", HttpClient.USER_AGENT)
             .build()
-        HttpClient.okHttp.newCall(req).execute().use { res ->
+        listClient.newCall(req).execute().use { res ->
             if (!res.isSuccessful) throw IOException("HTTP ${res.code}")
-            return parseM3u(res.body?.string().orEmpty())
+            return res.body?.string().orEmpty()
         }
     }
 

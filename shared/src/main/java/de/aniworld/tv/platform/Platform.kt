@@ -23,7 +23,7 @@ object AppLog {
 
 /**
  * Verschlüsselt Geheimnisse wie den Link zur eigenen IPTV-Liste (enthält Benutzername und Passwort).
- * PC: Windows-Verschlüsselung des Benutzerkontos (DPAPI). [decrypt] liefert null, wenn es nicht geht.
+ * PC: Windows-Verschlüsselung des Benutzerkontos (DPAPI), Android: Schlüssel im Android-Keystore. [decrypt] liefert null, wenn es nicht geht.
  */
 interface SecretCodec {
     fun encrypt(plain: String): String

@@ -137,6 +137,13 @@ object LocalStorage {
             prefs.putString(KEY_CUSTOM_M3U_URL, stored)
         }
 
+    /** Link aus älteren Versionen (noch Klartext) verschlüsseln; nach dem Setzen von [secretCodec] aufrufen. */
+    fun encryptStoredSecrets() {
+        if (secretCodec == null) return
+        val raw = prefs.getString(KEY_CUSTOM_M3U_URL, "") ?: ""
+        if (raw.isNotBlank() && !raw.startsWith(SECRET_PREFIX)) customM3uUrl = raw
+    }
+
     /** Eigener Ordner mit M3U-Dateien (PC: Pfad, Android: Ordner-Freigabe content://…); leer = keiner. */
     var m3uFolder: String
         get() = prefs.getString(KEY_M3U_FOLDER, "") ?: ""

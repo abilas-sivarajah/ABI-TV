@@ -87,12 +87,13 @@ fun MobileAnimeCard(
     anime: AnimeCard,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    /** Feste Breite in Reihen; [Dp.Unspecified] füllt die Rasterzelle (sonst bleiben auf breiten Handys Lücken). */
     width: Dp = 130.dp,
     isBookmarked: Boolean = false
 ) {
     Column(
         modifier = modifier
-            .width(width)
+            .then(if (width == Dp.Unspecified) Modifier.fillMaxWidth() else Modifier.width(width))
             .clip(RoundedCornerShape(10.dp))
             .clickable { onClick() }
     ) {

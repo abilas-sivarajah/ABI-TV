@@ -583,7 +583,8 @@ public enum LiveTvRepository {
         if nonHlsExtensions.contains(where: { path.hasSuffix($0) }) {
             return false
         }
-        return true
+        // Filme und Serienfolgen aus IPTV-Listen (.avi, .mov, /movie/benutzer/passwort/123 …) sind Dateien
+        return !LiveTvTree.isVod(path)
     }
 
     /// Live-Sender eines IPTV-Servers im Xtream-Format (http://server:8080/benutzer/passwort/12345):

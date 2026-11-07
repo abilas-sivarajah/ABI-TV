@@ -69,6 +69,7 @@ fun main() {
     LocalStorage.init(mainStore)
     // Link zur eigenen IPTV-Liste (mit Zugangsdaten) nur verschlüsselt auf der Platte
     LocalStorage.secretCodec = de.aniworld.pc.platform.WindowsSecretCodec.createOrNull()
+    LocalStorage.encryptStoredSecrets()
     val chromium = ChromiumStreamExtractor(File(AppDirs.cacheDir, "jcef"))
     StreamResolver.browserExtractor = chromium
     LetterboxdAccount.chromium = chromium

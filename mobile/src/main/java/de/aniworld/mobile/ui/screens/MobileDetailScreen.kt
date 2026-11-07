@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.PlayArrow
@@ -85,7 +86,6 @@ fun MobileDetailScreen(
 ) {
     var detail by remember { mutableStateOf<AnimeDetail?>(null) }
     var selectedSeasonPath by remember { mutableStateOf<String?>(null) }
-    var selectedLanguage by remember { mutableStateOf(LocalStorage.preferredLanguage) }
     var isLoading by remember { mutableStateOf(true) }
     var errorMsg by remember { mutableStateOf<String?>(null) }
 
@@ -93,6 +93,11 @@ fun MobileDetailScreen(
     val watchlist by LocalStorage.watchlistFlow.collectAsState()
     val connectedDevice by MobileCastManager.connectedDevice.collectAsState()
     val isBookmarked = remember(watchlist, animeSlug) { LocalStorage.isInWatchlist(animeSlug) }
+    val progressList by LocalStorage.progressFlow.collectAsState()
+    val watchedEpisodes by LocalStorage.watchedEpisodesFlow.collectAsState()
+    val savedProgress = remember(progressList, animeSlug) { LocalStorage.getProgressForAnime(animeSlug) }
+    // Die Sprache wird im Player gewählt und gemerkt; nach der Rückkehr gilt die neue
+    val selectedLanguage = remember(progressList) { LocalStorage.preferredLanguage }
 
     LaunchedEffect(animeSlug, selectedSeasonPath) {
         isLoading = true
@@ -241,7 +246,17 @@ fun MobileDetailScreen(
             // Haupt-Aktionsbuttons: "Auf Handy spielen" & "Auf TV abspielen"
             item {
                 Column(modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
-                    val firstEp = currentDetail.episodes.firstOrNull()
+                    // Begonnene Titel gehen an der gemerkten Folge weiter, sonst bei der ersten
+                    val firstEp = savedProgress?.let { progress ->
+                        currentDetail.episodes.firstOrNull { it.path == progress.episodePath } ?: EpisodeItem(
+                            number = progress.episodeNumber,
+                            seasonLabel = progress.seasonLabel,
+                            path = progress.episodePath,
+                            titleDe = progress.episodeTitle,
+                            titleEn = "",
+                            languages = listOf(selectedLanguage)
+                        )
+                    } ?: currentDetail.episodes.firstOrNull()
 
                     Row(
                         modifier = Modifier.fillMaxWidth(),
@@ -260,7 +275,7 @@ fun MobileDetailScreen(
                         ) {
                             Icon(Icons.Default.PlayArrow, contentDescription = null, modifier = Modifier.size(20.dp))
                             Spacer(modifier = Modifier.width(6.dp))
-                            Text("Auf Handy", fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                            Text(if (savedProgress != null) "Weiterschauen" else "Auf Handy", fontWeight = FontWeight.Bold, fontSize = 13.sp)
                         }
 
                         // Button 2: Auf TV abspielen
@@ -444,6 +459,15 @@ fun MobileDetailScreen(
                                 )
                             }
                         }
+                    }
+
+                    if (ep.path in watchedEpisodes) {
+                        Icon(
+                            imageVector = Icons.Default.Check,
+                            contentDescription = "Gesehen",
+                            tint = TextMuted,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
 
                     // Cast-Knopf für diese Episode direkt an den TV

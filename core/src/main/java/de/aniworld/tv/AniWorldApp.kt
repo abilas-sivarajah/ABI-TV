@@ -19,6 +19,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import de.aniworld.tv.platform.AndroidSecretCodec
 import de.aniworld.tv.platform.AppLog
 import de.aniworld.tv.platform.M3uFolderAndroid
 import de.aniworld.tv.platform.SharedPrefsStore
@@ -44,6 +45,11 @@ open class AniWorldApp : Application(), ImageLoaderFactory {
             }
         }
         LocalStorage.init(SharedPrefsStore(this, LocalStorage.PREFS_NAME))
+        // Link zur eigenen IPTV-Liste (mit Zugangsdaten) nur verschlüsselt speichern, wie auf PC und iPhone
+        LocalStorage.secretCodec = AndroidSecretCodec.createOrNull()
+        LocalStorage.encryptStoredSecrets()
+        // Kopie der eigenen Liste: außerhalb von Backups, wird nicht wie der Cache vom System geleert
+        de.aniworld.tv.data.remote.LiveTvRepository.configure(noBackupFilesDir)
         StreamResolver.browserExtractor = WebViewStreamExtractor(this)
         // Eigener M3U-Ordner für Live TV (über die Ordnerauswahl freigegeben)
         M3uFolderAndroid.install(this)

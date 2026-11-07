@@ -1,5 +1,19 @@
 package de.aniworld.mobile.ui.screens
 
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.unit.Dp
+import de.aniworld.tv.data.remote.LetterboxdLists
+import de.aniworld.tv.data.remote.StoAnimeFilter
+import de.aniworld.tv.data.remote.TitleSearch
+import de.aniworld.tv.data.remote.withoutStoAnime
+import de.aniworld.tv.platform.LetterboxdAccountAndroid
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -119,6 +133,9 @@ enum class MobileTab(val label: String, val icon: ImageVector) {
     SEARCH("Suche", Icons.Default.Search)
 }
 
+/** Anime-Genres ("Beliebt"/"Neu" stecken schon in der Übersicht). */
+private val MobileAnimeGenres = AniWorldScraper.GENRE_CATEGORIES.filter { it.first !in setOf("beliebt", "neu", "isekai") }
+
 /** Reiter der unteren Leiste; die Suche sitzt wie am PC als Lupe in der oberen Leiste. */
 private val BottomBarTabs = listOf(
     MobileTab.START,
@@ -153,6 +170,12 @@ class MobileHomeState {
     var searchResultsKey by mutableStateOf<String?>(null)
     val movies = MobileCatalogState()
     val series = MobileCatalogState()
+    val animes = MobileCatalogState()
+    // Live TV: gewählter Reiter, Unterreiter je Ebene und Suche (bleiben beim Reiterwechsel erhalten)
+    var liveCategory by mutableStateOf("all")
+    var liveUserPickedTab by mutableStateOf(false)
+    var liveTreePath by mutableStateOf<List<String>>(emptyList())
+    var liveQuery by mutableStateOf("")
     // Startseite: beliebteste Titel aller Anbieter (einmal laden, beim Tab-Wechsel behalten)
     var startTopMovies by mutableStateOf<List<AnimeCard>>(emptyList())
     var startPopularSeries by mutableStateOf<List<AnimeCard>>(emptyList())
@@ -199,6 +222,7 @@ fun MobileHomeScreen(
     // Tippen auf eine Karte in einer Reihe: Info-Feld statt gleich die Detailseite
     var sheetTitle by remember { mutableStateOf<AnimeCard?>(null) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    val onShowTitle: (AnimeCard) -> Unit = { sheetTitle = it }
 
     // Zurück führt von jedem Reiter erst zur Startseite (aus der Suche dorthin, woher sie kam),
     // statt die App zu verlassen
@@ -313,17 +337,33 @@ fun MobileHomeScreen(
                     onPlayTitle = onPlayTitle
                 )
 
-                MobileTab.ANIMES -> MobileAnimesTab(
-                    sections = sections,
-                    continueWatching = progressList,
-                    watchlistSlugs = watchlistSlugs,
-                    isLoading = isLoading,
-                    errorMessage = errorMessage,
-                    onRetry = onRetry,
+                MobileTab.ANIMES -> MobileCatalogTab(
+                    catalog = state.animes,
+                    categories = MobileAnimeGenres,
+                    searchLabel = "🔍 Anime suchen",
+                    emptyText = "Keine Anime gefunden.",
+                    watchlist = watchlist,
                     onOpenAnime = onOpenAnime,
-                    onShowTitle = { sheetTitle = it },
-                    onResumeWatch = onResumeWatch,
-                    onPlayTitle = onPlayTitle
+                    onShowTitle = onShowTitle,
+                    onPlayTitle = onPlayTitle,
+                    onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
+                    loadOverview = { emptyList() },
+                    loadCategory = { path, page -> AniWorldScraper.fetchCategoryOrGenre(path, page) },
+                    loadMoreLabel = "Mehr Anime laden",
+                    overviewContent = {
+                        MobileAnimesTab(
+                            sections = sections,
+                            continueWatching = progressList,
+                            watchlistSlugs = watchlistSlugs,
+                            isLoading = isLoading,
+                            errorMessage = errorMessage,
+                            onRetry = onRetry,
+                            onOpenAnime = onOpenAnime,
+                            onShowTitle = onShowTitle,
+                            onResumeWatch = onResumeWatch,
+                            onPlayTitle = onPlayTitle
+                        )
+                    }
                 )
 
                 MobileTab.MOVIES -> MobileCatalogTab(
@@ -353,23 +393,26 @@ fun MobileHomeScreen(
                     onOpenSearch = { state.selectTab(MobileTab.SEARCH) },
                     loadOverview = { SerienStreamScraper.fetchHomeSections() },
                     loadCategory = { path, page -> SerienStreamScraper.fetchCategory(path, page) },
-                    loadMoreLabel = "Mehr Serien laden"
+                    loadMoreLabel = "Mehr Serien laden",
+                    hideStoAnime = true
                 )
 
                 MobileTab.LIVE_TV -> MobileLiveTvScreen(
+                    state = state,
                     onPlayChannel = onPlayLiveChannel
                 )
 
                 MobileTab.SEARCH -> MobileSearchTab(
                     state = state,
                     watchlist = watchlist,
-                    onOpenAnime = onOpenAnime
+                    animeSections = sections,
+                    onShowTitle = onShowTitle
                 )
 
                 MobileTab.WATCHLIST -> MobileWatchlistTab(
                     watchlist = watchlist,
                     continueWatching = progressList,
-                    onOpenAnime = onOpenAnime,
+                    onShowTitle = onShowTitle,
                     onResumeWatch = onResumeWatch
                 )
             }
@@ -389,7 +432,8 @@ fun MobileHomeScreen(
     if (showSettingsSheet) {
         val currentVersion = remember { UpdateManager.getCurrentVersionName(context) }
         val currentRepo = remember { UpdateManager.getTargetRepo() }
-        var preferredLang by remember { mutableStateOf(LocalStorage.preferredLanguage) }
+        val lbUser by LetterboxdAccountAndroid.username.collectAsState()
+        val lbStatus by LetterboxdAccountAndroid.status.collectAsState()
 
         ModalBottomSheet(
             onDismissRequest = { showSettingsSheet = false },
@@ -399,6 +443,7 @@ fun MobileHomeScreen(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .verticalScroll(rememberScrollState())
                     .padding(24.dp)
             ) {
                 Row(
@@ -514,7 +559,7 @@ fun MobileHomeScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Audiosprache
+                // Letterboxd-Konto (Anmeldung auf der echten Letterboxd-Seite)
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -522,37 +567,40 @@ fun MobileHomeScreen(
                         .background(BgSurface)
                         .padding(16.dp)
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween
-                    ) {
-                        Column {
-                            Text(
-                                text = "Standard-Audiospur",
-                                color = TextPrimary,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold
-                            )
-                            Text(
-                                text = "${preferredLang.shortLabel} (${preferredLang.fullLabel})",
-                                color = TextSecondary,
-                                fontSize = 12.sp
-                            )
-                        }
-
-                        OutlinedButton(
-                            onClick = {
-                                val next = when (preferredLang) {
-                                    LanguageOption.GER_DUB -> LanguageOption.GER_SUB
-                                    LanguageOption.GER_SUB -> LanguageOption.ENG_SUB
-                                    LanguageOption.ENG_SUB -> LanguageOption.GER_DUB
-                                }
-                                LocalStorage.preferredLanguage = next
-                                preferredLang = next
+                    Column {
+                        Text(text = "🎬 Letterboxd", color = TextPrimary, fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text(
+                            text = lbUser?.let { "Angemeldet als $it" } ?: "Nicht angemeldet",
+                            color = if (lbUser != null) AccentCyan else TextSecondary,
+                            fontSize = 13.sp,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            text = lbStatus ?: if (lbUser != null && LetterboxdAccountAndroid.isListOwner) {
+                                "Filme, die du auf die Merkliste setzt, kommen auch in „${LetterboxdLists.FeaturedList.NAME}“."
+                            } else {
+                                "Die Anmeldung läuft auf der echten Letterboxd-Seite; die App sieht dein Passwort nicht."
+                            },
+                            color = TextMuted,
+                            fontSize = 12.sp
+                        )
+                        Spacer(modifier = Modifier.height(12.dp))
+                        if (lbUser != null) {
+                            OutlinedButton(
+                                onClick = { LetterboxdAccountAndroid.signOut() },
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Abmelden", color = AccentCyan)
                             }
-                        ) {
-                            Text("Wechseln", color = AccentCyan, fontSize = 12.sp)
+                        } else {
+                            Button(
+                                onClick = { context.startActivity(LetterboxdAccountAndroid.signInIntent(context)) },
+                                colors = ButtonDefaults.buttonColors(containerColor = AccentCyan),
+                                modifier = Modifier.fillMaxWidth()
+                            ) {
+                                Text("Mit Letterboxd anmelden", color = Color(0xFF060911), fontWeight = FontWeight.Bold)
+                            }
                         }
                     }
                 }
@@ -803,7 +851,7 @@ private fun MobileContinueRow(
 
 /** Überschrift mit waagerechter Kartenreihe; Tippen öffnet das Info-Feld. */
 @Composable
-private fun MobileCatalogRow(
+internal fun MobileCatalogRow(
     rowKey: String,
     title: String,
     items: List<AnimeCard>,
@@ -850,11 +898,26 @@ private fun MobileCatalogTab(
     onOpenSearch: () -> Unit,
     loadOverview: suspend () -> List<CatalogSection>,
     loadCategory: suspend (path: String, page: Int) -> List<AnimeCard>,
-    loadMoreLabel: String?
+    loadMoreLabel: String?,
+    /** Eigene Übersicht statt der Reihen aus [loadOverview] (Anime: Titelbild, Weiterschauen, Reihen). */
+    overviewContent: (@Composable () -> Unit)? = null,
+    /** Serien: Anime von S.to ausblenden, die stehen im Anime-Bereich. */
+    hideStoAnime: Boolean = false
 ) {
     val selectedCat = catalog.selectedCat
-    val overviewSections = catalog.overviewSections
-    val categoryItems = catalog.categoryItems
+    val stoAnimeSlugs by StoAnimeFilter.slugs.collectAsState()
+    val overviewSections = remember(catalog.overviewSections, stoAnimeSlugs, hideStoAnime) {
+        if (hideStoAnime) {
+            catalog.overviewSections
+                .map { it.copy(items = it.items.withoutStoAnime(stoAnimeSlugs)) }
+                .filter { it.items.isNotEmpty() }
+        } else {
+            catalog.overviewSections
+        }
+    }
+    val categoryItems = remember(catalog.categoryItems, stoAnimeSlugs, hideStoAnime) {
+        if (hideStoAnime) catalog.categoryItems.withoutStoAnime(stoAnimeSlugs) else catalog.categoryItems
+    }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
     // Titelbild: 6 zufällige Titel dieses Bereichs (Filme bzw. Serien)
     val heroItems = remember(overviewSections) { TitlePreview.randomPicks(overviewSections.flatMap { it.items }) }
@@ -862,7 +925,7 @@ private fun MobileCatalogTab(
 
     // Bereits Geladenes (inkl. nachgeladener Seiten) nach der Detailseite nicht erneut laden
     fun needsLoad(cat: String): Boolean = if (cat == "OVERVIEW") {
-        catalog.overviewSections.isEmpty()
+        overviewContent == null && catalog.overviewSections.isEmpty()
     } else {
         catalog.loadedCat != cat || catalog.categoryItems.isEmpty()
     }
@@ -918,7 +981,7 @@ private fun MobileCatalogTab(
     }
 
     val showLoading = isLoading || (selectedCat != "OVERVIEW" && catalog.loadedCat != selectedCat)
-    val isEmpty = if (selectedCat == "OVERVIEW") overviewSections.isEmpty() else categoryItems.isEmpty()
+    val isEmpty = if (selectedCat == "OVERVIEW") overviewContent == null && overviewSections.isEmpty() else categoryItems.isEmpty()
 
     Column(modifier = Modifier.fillMaxSize()) {
         // Horizontale Kategorie-Chips
@@ -959,6 +1022,8 @@ private fun MobileCatalogTab(
                     }
                 }
             }
+        } else if (selectedCat == "OVERVIEW" && overviewContent != null) {
+            overviewContent()
         } else if (selectedCat == "OVERVIEW") {
             LazyColumn(
                 modifier = Modifier.fillMaxSize(),
@@ -987,7 +1052,7 @@ private fun MobileCatalogTab(
             }
         } else {
             LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
+                columns = GridCells.Adaptive(minSize = 100.dp),
                 contentPadding = PaddingValues(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -996,9 +1061,9 @@ private fun MobileCatalogTab(
                 items(categoryItems, key = { it.cleanSlug }) { movie ->
                     MobileAnimeCard(
                         anime = movie,
-                        width = 110.dp,
+                        width = Dp.Unspecified,
                         isBookmarked = movie.cleanSlug in watchlistSlugs,
-                        onClick = { onOpenAnime(movie) }
+                        onClick = { onShowTitle(movie) }
                     )
                 }
                 if (loadMoreLabel != null && catalog.canLoadMore) {
@@ -1050,17 +1115,64 @@ private fun CatChip(label: String, isSelected: Boolean, onClick: () -> Unit) {
     }
 }
 
+/** Filmpalast führt auch einzelne Serienfolgen als "Film" ("Spider-Noir S01E08") – in der Filmsuche weglassen. */
+private val SingleEpisodeTitle = Regex("""\bS\d{1,2}E\d{1,3}\b""", RegexOption.IGNORE_CASE)
+
+/** Vorschläge der Suche pro App-Start merken (Reiterwechsel lädt nicht neu). */
+private var searchSuggestionMovies: List<AnimeCard> = emptyList()
+private var searchSuggestionSeries: List<AnimeCard> = emptyList()
+private val searchCoverCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+/** Suche wie auf TV und PC: Vorschläge bei leerer Suche, Treffer nach Wortanfängen, Filter unter dem Feld. */
 @Composable
 private fun MobileSearchTab(
     state: MobileHomeState,
     watchlist: List<AnimeCard>,
-    onOpenAnime: (AnimeCard) -> Unit
+    animeSections: List<CatalogSection>,
+    onShowTitle: (AnimeCard) -> Unit
 ) {
     val query = state.searchQuery
     val searchScope = state.searchScope
     val results = state.searchResults
+    val focusManager = LocalFocusManager.current
     var isSearching by remember { mutableStateOf(false) }
     val watchlistSlugs = remember(watchlist) { watchlist.map { it.cleanSlug }.toSet() }
+    val stoAnimeSlugs by StoAnimeFilter.slugs.collectAsState()
+
+    // Vorschläge bei leerer Suche: zufällige Titel des Reiters
+    var suggestionMovies by remember { mutableStateOf(searchSuggestionMovies) }
+    var suggestionSeries by remember { mutableStateOf(searchSuggestionSeries) }
+    LaunchedEffect(Unit) {
+        coroutineScope {
+            if (suggestionMovies.isEmpty()) launch {
+                val loaded = state.startTopMovies.ifEmpty {
+                    runCatching { FilmpalastScraper.fetchCategory("/movies/top") }.getOrDefault(emptyList())
+                } + state.movies.overviewSections.flatMap { it.items }
+                suggestionMovies = loaded.distinctBy { it.cleanSlug }
+                searchSuggestionMovies = suggestionMovies
+            }
+            if (suggestionSeries.isEmpty()) launch {
+                val loaded = state.startPopularSeries.ifEmpty {
+                    runCatching { SerienStreamScraper.fetchCategory("/beliebte-serien") }.getOrDefault(emptyList())
+                } + state.series.overviewSections.flatMap { it.items }
+                suggestionSeries = loaded.distinctBy { it.cleanSlug }
+                searchSuggestionSeries = suggestionSeries
+            }
+        }
+    }
+    val suggestionAnime = remember(animeSections) { animeSections.flatMap { it.items }.distinctBy { it.cleanSlug } }
+    val suggestions = remember(searchScope, suggestionMovies, suggestionSeries, suggestionAnime, stoAnimeSlugs) {
+        val movies = suggestionMovies.shuffled()
+        val series = suggestionSeries.withoutStoAnime(stoAnimeSlugs).shuffled()
+        val anime = suggestionAnime.shuffled()
+        when (searchScope) {
+            SearchScope.MOVIES -> movies.take(36)
+            SearchScope.SERIES -> series.take(36)
+            SearchScope.ANIMES -> anime.take(36)
+            // Abwechselnd Film, Serie, Anime
+            SearchScope.ALL -> (0 until 12).flatMap { i -> listOfNotNull(movies.getOrNull(i), series.getOrNull(i), anime.getOrNull(i)) }
+        }.filter { it.coverUrl.isNotBlank() }.distinctBy { it.cleanSlug }
+    }
 
     LaunchedEffect(query, searchScope) {
         val trimmed = query.trim()
@@ -1078,29 +1190,58 @@ private fun MobileSearchTab(
         }
         isSearching = true
         delay(300L)
+
+        // Seiten können nur "Titel enthält" – darum mit Teilbegriffen abfragen und danach selbst
+        // nach Wortanfängen filtern (TitleSearch): "sp" → "Marvel's Spider-Man", "spiderman" → "Spider-Man"
+        suspend fun animes() = runCatching { AniWorldScraper.searchCatalog(trimmed) }.getOrDefault(emptyList())
+        suspend fun movies(): List<AnimeCard> = coroutineScope {
+            val found = TitleSearch.siteQueries(trimmed)
+                .map { q -> async { runCatching { FilmpalastScraper.searchMovies(q) }.getOrDefault(emptyList()) } }
+                .awaitAll()
+                .flatten()
+                .filterNot { it.title.contains("*ENGLISH*", ignoreCase = true) || SingleEpisodeTitle.containsMatchIn(it.title) }
+            TitleSearch.filterAndRank(found, trimmed)
+        }
+        suspend fun series() = runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
+            .withoutStoAnime(stoAnimeSlugs)
+
         val combined = coroutineScope {
             when (searchScope) {
-                SearchScope.ANIMES -> {
-                    runCatching { AniWorldScraper.searchAnimes(trimmed) }.getOrDefault(emptyList())
-                }
-                SearchScope.SERIES -> {
-                    runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList())
-                }
-                SearchScope.MOVIES -> {
-                    runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList())
-                }
+                SearchScope.ANIMES -> animes()
+                SearchScope.SERIES -> series()
+                SearchScope.MOVIES -> movies()
                 SearchScope.ALL -> {
-                    val a = async { runCatching { AniWorldScraper.searchAnimes(trimmed) }.getOrDefault(emptyList()) }
-                    val s = async { runCatching { SerienStreamScraper.searchSeries(trimmed) }.getOrDefault(emptyList()) }
-                    val m = async { runCatching { FilmpalastScraper.searchMovies(trimmed) }.getOrDefault(emptyList()) }
-                    a.await() + s.await() + m.await()
+                    val a = async { animes() }
+                    val sr = async { series() }
+                    val m = async { movies() }
+                    TitleSearch.filterAndRank(m.await() + sr.await() + a.await(), trimmed)
                 }
             }
         }
         // Doppelte Treffer (z. B. aus mehreren Quellen) würden die Schlüssel im Ergebnisraster sprengen
-        state.searchResults = combined.distinctBy { it.cleanSlug }
+        state.searchResults = combined.distinctBy { it.cleanSlug }.take(60)
         state.searchResultsKey = resultsKey
         isSearching = false
+
+        // S.to-Treffer haben keine Cover (sie kommen aus der A–Z-Liste): für die ersten nachladen
+        val missing = state.searchResults.filter { it.coverUrl.isBlank() }.take(24)
+        if (missing.isNotEmpty()) {
+            val slots = Semaphore(6)
+            coroutineScope {
+                missing.forEach { card ->
+                    launch {
+                        val cover = searchCoverCache[card.cleanSlug] ?: slots.withPermit {
+                            TitlePreview.loadDetail(card.cleanSlug)?.coverUrl.orEmpty()
+                        }.also { if (it.isNotBlank()) searchCoverCache[card.cleanSlug] = it }
+                        if (cover.isNotBlank() && state.searchQuery.trim() == trimmed) {
+                            state.searchResults = state.searchResults.map {
+                                if (it.cleanSlug == card.cleanSlug) it.copy(coverUrl = cover) else it
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     val placeholderText = when (searchScope) {
@@ -1108,13 +1249,6 @@ private fun MobileSearchTab(
         SearchScope.SERIES -> "Serien suchen (z. B. Chicago Fire)..."
         SearchScope.MOVIES -> "Filme suchen (z. B. Oppenheimer)..."
         SearchScope.ALL -> "Animes, Serien & Filme suchen..."
-    }
-
-    val quickSuggestions = when (searchScope) {
-        SearchScope.ANIMES -> listOf("Solo Leveling", "One Piece", "Naruto", "Attack on Titan", "Jujutsu Kaisen", "Demon Slayer")
-        SearchScope.SERIES -> listOf("Chicago Fire", "Breaking Bad", "Game of Thrones", "Wednesday", "Stranger Things", "The Boys")
-        SearchScope.MOVIES -> listOf("Deadpool", "Oppenheimer", "Spider-Man", "Batman", "Harry Potter", "Avatar")
-        SearchScope.ALL -> listOf("Solo Leveling", "Chicago Fire", "One Piece", "Breaking Bad", "Attack on Titan")
     }
 
     Column(
@@ -1126,8 +1260,10 @@ private fun MobileSearchTab(
         OutlinedTextField(
             value = query,
             onValueChange = { state.searchQuery = it },
-            placeholder = { Text(placeholderText, color = TextMuted, fontSize = 14.sp) },
+            placeholder = { Text(placeholderText, color = TextMuted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             singleLine = true,
+            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+            keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
             trailingIcon = {
                 if (query.isNotEmpty()) {
                     IconButton(onClick = { state.searchQuery = "" }) {
@@ -1177,135 +1313,51 @@ private fun MobileSearchTab(
             }
         }
 
-        Spacer(modifier = Modifier.height(10.dp))
-
-        // Beliebte Vorschläge
-        LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            items(quickSuggestions) { s ->
-                val isSelected = query.equals(s, ignoreCase = true)
-                Box(
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(14.dp))
-                        .background(if (isSelected) AccentBlue.copy(alpha = 0.25f) else BgSurface)
-                        .border(
-                            width = 1.dp,
-                            color = if (isSelected) AccentBlue else Color.White.copy(alpha = 0.08f),
-                            shape = RoundedCornerShape(14.dp)
-                        )
-                        .clickable { state.searchQuery = s }
-                        .padding(horizontal = 10.dp, vertical = 5.dp)
-                ) {
-                    Text(
-                        text = s,
-                        color = if (isSelected) AccentCyan else TextSecondary,
-                        fontSize = 11.sp
-                    )
-                }
-            }
-        }
-
         Spacer(modifier = Modifier.height(14.dp))
 
-        if (isSearching) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        val trimmedQuery = query.trim()
+        when {
+            isSearching -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 CircularProgressIndicator(color = AccentCyan)
             }
-        } else if (query.trim().length >= 2 && results.isEmpty()) {
-            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+
+            trimmedQuery.length >= 2 && results.isEmpty() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                 Text(
-                    text = "Keine Treffer für „$query“ in ${searchScope.label} gefunden.",
+                    text = "Keine Treffer für „$trimmedQuery“ in ${searchScope.label} gefunden.",
                     color = TextSecondary,
                     fontSize = 14.sp
                 )
             }
-        } else if (results.isNotEmpty()) {
-            LazyVerticalGrid(
-                columns = GridCells.Fixed(3),
-                contentPadding = PaddingValues(bottom = 20.dp),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                modifier = Modifier.fillMaxSize()
-            ) {
-                items(results, key = { it.cleanSlug }) { item ->
-                    MobileAnimeCard(
-                        anime = item,
-                        width = 110.dp,
-                        isBookmarked = item.cleanSlug in watchlistSlugs,
-                        onClick = { onOpenAnime(item) }
-                    )
-                }
-            }
-        }
-    }
-}
 
-@Composable
-private fun MobileWatchlistTab(
-    watchlist: List<AnimeCard>,
-    continueWatching: List<WatchProgressEntry>,
-    onOpenAnime: (AnimeCard) -> Unit,
-    onResumeWatch: (WatchProgressEntry) -> Unit
-) {
-    if (watchlist.isEmpty() && continueWatching.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(text = "Deine Merkliste ist noch leer", color = TextPrimary, fontWeight = FontWeight.Bold, fontSize = 16.sp)
-                Spacer(modifier = Modifier.height(6.dp))
-                Text(text = "Füge Animes oder Filme über „+ Zur Merkliste“ hinzu.", color = TextMuted, fontSize = 13.sp)
-            }
-        }
-        return
-    }
-
-    LazyColumn(
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(18.dp)
-    ) {
-        if (continueWatching.isNotEmpty()) {
-            item {
-                Text(
-                    text = "▶ Zuletzt geschaut",
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-                LazyRow(
-                    contentPadding = PaddingValues(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                ) {
-                    items(continueWatching, key = { it.animeSlug }) { entry ->
-                        MobileContinueCard(entry = entry, onClick = { onResumeWatch(entry) })
-                    }
-                }
-            }
-        }
-
-        if (watchlist.isNotEmpty()) {
-            item {
-                Text(
-                    text = "★ Gespeicherte Titel (${watchlist.size})",
-                    color = TextPrimary,
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
-                )
-            }
-            item {
+            else -> {
+                val shown = if (trimmedQuery.length >= 2) results else suggestions
                 LazyVerticalGrid(
-                    columns = GridCells.Fixed(3),
-                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    columns = GridCells.Adaptive(minSize = 100.dp),
+                    contentPadding = PaddingValues(bottom = 20.dp),
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
-                    modifier = Modifier.height(500.dp)
+                    modifier = Modifier.fillMaxSize()
                 ) {
-                    items(watchlist, key = { it.cleanSlug }) { anime ->
+                    item(key = "header", span = { GridItemSpan(maxLineSpan) }) {
+                        Text(
+                            text = when {
+                                trimmedQuery.length >= 2 -> "${results.size} Treffer für „$trimmedQuery“"
+                                searchScope == SearchScope.MOVIES -> "Filme entdecken"
+                                searchScope == SearchScope.SERIES -> "Serien entdecken"
+                                searchScope == SearchScope.ANIMES -> "Anime entdecken"
+                                else -> "Entdecken"
+                            },
+                            color = TextPrimary,
+                            fontSize = 15.sp,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
+                    items(shown, key = { it.cleanSlug }) { item ->
                         MobileAnimeCard(
-                            anime = anime,
-                            width = 110.dp,
-                            isBookmarked = true,
-                            onClick = { onOpenAnime(anime) }
+                            anime = item,
+                            width = Dp.Unspecified,
+                            isBookmarked = item.cleanSlug in watchlistSlugs,
+                            onClick = { onShowTitle(item) }
                         )
                     }
                 }

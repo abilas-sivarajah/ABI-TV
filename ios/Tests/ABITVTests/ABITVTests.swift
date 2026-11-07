@@ -604,6 +604,14 @@ final class ABITVTests: XCTestCase {
         XCTAssertFalse(LiveTvTree.isVod("http://srv.example:8080/u/p/1"))
     }
 
+    func testIptvFilesAreNotOpenedAsHls() {
+        XCTAssertFalse(LiveTvRepository.isLikelyHls("http://srv.example:8080/movie/u/p/4.avi"))
+        XCTAssertFalse(LiveTvRepository.isLikelyHls("http://srv.example:8080/movie/u/p/4"))
+        XCTAssertFalse(LiveTvRepository.isLikelyHls("http://srv.example:8080/series/u/p/5.mov"))
+        XCTAssertTrue(LiveTvRepository.isLikelyHls("http://srv.example:8080/movie/u/p/4.m3u8"))
+        XCTAssertTrue(LiveTvRepository.isLikelyHls("https://cdn.example/live/channel/index"))
+    }
+
     func testM3uWithWindowsLineEndingsIsParsed() {
         // Viele IPTV-Server liefern CRLF; "\r\n" ist in Swift ein einziges Zeichen
         let m3u = "#EXTM3U\r\n" +

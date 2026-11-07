@@ -170,6 +170,8 @@ class PlayerActivity : ComponentActivity() {
     private val failedHosterPaths = mutableSetOf<String>()
 
     private var isLiveStream by mutableStateOf(false)
+    /** Film oder Serienfolge aus einer IPTV-Liste: Zeitleiste und Spulen, bei Abbruch an derselben Stelle weiter. */
+    private var isDirectVod by mutableStateOf(false)
     private var directStreamUrl: String? = null
     private var streamHeaders: Map<String, String> = emptyMap()
     private var liveRetryCount = 0
@@ -296,7 +298,13 @@ class PlayerActivity : ComponentActivity() {
             // Läuft gerade eine Folge (z. B. per Handy umgeschaltet), deren Fortschritt vorher sichern
             persistCurrentProgress()
             resolveJob?.cancel()
-            isLiveStream = true
+            isDirectVod = LiveTvTree.isVod(directUrl)
+            isLiveStream = !isDirectVod
+            // Kein Titel aus den Katalogen: Staffeln und Folgen des vorigen Titels gelten nicht mehr
+            animeSlug = ""
+            seasons = emptyList()
+            seasonsLoadedFor = ""
+            titleDescription = ""
             directStreamUrl = directUrl
             streamHeaders = headers ?: emptyMap()
             activeHoster = null
@@ -307,13 +315,13 @@ class PlayerActivity : ComponentActivity() {
             liveRetryCount = 0
             currentEpisode = EpisodeItem(
                 number = 1,
-                seasonLabel = LIVE_SEASON_LABEL,
+                seasonLabel = if (isDirectVod) "" else LIVE_SEASON_LABEL,
                 path = "live_stream",
                 titleDe = newTitle.ifBlank { "Live TV" },
                 titleEn = "",
                 languages = emptyList()
             )
-            statusMessage = "Starte Live Stream..."
+            statusMessage = if (isDirectVod) "Starte …" else "Starte Live Stream..."
             playLive()
             return
         }
@@ -550,7 +558,7 @@ class PlayerActivity : ComponentActivity() {
                                 isPrimary = true,
                                 modifier = Modifier.focusRequester(retryFocus),
                                 onClick = {
-                                    if (isLiveStream) reconnectLive() else currentEpisode?.let { loadEpisodeAndPlay(it) }
+                                    if (isLiveStream || isDirectVod) reconnectLive() else currentEpisode?.let { loadEpisodeAndPlay(it) }
                                 }
                             )
                             TvFocusableButton(text = "Zurück", onClick = { finish() })
@@ -1319,11 +1327,12 @@ class PlayerActivity : ComponentActivity() {
             return
         }
         isResolving = false
-        errorMessage = "Der Sender ist gerade nicht erreichbar ($reason)."
+        errorMessage = if (isDirectVod) {
+            "Der Titel ist gerade nicht erreichbar ($reason)."
+        } else {
+            "Der Sender ist gerade nicht erreichbar ($reason)."
+        }
     }
-
-    /** Filme/Folgen aus IPTV-Listen laufen auch als "Live", haben aber ein echtes Ende. */
-    private fun isDirectVod(): Boolean = directStreamUrl?.let { LiveTvTree.isVod(it) } == true
 
     /** Live-Sender hängt (puffert ohne Fortschritt): nach einer Weile selbst neu verbinden. */
     private fun checkLiveStall(player: ExoPlayer) {
@@ -1345,6 +1354,7 @@ class PlayerActivity : ComponentActivity() {
         resolveJob?.cancel()
         persistCurrentProgress()
         isLiveStream = false
+        isDirectVod = false
         directStreamUrl = null
         currentPositionMs = 0L
         durationMs = 0L
@@ -1468,7 +1478,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun startExoPlayer(episode: EpisodeItem, stream: ResolvedStream) {
-        Log.e("PlayerActivity", "Starting ExoPlayer url=${stream.streamUrl}, headers=${stream.headers}")
+        // Adressen eigener Listen enthalten Benutzername und Passwort: nie im Klartext ins Protokoll
+        Log.i("PlayerActivity", "Starting ExoPlayer url=${LiveTvRepository.maskCredentials(stream.streamUrl)}")
         val resumePos = if (isLiveStream) {
             0L
         } else if (currentPositionMs > 5_000L) {
@@ -1501,10 +1512,11 @@ class PlayerActivity : ComponentActivity() {
                     override fun onPlaybackStateChanged(playbackState: Int) {
                         isBuffering = playbackState == Player.STATE_BUFFERING
                         if (playbackState == Player.STATE_READY) liveRetryCount = 0
-                        if (isLiveStream && playbackState == Player.STATE_ENDED && !isDirectVod()) {
+                        if (isLiveStream && playbackState == Player.STATE_ENDED) {
                             reconnectLive("Sender unterbrochen")
                         }
-                        if (!isLiveStream && playbackState == Player.STATE_ENDED) {
+                        if (isDirectVod && playbackState == Player.STATE_ENDED) keepControlsAlive()
+                        if (!isLiveStream && !isDirectVod && playbackState == Player.STATE_ENDED) {
                             LocalStorage.markEpisodeWatched(episode.path)
                             val next = findNextEpisode()
                             if (next != null) {
@@ -1522,7 +1534,7 @@ class PlayerActivity : ComponentActivity() {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
-                        if (isLiveStream) {
+                        if (isLiveStream || isDirectVod) {
                             handleLiveError(error)
                             return
                         }
@@ -1577,7 +1589,8 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun persistCurrentProgress() {
-        if (isLiveStream) return
+        // Titel aus eigenen Listen gehören nicht in "Weiterschauen" (die Adresse enthält Zugangsdaten)
+        if (isLiveStream || isDirectVod) return
         val ep = currentEpisode ?: return
         val p = exoPlayer ?: return
         val pos = p.currentPosition
@@ -1991,7 +2004,7 @@ class PlayerActivity : ComponentActivity() {
         if (releasedInBackground) {
             releasedInBackground = false
             when {
-                isLiveStream -> reconnectLive()
+                isLiveStream || isDirectVod -> reconnectLive()
                 activeHoster != null -> resolveAndPlaySingleHoster(activeHoster!!)
                 else -> currentEpisode?.let { loadEpisodeAndPlay(it) }
             }

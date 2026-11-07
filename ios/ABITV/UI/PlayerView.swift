@@ -69,6 +69,12 @@ public struct PlayerView: View {
     @State private var usesVlc = false
     @State private var forceVlc = false
     @State private var vlcStartedAt = Date()
+    /// Stelle im Film, an der nach einem Abbruch weitergespielt wird (Titel aus IPTV-Listen).
+    @State private var vlcResumeSec: Double = 0
+    /// Von Hand angehalten: Dann ist ein stehendes Bild kein hängender Sender.
+    @State private var userPaused = false
+    @State private var lastLivePosition: Double = -1
+    @State private var lastLiveProgressAt = Date()
     @State private var timeObserverToken: Any? = nil
     @State private var uiTimeObserverToken: Any? = nil
     @State private var statusObserver: NSKeyValueObservation? = nil
@@ -123,6 +129,12 @@ public struct PlayerView: View {
         return seasons.dropFirst(index + 1).first { !$0.isMovies }
     }
 
+    /// Filme und Serienfolgen aus IPTV-Listen laufen ebenfalls über `liveChannel`, haben aber ein Ende.
+    private var isDirectVod: Bool { item.liveChannel.map { LiveTvTree.isVod($0.streamUrl) } ?? false }
+
+    /// Echter Live-Sender (ohne Zeitleiste und Ende).
+    private var isRealLive: Bool { item.isLiveStream && !isDirectVod }
+
     private var videoReady: Bool { (player != nil || usesVlc) && !isLoading && errorMessage == nil }
 
     /// Spulen geht bei Folgen/Filmen und bei Filmen aus IPTV-Listen (VLC kennt dann die Länge).
@@ -138,8 +150,9 @@ public struct PlayerView: View {
     }
 
     /// Pausen-Ansicht nach 2,5 s Pause ohne Eingabe.
+    /// Nicht bei Live-Sendern: Dort käme sie bei jedem Hänger, obwohl niemand angehalten hat.
     private var showPauseInfo: Bool {
-        videoReady && !isPlaying && now.timeIntervalSince(lastInteraction) > 2.5 && !showEpisodes && !showLanguages
+        !isRealLive && videoReady && !isPlaying && now.timeIntervalSince(lastInteraction) > 2.5 && !showEpisodes && !showLanguages
     }
 
     // MARK: - Oberfläche
@@ -189,6 +202,7 @@ public struct PlayerView: View {
                     .transition(.opacity)
                     .onTapGesture {
                         lastInteraction = Date()
+                        userPaused = false
                         if usesVlc { vlc.resume() } else { player?.play() }
                     }
             }
@@ -224,6 +238,7 @@ public struct PlayerView: View {
         .onReceive(ticker) { date in
             now = date
             if usesVlc { pollVlc(date) }
+            checkLiveStall(date)
             // Bedienung nach 4 Sekunden ohne Eingabe ausblenden, solange abgespielt wird
             if controlsVisible && isPlaying && !showEpisodes && !showLanguages && date.timeIntervalSince(lastInteraction) > 4 {
                 controlsVisible = false
@@ -555,12 +570,42 @@ public struct PlayerView: View {
 
     private func togglePause() {
         if usesVlc {
-            if vlc.isPlaying { vlc.pause() } else { vlc.resume() }
+            if vlc.isPlaying {
+                vlc.pause()
+                userPaused = true
+            } else {
+                vlc.resume()
+                userPaused = false
+            }
             isPlaying = !isPlaying
             return
         }
         guard let player else { return }
-        if player.timeControlStatus == .paused { player.play() } else { player.pause() }
+        if player.timeControlStatus == .paused {
+            player.play()
+            userPaused = false
+        } else {
+            player.pause()
+            userPaused = true
+        }
+    }
+
+    /// Live-Sender hängt (Bild steht, ohne dass jemand angehalten hat): selbst neu verbinden.
+    private func checkLiveStall(_ date: Date) {
+        guard isRealLive, !isLoading, errorMessage == nil, !userPaused,
+              let stream = resolvedStream, usesVlc || player != nil else {
+            lastLiveProgressAt = date
+            return
+        }
+        let position = usesVlc ? vlc.currentSec : (player.map { CMTimeGetSeconds($0.currentTime()) } ?? 0)
+        if position != lastLivePosition {
+            lastLivePosition = position
+            lastLiveProgressAt = date
+        } else if date.timeIntervalSince(lastLiveProgressAt) > 15 {
+            lastLiveProgressAt = date
+            if usesVlc { vlc.stop() }
+            handlePlaybackFailure(for: stream, reason: "Sender hängt")
+        }
     }
 
     private func seek(by seconds: Double) {
@@ -582,7 +627,11 @@ public struct PlayerView: View {
     /// Zustand des VLC-Players übernehmen (alle 0,5 s): Start, Zeit, Länge, Fehler.
     private func pollVlc(_ date: Date) {
         guard vlc.isActive else { return }
-        if vlc.failed || (vlc.ended && item.isLiveStream) {
+        // Filme aus IPTV-Listen enden wirklich; nur bei Live-Sendern ist das Ende ein Abbruch
+        if vlc.failed || (vlc.ended && isRealLive) {
+            // Erst anhalten: Sonst meldet die nächste Abfrage denselben Fehler nochmal und die
+            // Verbindungsversuche wären nach Sekundenbruchteilen aufgebraucht
+            vlc.stop()
             if let stream = resolvedStream { handlePlaybackFailure(for: stream, reason: "VLC-Fehler") }
             return
         }
@@ -591,9 +640,15 @@ public struct PlayerView: View {
                 isLoading = false
                 liveRetryCount = 0
             } else if date.timeIntervalSince(vlcStartedAt) > 25, let stream = resolvedStream {
+                vlc.stop()
                 handlePlaybackFailure(for: stream, reason: "Zeitüberschreitung")
                 return
             }
+        }
+        // Film nach einem Abbruch an derselben Stelle fortsetzen, sobald er spulbar ist
+        if vlcResumeSec > 5, !isLoading, vlc.canSeek {
+            vlc.seek(to: vlcResumeSec)
+            vlcResumeSec = 0
         }
         isPlaying = vlc.isPlaying
         let position = vlc.currentSec
@@ -838,6 +893,7 @@ public struct PlayerView: View {
         try? AVAudioSession.sharedInstance().setActive(true)
         #endif
         usesVlc = true
+        userPaused = false
         currentSec = 0
         durationSec = 0
         vlcStartedAt = Date()
@@ -959,6 +1015,7 @@ public struct PlayerView: View {
         }
 
         self.player = avPlayer
+        userPaused = false
         avPlayer.play()
         lastInteraction = Date()
         controlsVisible = true
@@ -966,6 +1023,7 @@ public struct PlayerView: View {
 
     @MainActor
     private func handlePlaybackFailure(for stream: ResolvedStream, reason: String) {
+        if isDirectVod && currentSec > 5 { vlcResumeSec = currentSec }
         if item.isLiveStream {
             // AVPlayer kann den Sender nicht: einmal mit VLC versuchen
             if !usesVlc && !forceVlc {
@@ -987,7 +1045,7 @@ public struct PlayerView: View {
                 }
                 return
             }
-            errorMessage = "Der Sender ist gerade nicht erreichbar."
+            errorMessage = isDirectVod ? "Der Titel ist gerade nicht erreichbar." : "Der Sender ist gerade nicht erreichbar."
             isLoading = false
         } else if !activeRedirectPath.isEmpty {
             StreamResolver.invalidateCache(activeRedirectPath)

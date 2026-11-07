@@ -454,7 +454,9 @@ private fun TreeBrowser(
     Column(modifier = Modifier.fillMaxSize()) {
         view.levels.forEach { level ->
             when (level) {
-                is TreeLevel.Chips -> {
+                // Je Ebene und Inhalt eigener Zustand: Sonst bleibt nach dem Wechsel des Oberreiters die
+                // Scroll-Position der vorigen Unterreiter stehen und die ersten sind nicht zu sehen
+                is TreeLevel.Chips -> androidx.compose.runtime.key(level.depth, level.children.firstOrNull()?.id) {
                     // Eine Zeile, seitlich scrollbar (statt viele Zeilen untereinander)
                     val selectedIndex = level.children.indexOfFirst { it.id == level.selectedId }.coerceAtLeast(0)
                     val rowState = rememberLazyListState(initialFirstVisibleItemIndex = (selectedIndex - 1).coerceAtLeast(0))

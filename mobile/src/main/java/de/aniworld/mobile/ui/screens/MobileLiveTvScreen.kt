@@ -1,5 +1,7 @@
 package de.aniworld.mobile.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,12 +23,19 @@ import androidx.compose.foundation.lazy.grid.GridItemSpan
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Tv
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -44,19 +53,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
-import de.aniworld.tv.data.model.LiveTvCategory
-import de.aniworld.tv.platform.M3uFolderAndroid
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -74,23 +78,111 @@ import de.aniworld.mobile.ui.theme.TextPrimary
 import de.aniworld.mobile.ui.theme.TextSecondary
 import de.aniworld.tv.data.local.LocalStorage
 import de.aniworld.tv.data.model.LiveTvChannel
+import de.aniworld.tv.data.model.LiveTvNode
 import de.aniworld.tv.data.remote.LiveTvRepository
+import de.aniworld.tv.platform.M3uFolderAndroid
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val LiveRed = Color(0xFFEF4444)
 private const val CUSTOM_CATEGORY = "custom"
+private const val TREE_PREFIX = "tree:"
+/** Bis zu so vielen Unterreitern als Knöpfe, darüber als Liste (z. B. alle Serien einer Gruppe). */
+private const val CHIP_LIMIT = 60
+private const val SEARCH_NODE_LIMIT = 40
+private const val SEARCH_CHANNEL_LIMIT = 300
+private val EPISODE_NAME = Regex("""^S\d+ E\d+.*""")
 
+/** Eine Ebene der Unterreiter: Knöpfe (wenige) oder "Zurück" (wenn aus einer Liste gewählt wurde). */
+private sealed interface TreeLevel {
+    val depth: Int
+    data class Chips(override val depth: Int, val children: List<LiveTvNode>, val selectedId: String) : TreeLevel
+    data class Back(override val depth: Int, val parent: LiveTvNode, val selected: LiveTvNode) : TreeLevel
+}
+
+private class TreeView(
+    val levels: List<TreeLevel>,
+    val list: List<LiveTvNode>?,
+    val listDepth: Int,
+    val leaf: LiveTvNode?,
+    val trail: List<LiveTvNode>
+)
+
+private fun resolveTree(root: LiveTvNode, path: List<String>): TreeView {
+    val levels = mutableListOf<TreeLevel>()
+    val trail = mutableListOf(root)
+    var node = root
+    var depth = 0
+    while (true) {
+        val children = node.children
+        if (children.isEmpty()) return TreeView(levels, null, depth, node, trail)
+        val chosen = children.firstOrNull { it.id == path.getOrNull(depth) }
+        if (children.size <= CHIP_LIMIT) {
+            val selected = chosen ?: children.first()
+            levels += TreeLevel.Chips(depth, children, selected.id)
+            node = selected
+        } else {
+            if (chosen == null) return TreeView(levels, children, depth, null, trail)
+            levels += TreeLevel.Back(depth, node, chosen)
+            node = chosen
+        }
+        trail += node
+        depth++
+    }
+}
+
+/** Serienfolgen heißen im Raster nur "S01 E05": für Player und Suche den Serientitel davorsetzen. */
+private fun namedChannel(channel: LiveTvChannel, trail: List<LiveTvNode>): LiveTvChannel {
+    if (!EPISODE_NAME.matches(channel.name)) return channel
+    val show = trail.lastOrNull { !it.title.startsWith("Staffel ") && it.title != "Weitere" } ?: return channel
+    return channel.copy(name = "${show.title} · ${channel.name}")
+}
+
+private class SearchHit(val channel: LiveTvChannel, val folderId: String)
+private class SearchResults(val query: String, val nodes: List<Pair<List<String>, LiveTvNode>>, val channels: List<SearchHit>)
+
+/** Suche im ganzen Land/Ordner: passende Reiter (z. B. Serien) und passende Sender/Filme. */
+private fun searchTree(root: LiveTvNode, query: String): SearchResults {
+    val nodes = mutableListOf<Pair<List<String>, LiveTvNode>>()
+    val channels = mutableListOf<SearchHit>()
+    fun walk(node: LiveTvNode, path: List<String>, trail: List<LiveTvNode>) {
+        for (channel in node.channels) {
+            if (channels.size >= SEARCH_CHANNEL_LIMIT) break
+            val named = namedChannel(channel, trail)
+            if (named.name.contains(query, ignoreCase = true)) channels += SearchHit(named, node.id)
+        }
+        for (child in node.children) {
+            val childPath = path + child.id
+            if (nodes.size < SEARCH_NODE_LIMIT && child.title.contains(query, ignoreCase = true)) nodes += childPath to child
+            walk(child, childPath, trail + child)
+        }
+    }
+    walk(root, emptyList(), listOf(root))
+    return SearchResults(query, nodes, channels)
+}
+
+/**
+ * Live TV auf dem Handy wie auf TV, PC und iPhone: eigene Listen als Reiter je Land bzw. Ordner mit
+ * Unterreitern (Sendergruppen, Filme, Serien › Staffeln), Suche im Reiter und favorisierte Sender.
+ */
 @Composable
 fun MobileLiveTvScreen(
+    state: MobileHomeState,
     onPlayChannel: (LiveTvChannel) -> Unit
 ) {
     val scope = rememberCoroutineScope()
     val connectedDevice by MobileCastManager.connectedDevice.collectAsState()
-    var allChannels by remember { mutableStateOf<List<LiveTvChannel>>(emptyList()) }
+    val favorites by LocalStorage.favoriteChannelsFlow.collectAsState()
+    // Die festen Sender sind sofort da, auch wenn eine große eigene Liste noch lädt
+    var allChannels by remember { mutableStateOf(LiveTvRepository.PRESET_CHANNELS) }
+    var trees by remember { mutableStateOf<List<LiveTvNode>>(emptyList()) }
+    var customGrouped by remember { mutableStateOf(false) }
     var customError by remember { mutableStateOf<String?>(null) }
-    var categories by remember { mutableStateOf(LiveTvRepository.CATEGORIES) }
     var isLoading by remember { mutableStateOf(true) }
-    var selectedCategory by rememberSaveable { mutableStateOf("all") }
+    val selectedCategory = state.liveCategory
+    val treePath = state.liveTreePath
 
     fun reload(force: Boolean) {
         scope.launch {
@@ -98,17 +190,53 @@ fun MobileLiveTvScreen(
             val result = LiveTvRepository.loadChannels(forceRefresh = force)
             allChannels = result.channels
             customError = result.customError
-            categories = result.categories.ifEmpty { LiveTvRepository.CATEGORIES }
-            // Reiter eines entfernten Ordners gibt es nicht mehr
-            if (categories.none { it.id == selectedCategory }) selectedCategory = CUSTOM_CATEGORY
+            trees = result.trees
+            customGrouped = LiveTvRepository.isCustomListGrouped
+            // Beim ersten Öffnen gleich die erste eigene Liste zeigen
+            if (state.liveCategory == "all" && trees.isNotEmpty() && !state.liveUserPickedTab) {
+                state.liveCategory = TREE_PREFIX + trees.first().id
+                state.liveTreePath = emptyList()
+            }
+            // Reiter eines entfernten Ordners/einer entfernten Liste gibt es nicht mehr
+            val selectedTree = state.liveCategory.removePrefix(TREE_PREFIX)
+            if (state.liveCategory.startsWith(TREE_PREFIX) && trees.none { it.id == selectedTree }) {
+                state.liveCategory = CUSTOM_CATEGORY
+                state.liveTreePath = emptyList()
+            }
             isLoading = false
         }
     }
 
     LaunchedEffect(Unit) { reload(force = false) }
 
-    val filteredChannels = remember(allChannels, selectedCategory) {
-        if (selectedCategory == "all") allChannels else allChannels.filter { it.category == selectedCategory }
+    val selectedRoot = trees.firstOrNull { TREE_PREFIX + it.id == selectedCategory }
+
+    // Flache Reiter: feste Sender und eine Liste ohne Gruppen; sortierte Listen und Ordner haben eigene Reiter
+    val flatChannels = remember(allChannels, selectedCategory, customGrouped) {
+        val flat = allChannels.filter { channel ->
+            !channel.category.startsWith("folder:") && !(customGrouped && channel.category == CUSTOM_CATEGORY)
+        }
+        if (selectedCategory == "all") flat else flat.filter { it.category == selectedCategory }
+    }
+
+    val trimmedQuery = state.liveQuery.trim()
+    var searchResults by remember { mutableStateOf<SearchResults?>(null) }
+    LaunchedEffect(selectedRoot, trimmedQuery) {
+        searchResults = null
+        val root = selectedRoot
+        if (root == null || trimmedQuery.length < 2) return@LaunchedEffect
+        delay(250L)
+        // Große Listen nicht beim Tippen im Hauptthread durchsuchen
+        searchResults = withContext(Dispatchers.Default) { searchTree(root, trimmedQuery) }
+    }
+
+    fun play(channel: LiveTvChannel, folderId: String, trail: List<LiveTvNode>) {
+        LiveTvRepository.playFolderId = folderId
+        onPlayChannel(namedChannel(channel, trail))
+    }
+
+    fun playOnTv(channel: LiveTvChannel, trail: List<LiveTvNode>) {
+        scope.launch { MobileCastManager.playLiveOnTv(namedChannel(channel, trail)) }
     }
 
     LazyVerticalGrid(
@@ -148,7 +276,7 @@ fun MobileLiveTvScreen(
                         text = if (connectedDevice != null) {
                             "Antippen spielt am Handy, 📺 schickt an ${connectedDevice?.name}"
                         } else {
-                            "Sender antippen zum Abspielen"
+                            "Sender antippen zum Abspielen, ☆ merkt ihn ganz oben"
                         },
                         color = TextSecondary,
                         fontSize = 12.sp,
@@ -156,35 +284,39 @@ fun MobileLiveTvScreen(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = { reload(force = true) }, enabled = !isLoading) {
-                    Icon(Icons.Default.Refresh, contentDescription = "Liste aktualisieren", tint = AccentCyan)
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        color = AccentCyan,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.padding(12.dp).size(24.dp)
+                    )
+                } else {
+                    IconButton(onClick = { reload(force = true) }) {
+                        Icon(Icons.Default.Refresh, contentDescription = "Liste aktualisieren", tint = AccentCyan)
+                    }
                 }
             }
         }
 
-        // Kategorien
+        // Hauptreiter: zuerst die eigenen Listen (Länder, Ordner), danach die festen Kategorien
         item(span = { GridItemSpan(maxLineSpan) }) {
             LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                items(categories, key = { it.id }) { cat ->
-                    val isSelected = selectedCategory == cat.id
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(18.dp))
-                            .background(if (isSelected) AccentCyan.copy(alpha = 0.18f) else BgSurface)
-                            .border(
-                                1.dp,
-                                if (isSelected) AccentCyan else Color.White.copy(alpha = 0.1f),
-                                RoundedCornerShape(18.dp)
-                            )
-                            .clickable { selectedCategory = cat.id }
-                            .padding(horizontal = 14.dp, vertical = 8.dp)
-                    ) {
-                        Text(
-                            text = "${cat.icon} ${cat.title}",
-                            color = if (isSelected) AccentCyan else TextSecondary,
-                            fontSize = 13.sp,
-                            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
-                        )
+                items(trees, key = { TREE_PREFIX + it.id }) { root ->
+                    val id = TREE_PREFIX + root.id
+                    LiveChip("${root.icon} ${root.title}".trim(), selectedCategory == id) {
+                        state.liveUserPickedTab = true
+                        if (selectedCategory != id) {
+                            state.liveCategory = id
+                            state.liveTreePath = emptyList()
+                            state.liveQuery = ""
+                        }
+                    }
+                }
+                items(LiveTvRepository.CATEGORIES, key = { it.id }) { cat ->
+                    LiveChip("${cat.icon} ${cat.title}", selectedCategory == cat.id) {
+                        state.liveUserPickedTab = true
+                        state.liveCategory = cat.id
+                        state.liveQuery = ""
                     }
                 }
             }
@@ -195,55 +327,266 @@ fun MobileLiveTvScreen(
                 CustomM3uCard(onSaved = { reload(force = true) })
             }
             item(span = { GridItemSpan(maxLineSpan) }) {
+                val folderTrees = trees.filter { it.id.startsWith("folder-tree:") }
                 M3uFolderCard(
-                    folderCategories = categories.filter { it.id.startsWith("folder:") },
-                    folderChannelCount = allChannels.count { it.category.startsWith("folder:") },
+                    folderTabCount = folderTrees.sumOf { it.children.size.coerceAtLeast(1) },
+                    folderChannelCount = folderTrees.sumOf { it.total },
                     onChanged = { reload(force = true) }
                 )
             }
+            if (customGrouped) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(
+                        text = "Deine Liste ist nach Ländern sortiert: " +
+                            trees.filter { it.id.startsWith("iptv:") }.joinToString(" · ") { "${it.icon} ${it.title} (${it.total})" },
+                        color = TextSecondary,
+                        fontSize = 12.sp,
+                        lineHeight = 16.sp
+                    )
+                }
+            }
         }
 
-        if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all")) {
+        if (customError != null && (selectedCategory == CUSTOM_CATEGORY || selectedCategory == "all" || selectedRoot != null)) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Text(text = customError.orEmpty(), color = LiveRed, fontSize = 12.sp, lineHeight = 16.sp)
             }
         }
 
-        when {
-            isLoading -> item(span = { GridItemSpan(maxLineSpan) }) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 48.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    CircularProgressIndicator(color = AccentCyan)
-                }
-            }
-
-            filteredChannels.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
-                Text(
-                    text = if (selectedCategory == CUSTOM_CATEGORY) {
-                        "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Datei ein."
-                    } else {
-                        "Keine Sender in dieser Kategorie."
-                    },
-                    color = TextMuted,
-                    fontSize = 14.sp,
-                    modifier = Modifier.padding(vertical = 32.dp)
+        if (selectedRoot != null) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                TreeSearchField(
+                    value = state.liveQuery,
+                    placeholder = "In ${selectedRoot.title} suchen …",
+                    onValueChange = { state.liveQuery = it }
                 )
             }
 
-            else -> items(filteredChannels, key = { it.id }) { channel ->
+            if (trimmedQuery.length >= 2) {
+                val results = searchResults
+                when {
+                    results == null -> item(span = { GridItemSpan(maxLineSpan) }) { LoadingBox() }
+
+                    results.nodes.isEmpty() && results.channels.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(text = "Nichts gefunden für „$trimmedQuery“.", color = TextMuted, fontSize = 14.sp)
+                    }
+
+                    else -> {
+                        items(results.nodes, key = { "hit:" + it.second.id }, span = { GridItemSpan(maxLineSpan) }) { (path, node) ->
+                            NodeRow(node) {
+                                state.liveTreePath = path
+                                state.liveQuery = ""
+                            }
+                        }
+                        items(results.channels, key = { "hit-ch:" + it.channel.id }) { hit ->
+                            MobileChannelCard(
+                                channel = hit.channel,
+                                isFavorite = hit.channel.streamUrl in favorites,
+                                showTvButton = connectedDevice != null,
+                                onClick = { play(hit.channel, hit.folderId, emptyList()) },
+                                onPlayOnTv = { playOnTv(hit.channel, emptyList()) }
+                            )
+                        }
+                    }
+                }
+            } else {
+                val view = resolveTree(selectedRoot, treePath)
+                view.levels.forEach { level ->
+                    when (level) {
+                        is TreeLevel.Chips -> item(
+                            key = "level:${level.depth}:${level.children.first().id}",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            val selectedIndex = level.children.indexOfFirst { it.id == level.selectedId }.coerceAtLeast(0)
+                            LazyRow(
+                                state = rememberLazyListState(initialFirstVisibleItemIndex = (selectedIndex - 1).coerceAtLeast(0)),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp)
+                            ) {
+                                items(level.children, key = { it.id }) { child ->
+                                    LiveChip(
+                                        text = listOf(child.icon, child.title).filter { it.isNotBlank() }.joinToString(" "),
+                                        isSelected = child.id == level.selectedId
+                                    ) {
+                                        state.liveTreePath = treePath.take(level.depth) + child.id
+                                    }
+                                }
+                            }
+                        }
+
+                        is TreeLevel.Back -> item(
+                            key = "back:${level.depth}:${level.selected.id}",
+                            span = { GridItemSpan(maxLineSpan) }
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { state.liveTreePath = treePath.take(level.depth) }) {
+                                    Icon(Icons.Default.ArrowBack, contentDescription = "Zurück zu ${level.parent.title}", tint = AccentCyan)
+                                }
+                                Text(
+                                    text = level.selected.title,
+                                    color = TextPrimary,
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val list = view.list
+                val leaf = view.leaf
+                when {
+                    list != null -> items(list, key = { "node:" + it.id }, span = { GridItemSpan(maxLineSpan) }) { child ->
+                        NodeRow(child) {
+                            state.liveTreePath = treePath.take(view.listDepth) + child.id
+                        }
+                    }
+
+                    leaf != null && leaf.channels.isEmpty() -> item(span = { GridItemSpan(maxLineSpan) }) {
+                        Text(text = "Keine Sender in diesem Reiter.", color = TextMuted, fontSize = 14.sp)
+                    }
+
+                    leaf != null -> {
+                        // Favoriten stehen in jedem Ordner ganz oben
+                        val (favorite, rest) = leaf.channels.partition { it.streamUrl in favorites }
+                        items(favorite + rest, key = { "ch:" + it.id }) { channel ->
+                            MobileChannelCard(
+                                channel = channel,
+                                isFavorite = channel.streamUrl in favorites,
+                                showTvButton = connectedDevice != null,
+                                onClick = { play(channel, leaf.id, view.trail) },
+                                onPlayOnTv = { playOnTv(channel, view.trail) }
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (flatChannels.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                if (isLoading) {
+                    LoadingBox()
+                } else {
+                    Text(
+                        text = when {
+                            selectedCategory == CUSTOM_CATEGORY && customGrouped -> "Die Sender stehen in den Länder-Reitern ganz vorne."
+                            selectedCategory == CUSTOM_CATEGORY -> "Noch keine eigene Liste. Gib oben den Link zu deiner M3U-Datei ein."
+                            else -> "Keine Sender in dieser Kategorie."
+                        },
+                        color = TextMuted,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(vertical = 32.dp)
+                    )
+                }
+            }
+        } else {
+            val (favorite, rest) = flatChannels.partition { it.streamUrl in favorites }
+            items(favorite + rest, key = { "ch:" + it.id }) { channel ->
                 MobileChannelCard(
                     channel = channel,
+                    isFavorite = channel.streamUrl in favorites,
                     showTvButton = connectedDevice != null,
-                    onClick = { onPlayChannel(channel) },
-                    onPlayOnTv = { scope.launch { MobileCastManager.playLiveOnTv(channel) } }
+                    onClick = { play(channel, LiveTvRepository.PRESET_FOLDER_PREFIX + selectedCategory, emptyList()) },
+                    onPlayOnTv = { playOnTv(channel, emptyList()) }
                 )
             }
         }
     }
+}
+
+@Composable
+private fun LoadingBox() {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 48.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        CircularProgressIndicator(color = AccentCyan)
+    }
+}
+
+@Composable
+private fun LiveChip(text: String, isSelected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(18.dp))
+            .background(if (isSelected) AccentCyan.copy(alpha = 0.18f) else BgSurface)
+            .border(
+                1.dp,
+                if (isSelected) AccentCyan else Color.White.copy(alpha = 0.1f),
+                RoundedCornerShape(18.dp)
+            )
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 8.dp)
+    ) {
+        Text(
+            text = text,
+            color = if (isSelected) AccentCyan else TextSecondary,
+            fontSize = 13.sp,
+            fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium,
+            maxLines = 1
+        )
+    }
+}
+
+/** Unterreiter als Zeile (viele Serien, Suchtreffer). */
+@Composable
+private fun NodeRow(node: LiveTvNode, onOpen: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(10.dp))
+            .background(BgElevated)
+            .clickable(onClick = onOpen)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Text(
+            text = node.title,
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+        Spacer(modifier = Modifier.width(8.dp))
+        Text(
+            text = if (node.children.isEmpty()) "${node.total}" else "${node.children.size} St. · ${node.total}",
+            color = TextMuted,
+            fontSize = 12.sp
+        )
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = TextMuted, modifier = Modifier.size(18.dp))
+    }
+}
+
+@Composable
+private fun TreeSearchField(value: String, placeholder: String, onValueChange: (String) -> Unit) {
+    val focusManager = LocalFocusManager.current
+    OutlinedTextField(
+        value = value,
+        onValueChange = onValueChange,
+        placeholder = { Text(placeholder, color = TextMuted, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+        leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = TextMuted) },
+        trailingIcon = {
+            if (value.isNotEmpty()) {
+                IconButton(onClick = { onValueChange("") }) {
+                    Icon(Icons.Default.Clear, contentDescription = "Löschen", tint = TextSecondary)
+                }
+            }
+        },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+        keyboardActions = KeyboardActions(onSearch = { focusManager.clearFocus() }),
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedBorderColor = AccentCyan,
+            unfocusedBorderColor = Color.White.copy(alpha = 0.15f),
+            focusedTextColor = TextPrimary,
+            unfocusedTextColor = TextPrimary
+        ),
+        modifier = Modifier.fillMaxWidth()
+    )
 }
 
 /**
@@ -252,13 +595,14 @@ fun MobileLiveTvScreen(
  */
 @Composable
 private fun M3uFolderCard(
-    folderCategories: List<LiveTvCategory>,
+    folderTabCount: Int,
     folderChannelCount: Int,
     onChanged: () -> Unit
 ) {
     val context = LocalContext.current
     var folder by remember { mutableStateOf(LocalStorage.m3uFolder) }
     var folderName by remember { mutableStateOf(LocalStorage.m3uFolderName) }
+    var pickerError by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
             M3uFolderAndroid.onFolderPicked(context, uri)
@@ -285,12 +629,16 @@ private fun M3uFolderCard(
             text = if (folder.isBlank()) {
                 "Ordner mit M3U-Dateien wählen. Unterordner werden eigene Reiter, die Dateien darin ihre Sender."
             } else {
-                "$folderChannelCount Sender in ${folderCategories.size} Reitern · neue Dateien mit ↻ laden"
+                "$folderChannelCount Sender in $folderTabCount Reitern · steht ganz vorne · neue Dateien mit ↻ laden"
             },
             color = TextSecondary,
             fontSize = 12.sp,
             lineHeight = 16.sp
         )
+        pickerError?.let {
+            Spacer(modifier = Modifier.height(6.dp))
+            Text(text = it, color = LiveRed, fontSize = 12.sp)
+        }
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.End,
@@ -307,7 +655,12 @@ private fun M3uFolderCard(
                 }
             }
             Button(
-                onClick = { runCatching { picker.launch(null) } },
+                onClick = {
+                    pickerError = null
+                    runCatching { picker.launch(null) }.onFailure {
+                        pickerError = "Auf diesem Gerät gibt es keine Ordnerauswahl."
+                    }
+                },
                 colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = BgPrimary)
             ) {
                 Text(if (folder.isBlank()) "Ordner hinzufügen" else "Anderer Ordner", fontWeight = FontWeight.Bold)
@@ -316,18 +669,19 @@ private fun M3uFolderCard(
     }
 }
 
+/** Link zur eigenen Liste: nach dem Speichern nie wieder sichtbar (enthält Zugangsdaten). */
 @Composable
 private fun CustomM3uCard(onSaved: () -> Unit) {
     val focusManager = LocalFocusManager.current
-    var savedUrl by remember { mutableStateOf(LocalStorage.customM3uUrl) }
-    var draft by remember { mutableStateOf(savedUrl) }
+    var hasSavedUrl by remember { mutableStateOf(LocalStorage.customM3uUrl.isNotBlank()) }
+    var draft by remember { mutableStateOf("") }
     var inputError by remember { mutableStateOf<String?>(null) }
 
     fun save(value: String) {
         focusManager.clearFocus()
         if (LiveTvRepository.saveCustomM3uUrl(value)) {
-            savedUrl = LocalStorage.customM3uUrl
-            draft = savedUrl
+            hasSavedUrl = LocalStorage.customM3uUrl.isNotBlank()
+            draft = ""
             inputError = null
             onSaved()
         } else {
@@ -342,9 +696,18 @@ private fun CustomM3uCard(onSaved: () -> Unit) {
             .background(BgElevated)
             .padding(14.dp)
     ) {
-        Text(text = "📂 Eigene M3U-Liste", color = TextPrimary, fontSize = 14.sp, fontWeight = FontWeight.Bold)
         Text(
-            text = "Link zu einer M3U- oder M3U8-Senderliste. Sie wird zusätzlich zu den festen Sendern geladen.",
+            text = if (hasSavedUrl) "🔒 Eigene Liste gespeichert" else "📂 Eigene M3U-Liste",
+            color = TextPrimary,
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Bold
+        )
+        Text(
+            text = if (hasSavedUrl) {
+                "Der Link wird nicht angezeigt. Zum Ersetzen einen neuen Link eingeben."
+            } else {
+                "Link zu einer M3U- oder M3U8-Senderliste. Sie wird zusätzlich zu den festen Sendern geladen."
+            },
             color = TextSecondary,
             fontSize = 12.sp,
             lineHeight = 16.sp
@@ -356,10 +719,12 @@ private fun CustomM3uCard(onSaved: () -> Unit) {
                 draft = it
                 inputError = null
             },
-            placeholder = { Text("http://server.de/liste.m3u", color = TextMuted) },
+            placeholder = {
+                Text(if (hasSavedUrl) "Neuer Link …" else "http://server.de/liste.m3u", color = TextMuted)
+            },
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri, imeAction = ImeAction.Done),
-            keyboardActions = KeyboardActions(onDone = { save(draft) }),
+            keyboardActions = KeyboardActions(onDone = { if (draft.isNotBlank()) save(draft) else focusManager.clearFocus() }),
             colors = OutlinedTextFieldDefaults.colors(
                 focusedBorderColor = AccentCyan,
                 unfocusedBorderColor = Color.White.copy(alpha = 0.2f),
@@ -377,14 +742,14 @@ private fun CustomM3uCard(onSaved: () -> Unit) {
             horizontalArrangement = Arrangement.End,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            if (savedUrl.isNotBlank()) {
+            if (hasSavedUrl) {
                 TextButton(onClick = { save("") }) {
                     Text("Entfernen", color = TextSecondary, fontSize = 13.sp)
                 }
             }
             Button(
                 onClick = { save(draft) },
-                enabled = draft.trim() != savedUrl,
+                enabled = draft.isNotBlank(),
                 colors = ButtonDefaults.buttonColors(containerColor = AccentCyan, contentColor = BgPrimary)
             ) {
                 Text("Speichern", fontWeight = FontWeight.Bold)
@@ -396,6 +761,7 @@ private fun CustomM3uCard(onSaved: () -> Unit) {
 @Composable
 private fun MobileChannelCard(
     channel: LiveTvChannel,
+    isFavorite: Boolean,
     showTvButton: Boolean,
     onClick: () -> Unit,
     onPlayOnTv: () -> Unit
@@ -447,6 +813,20 @@ private fun MobileChannelCard(
                     .padding(horizontal = 5.dp, vertical = 1.dp)
             ) {
                 Text(text = channel.qualityBadge, color = Color.White, fontSize = 9.sp, fontWeight = FontWeight.Bold)
+            }
+
+            IconButton(
+                onClick = { LocalStorage.toggleFavoriteChannel(channel.streamUrl) },
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .size(34.dp)
+            ) {
+                Icon(
+                    imageVector = if (isFavorite) Icons.Default.Star else Icons.Default.StarBorder,
+                    contentDescription = if (isFavorite) "Aus Favoriten entfernen" else "Favorisieren",
+                    tint = if (isFavorite) AccentCyan else Color.White.copy(alpha = 0.75f),
+                    modifier = Modifier.size(20.dp)
+                )
             }
         }
 
